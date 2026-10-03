@@ -1,10 +1,27 @@
 from PySide6.QtCore import QPoint, QRect, Qt
-from PySide6.QtGui import QColor, QPainter, QPalette, QPen
+from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
 
 class WorkspaceDropOverlay(QWidget):
-    TARGET_SIZE = 96
+    ZONE_LEFT = "left"
+    ZONE_TOP = "top"
+    ZONE_RIGHT = "right"
+    ZONE_BOTTOM = "bottom"
+    ZONE_CENTER = "center"
+
+    WORKSPACE_FILL = QColor(
+        210,
+        45,
+        45,
+        72,
+    )
+    WORKSPACE_BORDER = QColor(
+        230,
+        55,
+        55,
+        235,
+    )
 
     def __init__(
         self,
@@ -16,62 +33,49 @@ class WorkspaceDropOverlay(QWidget):
             "workspaceDropOverlay"
         )
 
-        self.setWindowFlags(
-            Qt.WindowType.Tool
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.WindowTransparentForInput
-            | Qt.WindowType.WindowDoesNotAcceptFocus
-        )
-
-        self.setAttribute(
-            Qt.WidgetAttribute.WA_TranslucentBackground,
-            True,
-        )
-        self.setAttribute(
-            Qt.WidgetAttribute.WA_ShowWithoutActivating,
-            True,
-        )
         self.setAttribute(
             Qt.WidgetAttribute.WA_TransparentForMouseEvents,
             True,
         )
+        self.setAttribute(
+            Qt.WidgetAttribute.WA_TranslucentBackground,
+            True,
+        )
 
-        self._center_active = False
+        self._active_zone: str | None = None
 
         self.hide()
 
     @property
-    def center_active(self) -> bool:
-        return self._center_active
-
-    def center_target_rect(self) -> QRect:
-        target = QRect(
-            0,
-            0,
-            self.TARGET_SIZE,
-            self.TARGET_SIZE,
-        )
-
-        target.moveCenter(
-            self.rect().center()
-        )
-
-        return target
+    def active_zone(self) -> str | None:
+        return self._active_zone
 
     def show_for_global_position(
         self,
         global_position: QPoint,
         workspace_rect: QRect,
-    ) -> bool:
+    ) -> str | None:
+        parent = self.parentWidget()
+
+        if parent is None:
+            self.hide_overlay()
+            return None
+
         if not workspace_rect.contains(
             global_position
         ):
             self.hide_overlay()
-            return False
+            return None
+
+        local_top_left = parent.mapFromGlobal(
+            workspace_rect.topLeft()
+        )
 
         self.setGeometry(
-            workspace_rect
+            QRect(
+                local_top_left,
+                workspace_rect.size(),
+            )
         )
 
         local_position = (
@@ -79,26 +83,139 @@ class WorkspaceDropOverlay(QWidget):
             - workspace_rect.topLeft()
         )
 
-        self._center_active = (
-            self.center_target_rect().contains(
-                local_position
-            )
+        active_zone = self.zone_at(
+            local_position
         )
+
+        if active_zone is None:
+            self.hide_overlay()
+            return None
+
+        self._active_zone = active_zone
 
         self.show()
         self.raise_()
         self.update()
 
-        return self._center_active
+        return self._active_zone
 
     def hide_overlay(self) -> None:
-        self._center_active = False
+        self._active_zone = None
         self.hide()
+
+    def zone_at(
+        self,
+        local_position: QPoint,
+    ) -> str | None:
+        zone_rects = self.zone_rects()
+
+        if zone_rects[
+            self.ZONE_CENTER
+        ].contains(local_position):
+            return self.ZONE_CENTER
+
+        if zone_rects[
+            self.ZONE_TOP
+        ].contains(local_position):
+            return self.ZONE_TOP
+
+        if zone_rects[
+            self.ZONE_BOTTOM
+        ].contains(local_position):
+            return self.ZONE_BOTTOM
+
+        if zone_rects[
+            self.ZONE_LEFT
+        ].contains(local_position):
+            return self.ZONE_LEFT
+
+        if zone_rects[
+            self.ZONE_RIGHT
+        ].contains(local_position):
+            return self.ZONE_RIGHT
+
+        return None
+
+    def zone_rects(
+        self,
+    ) -> dict[str, QRect]:
+        rect = self.rect()
+
+        width = rect.width()
+        height = rect.height()
+
+        short_side = max(
+            1,
+            min(width, height),
+        )
+
+        band = max(
+            40,
+            min(short_side // 7, 120),
+        )
+
+        center_size = max(
+            120,
+            short_side - band * 4,
+        )
+
+        center_rect = QRect(
+            0,
+            0,
+            center_size,
+            center_size,
+        )
+        center_rect.moveCenter(
+            rect.center()
+        )
+
+        top_rect = QRect(
+            0,
+            0,
+            width,
+            band,
+        )
+
+        bottom_rect = QRect(
+            0,
+            height - band,
+            width,
+            band,
+        )
+
+        left_rect = QRect(
+            0,
+            band,
+            band,
+            height - band * 2,
+        )
+
+        right_rect = QRect(
+            width - band,
+            band,
+            band,
+            height - band * 2,
+        )
+
+        return {
+            self.ZONE_LEFT: left_rect,
+            self.ZONE_TOP: top_rect,
+            self.ZONE_RIGHT: right_rect,
+            self.ZONE_BOTTOM: bottom_rect,
+            self.ZONE_CENTER: center_rect,
+        }
 
     def paintEvent(
         self,
         _event,
     ) -> None:
+        if self._active_zone is None:
+            return
+
+        zone_rect = self.zone_rects()[
+            self._active_zone
+        ]
+
         painter = QPainter(self)
 
         painter.setRenderHint(
@@ -106,101 +223,23 @@ class WorkspaceDropOverlay(QWidget):
             True,
         )
 
-        highlight = self.palette().color(
-            QPalette.ColorRole.Highlight
-        )
-
-        if self._center_active:
-            workspace_fill = QColor(
-                highlight
-            )
-            workspace_fill.setAlpha(70)
-
-            workspace_border = QColor(
-                highlight
-            )
-            workspace_border.setAlpha(220)
-
-            painter.fillRect(
-                self.rect(),
-                workspace_fill,
-            )
-
-            painter.setPen(
-                QPen(
-                    workspace_border,
-                    3,
-                )
-            )
-
-            painter.drawRect(
-                self.rect().adjusted(
-                    2,
-                    2,
-                    -3,
-                    -3,
-                )
-            )
-
-        target_rect = self.center_target_rect()
-
-        target_fill = QColor(
-            highlight
-        )
-        target_fill.setAlpha(
-            220
-            if self._center_active
-            else 150
-        )
-
-        target_border = QColor(
-            highlight
-        )
-        target_border.setAlpha(255)
-
-        painter.setBrush(
-            target_fill
+        painter.fillRect(
+            zone_rect,
+            self.WORKSPACE_FILL,
         )
 
         painter.setPen(
             QPen(
-                target_border,
-                3,
+                self.WORKSPACE_BORDER,
+                2,
             )
         )
 
-        painter.drawRoundedRect(
-            target_rect,
-            10,
-            10,
-        )
-
-        inner_size = 34
-
-        inner_rect = QRect(
-            0,
-            0,
-            inner_size,
-            inner_size,
-        )
-
-        inner_rect.moveCenter(
-            target_rect.center()
-        )
-
-        inner_fill = QColor(
-            self.palette().color(
-                QPalette.ColorRole.Window
+        painter.drawRect(
+            zone_rect.adjusted(
+                1,
+                1,
+                -2,
+                -2,
             )
-        )
-        inner_fill.setAlpha(210)
-
-        painter.setBrush(
-            inner_fill
-        )
-
-        painter.drawRoundedRect(
-            inner_rect,
-            5,
-            5,
         )

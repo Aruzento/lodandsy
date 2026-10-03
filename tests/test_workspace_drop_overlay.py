@@ -6,7 +6,21 @@ from lodandsy.ui.workspace_drop_overlay import (
 )
 
 
-def test_center_target_activates_in_center(
+def _make_workspace_rect(
+    parent: QWidget,
+) -> QRect:
+    return QRect(
+        parent.mapToGlobal(
+            QPoint(
+                0,
+                0,
+            )
+        ),
+        parent.size(),
+    )
+
+
+def test_center_zone_activates_in_center(
     qtbot,
 ) -> None:
     parent = QWidget()
@@ -23,28 +37,27 @@ def test_center_target_activates_in_center(
         parent
     )
 
-    workspace_rect = QRect(
-        parent.mapToGlobal(
-            QPoint(
-                0,
-                0,
-            )
-        ),
-        parent.size(),
+    workspace_rect = _make_workspace_rect(
+        parent
     )
 
-    active = overlay.show_for_global_position(
+    active_zone = overlay.show_for_global_position(
         workspace_rect.center(),
         workspace_rect,
     )
 
-    assert active
-    assert overlay.center_active
+    assert (
+        active_zone
+        == WorkspaceDropOverlay.ZONE_CENTER
+    )
+    assert (
+        overlay.active_zone
+        == WorkspaceDropOverlay.ZONE_CENTER
+    )
     assert overlay.isVisible()
-    assert overlay.isWindow()
 
 
-def test_center_target_is_inactive_away_from_center(
+def test_left_zone_activates_on_left_side(
     qtbot,
 ) -> None:
     parent = QWidget()
@@ -61,32 +74,71 @@ def test_center_target_is_inactive_away_from_center(
         parent
     )
 
-    workspace_rect = QRect(
-        parent.mapToGlobal(
-            QPoint(
-                0,
-                0,
-            )
-        ),
-        parent.size(),
+    workspace_rect = _make_workspace_rect(
+        parent
     )
 
     position = (
         workspace_rect.topLeft()
         + QPoint(
             20,
-            20,
+            workspace_rect.height() // 2,
         )
     )
 
-    active = overlay.show_for_global_position(
+    active_zone = overlay.show_for_global_position(
         position,
         workspace_rect,
     )
 
-    assert not active
-    assert not overlay.center_active
+    assert (
+        active_zone
+        == WorkspaceDropOverlay.ZONE_LEFT
+    )
+    assert (
+        overlay.active_zone
+        == WorkspaceDropOverlay.ZONE_LEFT
+    )
     assert overlay.isVisible()
+
+
+def test_gap_between_zones_stays_inactive(
+    qtbot,
+) -> None:
+    parent = QWidget()
+    parent.resize(
+        800,
+        600,
+    )
+
+    qtbot.addWidget(parent)
+
+    parent.show()
+
+    overlay = WorkspaceDropOverlay(
+        parent
+    )
+
+    workspace_rect = _make_workspace_rect(
+        parent
+    )
+
+    position = (
+        workspace_rect.topLeft()
+        + QPoint(
+            180,
+            180,
+        )
+    )
+
+    active_zone = overlay.show_for_global_position(
+        position,
+        workspace_rect,
+    )
+
+    assert active_zone is None
+    assert overlay.active_zone is None
+    assert not overlay.isVisible()
 
 
 def test_overlay_hides_outside_workspace(
@@ -106,17 +158,11 @@ def test_overlay_hides_outside_workspace(
         parent
     )
 
-    workspace_rect = QRect(
-        parent.mapToGlobal(
-            QPoint(
-                0,
-                0,
-            )
-        ),
-        parent.size(),
+    workspace_rect = _make_workspace_rect(
+        parent
     )
 
-    active = overlay.show_for_global_position(
+    active_zone = overlay.show_for_global_position(
         QPoint(
             -10000,
             -10000,
@@ -124,6 +170,6 @@ def test_overlay_hides_outside_workspace(
         workspace_rect,
     )
 
-    assert not active
-    assert not overlay.center_active
+    assert active_zone is None
+    assert overlay.active_zone is None
     assert not overlay.isVisible()

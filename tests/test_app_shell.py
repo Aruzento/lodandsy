@@ -7,6 +7,9 @@ from PySide6.QtWidgets import (
 
 from lodandsy.ui.app_shell import AppShell
 from lodandsy.ui.workspace_dock import WorkspaceDock
+from lodandsy.ui.workspace_drop_overlay import (
+    WorkspaceDropOverlay,
+)
 
 
 def test_app_shell_has_expected_structure(
@@ -199,7 +202,7 @@ def test_workspace_dock_can_be_centered(
     )
 
 
-def test_center_drop_signal_uses_full_workspace(
+def test_custom_center_drop_uses_full_workspace(
     qtbot,
 ) -> None:
     window = AppShell()
@@ -223,6 +226,10 @@ def test_center_drop_signal_uses_full_workspace(
     qtbot.waitUntil(
         dock.isFloating,
         timeout=1000,
+    )
+
+    window._active_workspace_drop_zone = (
+        WorkspaceDropOverlay.ZONE_CENTER
     )
 
     dock.floating_drag_finished.emit(
@@ -261,6 +268,61 @@ def test_center_drop_signal_uses_full_workspace(
             > window.WORKSPACE_SIDE_DOCK_SIZE
         ),
         timeout=1000,
+    )
+
+
+def test_custom_left_drop_uses_left_area(
+    qtbot,
+) -> None:
+    window = AppShell()
+    qtbot.addWidget(window)
+
+    dock = WorkspaceDock(
+        key="test",
+        title="Test",
+        content=QLabel("Content"),
+        parent=window,
+    )
+
+    window.add_workspace_dock(
+        dock
+    )
+
+    window.show()
+
+    dock.setFloating(True)
+
+    qtbot.waitUntil(
+        dock.isFloating,
+        timeout=1000,
+    )
+
+    window._active_workspace_drop_zone = (
+        WorkspaceDropOverlay.ZONE_LEFT
+    )
+
+    dock.floating_drag_finished.emit(
+        dock,
+        QPoint(
+            200,
+            200,
+        ),
+        True,
+    )
+
+    qtbot.waitUntil(
+        lambda: (
+            not dock.isFloating()
+            and window.dockWidgetArea(dock)
+            == Qt.DockWidgetArea.LeftDockWidgetArea
+        ),
+        timeout=1000,
+    )
+
+    assert not (
+        window.is_workspace_dock_centered(
+            dock
+        )
     )
 
 

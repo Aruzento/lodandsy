@@ -133,14 +133,20 @@ class AppShell(QMainWindow):
             QRect | None
         ) = None
 
-        self._pending_center_dock: (
-            WorkspaceDock | None
+        self._active_workspace_drop_zone: (
+            str | None
         ) = None
 
-        self._center_drop_timer = QTimer(self)
-        self._center_drop_timer.setSingleShot(True)
-        self._center_drop_timer.timeout.connect(
-            self._apply_pending_center_drop
+        self._pending_workspace_drop: (
+            tuple[WorkspaceDock, str] | None
+        ) = None
+
+        self._workspace_drop_timer = QTimer(self)
+        self._workspace_drop_timer.setSingleShot(
+            True
+        )
+        self._workspace_drop_timer.timeout.connect(
+            self._apply_pending_workspace_drop
         )
 
     def add_workspace_dock(
@@ -210,9 +216,14 @@ class AppShell(QMainWindow):
         if self._dragging_workspace_dock is dock:
             self._clear_workspace_drop_overlay()
 
-        if self._pending_center_dock is dock:
-            self._pending_center_dock = None
-            self._center_drop_timer.stop()
+        if (
+            self._pending_workspace_drop
+            is not None
+            and self._pending_workspace_drop[0]
+            is dock
+        ):
+            self._pending_workspace_drop = None
+            self._workspace_drop_timer.stop()
 
         self.removeDockWidget(
             dock
@@ -337,7 +348,13 @@ class AppShell(QMainWindow):
             self._workspace_drop_rect_for_drag()
         )
 
-        center_active = (
+        inside_workspace = (
+            workspace_rect.contains(
+                global_position
+            )
+        )
+
+        active_zone = (
             self.workspace_drop_overlay
             .show_for_global_position(
                 global_position,
@@ -345,15 +362,28 @@ class AppShell(QMainWindow):
             )
         )
 
-        dock.set_center_drop_active(
-            center_active
+        self._active_workspace_drop_zone = (
+            active_zone
         )
+
+        dock.set_center_drop_active(
+            active_zone is not None
+        )
+
+        if inside_workspace:
+            dock.setAllowedAreas(
+                Qt.DockWidgetArea.NoDockWidgetArea
+            )
+        else:
+            dock.setAllowedAreas(
+                Qt.DockWidgetArea.AllDockWidgetAreas
+            )
 
     def _on_workspace_dock_drag_finished(
         self,
         dock: object,
         _global_position: object,
-        center_drop: bool,
+        custom_drop: bool,
     ) -> None:
         if not isinstance(
             dock,
@@ -361,39 +391,112 @@ class AppShell(QMainWindow):
         ):
             return
 
+        drop_zone = (
+            self._active_workspace_drop_zone
+        )
+
+        dock.setCenterDropActive = None
         dock.set_center_drop_active(
             False
         )
 
         self._clear_workspace_drop_overlay()
 
-        if center_drop:
-            self._pending_center_dock = dock
+        if (
+            custom_drop
+            and drop_zone is not None
+        ):
+            self._pending_workspace_drop = (
+                dock,
+                drop_zone,
+            )
 
-            self._center_drop_timer.start(0)
-
+            self._workspace_drop_timer.start(0)
             return
+
+        dock.setAllowedAreas(
+            Qt.DockWidgetArea.AllDockWidgetAreas
+        )
 
         self._normalize_workspace_dock_size(
             dock
         )
 
-    def _apply_pending_center_drop(
+    def _apply_pending_workspace_drop(
         self,
     ) -> None:
-        dock = self._pending_center_dock
+        pending = self._pending_workspace_drop
 
-        self._pending_center_dock = None
+        self._pending_workspace_drop = None
 
-        if dock is None:
+        if pending is None:
             return
+
+        dock, drop_zone = pending
 
         if dock not in self._workspace_docks:
             return
 
-        self.center_workspace_dock(
+        if (
+            drop_zone
+            == WorkspaceDropOverlay.ZONE_CENTER
+        ):
+            self.center_workspace_dock(
+                dock
+            )
+            return
+
+        self._dock_workspace_to_zone(
+            dock,
+            drop_zone,
+        )
+
+    def _dock_workspace_to_zone(
+        self,
+        dock: WorkspaceDock,
+        drop_zone: str,
+    ) -> None:
+        area_map = {
+            WorkspaceDropOverlay.ZONE_LEFT: (
+                Qt.DockWidgetArea.LeftDockWidgetArea
+            ),
+            WorkspaceDropOverlay.ZONE_TOP: (
+                Qt.DockWidgetArea.TopDockWidgetArea
+            ),
+            WorkspaceDropOverlay.ZONE_RIGHT: (
+                Qt.DockWidgetArea.RightDockWidgetArea
+            ),
+            WorkspaceDropOverlay.ZONE_BOTTOM: (
+                Qt.DockWidgetArea.BottomDockWidgetArea
+            ),
+        }
+
+        area = area_map.get(
+            drop_zone
+        )
+
+        if area is None:
+            return
+
+        dock.setAllowedAreas(
+            Qt.DockWidgetArea.AllDockWidgetAreas
+        )
+
+        if dock.isFloating():
+            dock.setFloating(False)
+
+        self.addDockWidget(
+            area,
+            dock,
+        )
+
+        dock.show()
+
+        self._normalize_workspace_dock_size(
             dock
         )
+
+        dock.raise_()
 
     def _on_workspace_dock_settled(
         self,
@@ -435,6 +538,7 @@ class AppShell(QMainWindow):
             )
 
             self._workspace_drop_rect = None
+            self._active_workspace_drop_zone = None
 
             return
 
@@ -458,9 +562,14 @@ class AppShell(QMainWindow):
         if self._dragging_workspace_dock is dock:
             self._clear_workspace_drop_overlay()
 
-        if self._pending_center_dock is dock:
-            self._pending_center_dock = None
-            self._center_drop_timer.stop()
+        if (
+            self._pending_workspace_drop
+            is not None
+            and self._pending_workspace_drop[0]
+            is dock
+        ):
+            self._pending_workspace_drop = None
+            self._workspace_drop_timer.stop()
 
     def _workspace_global_rect(
         self,
@@ -549,9 +658,13 @@ class AppShell(QMainWindow):
             dock.set_center_drop_active(
                 False
             )
+            dock.setAllowedAreas(
+                Qt.DockWidgetArea.AllDockWidgetAreas
+            )
 
         self._dragging_workspace_dock = None
         self._workspace_drop_rect = None
+        self._active_workspace_drop_zone = None
 
         self.workspace_drop_overlay.hide_overlay()
 
