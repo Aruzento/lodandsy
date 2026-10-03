@@ -20,9 +20,8 @@ def test_workspace_dock_wraps_content(
         parent=window,
     )
 
-    window.addDockWidget(
-        Qt.DockWidgetArea.RightDockWidgetArea,
-        dock,
+    window.add_workspace_dock(
+        dock
     )
 
     assert dock.key == "test"
@@ -43,18 +42,15 @@ def test_workspace_dock_has_working_window_features(
     window = AppShell()
     qtbot.addWidget(window)
 
-    content = QLabel("Content")
-
     dock = WorkspaceDock(
         key="test",
         title="Test window",
-        content=content,
+        content=QLabel("Content"),
         parent=window,
     )
 
-    window.addDockWidget(
-        Qt.DockWidgetArea.RightDockWidgetArea,
-        dock,
+    window.add_workspace_dock(
+        dock
     )
 
     features = dock.features()
@@ -90,9 +86,8 @@ def test_workspace_dock_can_float_and_return(
         parent=window,
     )
 
-    window.addDockWidget(
-        Qt.DockWidgetArea.RightDockWidgetArea,
-        dock,
+    window.add_workspace_dock(
+        dock
     )
 
     window.show()
@@ -103,6 +98,14 @@ def test_workspace_dock_can_float_and_return(
 
     qtbot.waitUntil(
         dock.isFloating,
+        timeout=1000,
+    )
+
+    qtbot.waitUntil(
+        lambda: (
+            dock.windowType()
+            == Qt.WindowType.Window
+        ),
         timeout=1000,
     )
 
@@ -120,7 +123,7 @@ def test_workspace_dock_can_float_and_return(
     assert dock.widget() is content
 
 
-def test_floating_workspace_dock_has_window_controls(
+def test_floating_workspace_dock_is_normal_window(
     qtbot,
 ) -> None:
     window = AppShell()
@@ -133,9 +136,8 @@ def test_floating_workspace_dock_has_window_controls(
         parent=window,
     )
 
-    window.addDockWidget(
-        Qt.DockWidgetArea.RightDockWidgetArea,
-        dock,
+    window.add_workspace_dock(
+        dock
     )
 
     window.show()
@@ -148,14 +150,34 @@ def test_floating_workspace_dock_has_window_controls(
     )
 
     qtbot.waitUntil(
-        lambda: bool(
-            dock.windowFlags()
-            & Qt.WindowType.WindowMaximizeButtonHint
+        lambda: (
+            dock.windowType()
+            == Qt.WindowType.Window
         ),
         timeout=1000,
     )
 
+    assert (
+        dock.windowType()
+        == Qt.WindowType.Window
+    )
+
     flags = dock.windowFlags()
+
+    assert (
+        flags
+        & Qt.WindowType.CustomizeWindowHint
+    )
+
+    assert (
+        flags
+        & Qt.WindowType.WindowTitleHint
+    )
+
+    assert (
+        flags
+        & Qt.WindowType.WindowSystemMenuHint
+    )
 
     assert (
         flags
@@ -179,18 +201,15 @@ def test_workspace_dock_can_be_closed(
     window = AppShell()
     qtbot.addWidget(window)
 
-    content = QLabel("Content")
-
     dock = WorkspaceDock(
         key="test",
         title="Test window",
-        content=content,
+        content=QLabel("Content"),
         parent=window,
     )
 
-    window.addDockWidget(
-        Qt.DockWidgetArea.RightDockWidgetArea,
-        dock,
+    window.add_workspace_dock(
+        dock
     )
 
     window.show()
