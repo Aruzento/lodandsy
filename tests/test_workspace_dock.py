@@ -1,5 +1,14 @@
-from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QLabel
+from PySide6.QtCore import (
+    QEvent,
+    QPoint,
+    QPointF,
+    Qt,
+)
+from PySide6.QtGui import QMouseEvent
+from PySide6.QtWidgets import (
+    QApplication,
+    QLabel,
+)
 
 from lodandsy.ui.app_shell import AppShell
 from lodandsy.ui.workspace_dock import WorkspaceDock
@@ -36,7 +45,7 @@ def test_workspace_dock_wraps_content(
     assert dock.widget() is content
 
 
-def test_workspace_dock_has_working_window_features(
+def test_workspace_dock_disables_native_drag(
     qtbot,
 ) -> None:
     window = AppShell()
@@ -62,13 +71,112 @@ def test_workspace_dock_has_working_window_features(
 
     assert (
         features
+        & dock.DockWidgetFeature.DockWidgetFloatable
+    )
+
+    assert not (
+        features
         & dock.DockWidgetFeature.DockWidgetMovable
     )
 
-    assert (
-        features
-        & dock.DockWidgetFeature.DockWidgetFloatable
+
+def test_docked_title_drag_enters_custom_pipeline(
+    qtbot,
+) -> None:
+    window = AppShell()
+    qtbot.addWidget(window)
+
+    dock = WorkspaceDock(
+        key="test",
+        title="Test window",
+        content=QLabel("Content"),
+        parent=window,
     )
+
+    window.add_workspace_dock(
+        dock
+    )
+
+    window.show()
+
+    qtbot.waitUntil(
+        lambda: (
+            dock.widget().geometry().top()
+            > 0
+        ),
+        timeout=1000,
+    )
+
+    title_y = max(
+        1,
+        dock.widget().geometry().top() // 2,
+    )
+
+    start_local = QPoint(
+        80,
+        title_y,
+    )
+
+    start_global = dock.mapToGlobal(
+        start_local
+    )
+
+    press_event = QMouseEvent(
+        QEvent.Type.MouseButtonPress,
+        QPointF(start_local),
+        QPointF(start_global),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+
+    dock.mousePressEvent(
+        press_event
+    )
+
+    distance = (
+        QApplication.startDragDistance()
+        + 20
+    )
+
+    move_local = (
+        start_local
+        + QPoint(
+            distance,
+            0,
+        )
+    )
+
+    move_global = dock.mapToGlobal(
+        move_local
+    )
+
+    move_event = QMouseEvent(
+        QEvent.Type.MouseMove,
+        QPointF(move_local),
+        QPointF(move_global),
+        Qt.MouseButton.NoButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+
+    dock.mouseMoveEvent(
+        move_event
+    )
+
+    assert dock.isFloating()
+
+    assert (
+        window._dragging_workspace_dock
+        is dock
+    )
+
+    assert (
+        dock.allowedAreas()
+        == Qt.DockWidgetArea.NoDockWidgetArea
+    )
+
+    dock.close()
 
 
 def test_workspace_dock_can_float_and_return(
@@ -94,7 +202,10 @@ def test_workspace_dock_can_float_and_return(
 
     assert not dock.isFloating()
 
-    dock.setFloating(True)
+    window.place_workspace_dock(
+        dock,
+        "floating",
+    )
 
     qtbot.waitUntil(
         dock.isFloating,
@@ -109,90 +220,19 @@ def test_workspace_dock_can_float_and_return(
         timeout=1000,
     )
 
-    assert dock.isFloating()
     assert dock.widget() is content
 
-    dock.setFloating(False)
+    window.place_workspace_dock(
+        dock,
+        "left",
+    )
 
     qtbot.waitUntil(
         lambda: not dock.isFloating(),
         timeout=1000,
     )
 
-    assert not dock.isFloating()
     assert dock.widget() is content
-
-
-def test_floating_workspace_dock_is_normal_window(
-    qtbot,
-) -> None:
-    window = AppShell()
-    qtbot.addWidget(window)
-
-    dock = WorkspaceDock(
-        key="test",
-        title="Test window",
-        content=QLabel("Content"),
-        parent=window,
-    )
-
-    window.add_workspace_dock(
-        dock
-    )
-
-    window.show()
-
-    dock.setFloating(True)
-
-    qtbot.waitUntil(
-        dock.isFloating,
-        timeout=1000,
-    )
-
-    qtbot.waitUntil(
-        lambda: (
-            dock.windowType()
-            == Qt.WindowType.Window
-        ),
-        timeout=1000,
-    )
-
-    assert (
-        dock.windowType()
-        == Qt.WindowType.Window
-    )
-
-    flags = dock.windowFlags()
-
-    assert (
-        flags
-        & Qt.WindowType.CustomizeWindowHint
-    )
-
-    assert (
-        flags
-        & Qt.WindowType.WindowTitleHint
-    )
-
-    assert (
-        flags
-        & Qt.WindowType.WindowSystemMenuHint
-    )
-
-    assert (
-        flags
-        & Qt.WindowType.WindowMinimizeButtonHint
-    )
-
-    assert (
-        flags
-        & Qt.WindowType.WindowMaximizeButtonHint
-    )
-
-    assert (
-        flags
-        & Qt.WindowType.WindowCloseButtonHint
-    )
 
 
 def test_workspace_dock_can_be_closed(

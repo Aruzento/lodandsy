@@ -7,9 +7,37 @@ from PySide6.QtWidgets import (
 
 from lodandsy.ui.app_shell import AppShell
 from lodandsy.ui.workspace_dock import WorkspaceDock
-from lodandsy.ui.workspace_drop_overlay import (
-    WorkspaceDropOverlay,
+from lodandsy.ui.workspace_placement import (
+    WorkspacePlacement,
 )
+
+
+def _make_dock(
+    window: AppShell,
+) -> WorkspaceDock:
+    return WorkspaceDock(
+        key="test",
+        title="Test",
+        content=QLabel("Content"),
+        parent=window,
+    )
+
+
+def _simulate_custom_drop(
+    window: AppShell,
+    dock: WorkspaceDock,
+    placement: WorkspacePlacement,
+) -> None:
+    window._dragging_workspace_dock = dock
+    window._active_workspace_drop_zone = placement
+
+    dock.drag_finished.emit(
+        dock,
+        QPoint(
+            500,
+            500,
+        ),
+    )
 
 
 def test_app_shell_has_expected_structure(
@@ -113,22 +141,19 @@ def test_side_panels_can_be_toggled(
     assert window.inspector_host.isVisible()
 
 
-def test_workspace_dock_uses_workspace_dock_area(
+def test_workspace_dock_uses_workspace_placement(
     qtbot,
 ) -> None:
     window = AppShell()
     qtbot.addWidget(window)
 
-    dock = WorkspaceDock(
-        key="test",
-        title="Test",
-        content=QLabel("Content"),
-        parent=window,
+    dock = _make_dock(
+        window
     )
 
     window.add_workspace_dock(
         dock,
-        Qt.DockWidgetArea.LeftDockWidgetArea,
+        WorkspacePlacement.LEFT,
     )
 
     window.show()
@@ -155,27 +180,24 @@ def test_workspace_dock_can_be_centered(
     window = AppShell()
     qtbot.addWidget(window)
 
-    dock = WorkspaceDock(
-        key="test",
-        title="Test",
-        content=QLabel("Content"),
-        parent=window,
+    dock = _make_dock(
+        window
     )
 
     window.add_workspace_dock(
-        dock
+        dock,
+        WorkspacePlacement.LEFT,
     )
 
     window.show()
 
-    window.center_workspace_dock(
-        dock
+    window.place_workspace_dock(
+        dock,
+        WorkspacePlacement.CENTER,
     )
 
-    assert (
-        window.is_workspace_dock_centered(
-            dock
-        )
+    assert window.is_workspace_dock_centered(
+        dock
     )
 
     assert not dock.isFloating()
@@ -208,37 +230,31 @@ def test_custom_center_drop_uses_full_workspace(
     window = AppShell()
     qtbot.addWidget(window)
 
-    dock = WorkspaceDock(
-        key="test",
-        title="Test",
-        content=QLabel("Content"),
-        parent=window,
+    dock = _make_dock(
+        window
     )
 
     window.add_workspace_dock(
-        dock
+        dock,
+        WorkspacePlacement.LEFT,
     )
 
     window.show()
 
-    dock.setFloating(True)
+    window.place_workspace_dock(
+        dock,
+        WorkspacePlacement.FLOATING,
+    )
 
     qtbot.waitUntil(
         dock.isFloating,
         timeout=1000,
     )
 
-    window._active_workspace_drop_zone = (
-        WorkspaceDropOverlay.ZONE_CENTER
-    )
-
-    dock.floating_drag_finished.emit(
+    _simulate_custom_drop(
+        window,
         dock,
-        QPoint(
-            500,
-            500,
-        ),
-        True,
+        WorkspacePlacement.CENTER,
     )
 
     qtbot.waitUntil(
@@ -277,37 +293,31 @@ def test_custom_left_drop_uses_left_area(
     window = AppShell()
     qtbot.addWidget(window)
 
-    dock = WorkspaceDock(
-        key="test",
-        title="Test",
-        content=QLabel("Content"),
-        parent=window,
+    dock = _make_dock(
+        window
     )
 
     window.add_workspace_dock(
-        dock
+        dock,
+        WorkspacePlacement.RIGHT,
     )
 
     window.show()
 
-    dock.setFloating(True)
+    window.place_workspace_dock(
+        dock,
+        WorkspacePlacement.FLOATING,
+    )
 
     qtbot.waitUntil(
         dock.isFloating,
         timeout=1000,
     )
 
-    window._active_workspace_drop_zone = (
-        WorkspaceDropOverlay.ZONE_LEFT
-    )
-
-    dock.floating_drag_finished.emit(
+    _simulate_custom_drop(
+        window,
         dock,
-        QPoint(
-            200,
-            200,
-        ),
-        True,
+        WorkspacePlacement.LEFT,
     )
 
     qtbot.waitUntil(
@@ -319,44 +329,44 @@ def test_custom_left_drop_uses_left_area(
         timeout=1000,
     )
 
-    assert not (
-        window.is_workspace_dock_centered(
-            dock
-        )
+    assert not window.is_workspace_dock_centered(
+        dock
     )
 
 
-def test_restoring_centered_dock_restores_workspace(
+def test_moving_centered_dock_restores_workspace(
     qtbot,
 ) -> None:
     window = AppShell()
     qtbot.addWidget(window)
 
-    dock = WorkspaceDock(
-        key="test",
-        title="Test",
-        content=QLabel("Content"),
-        parent=window,
+    dock = _make_dock(
+        window
     )
 
     window.add_workspace_dock(
-        dock
+        dock,
+        WorkspacePlacement.LEFT,
     )
 
     window.show()
 
-    window.center_workspace_dock(
+    window.place_workspace_dock(
+        dock,
+        WorkspacePlacement.CENTER,
+    )
+
+    assert window.is_workspace_dock_centered(
         dock
     )
 
-    window.restore_workspace_dock_size(
-        dock
+    window.place_workspace_dock(
+        dock,
+        WorkspacePlacement.LEFT,
     )
 
-    assert not (
-        window.is_workspace_dock_centered(
-            dock
-        )
+    assert not window.is_workspace_dock_centered(
+        dock
     )
 
     assert (
@@ -369,6 +379,11 @@ def test_restoring_centered_dock_restores_workspace(
         > 0
     )
 
+    assert (
+        window.dockWidgetArea(dock)
+        == Qt.DockWidgetArea.LeftDockWidgetArea
+    )
+
 
 def test_closing_centered_dock_restores_workspace(
     qtbot,
@@ -376,27 +391,24 @@ def test_closing_centered_dock_restores_workspace(
     window = AppShell()
     qtbot.addWidget(window)
 
-    dock = WorkspaceDock(
-        key="test",
-        title="Test",
-        content=QLabel("Content"),
-        parent=window,
+    dock = _make_dock(
+        window
     )
 
     window.add_workspace_dock(
-        dock
+        dock,
+        WorkspacePlacement.LEFT,
     )
 
     window.show()
 
-    window.center_workspace_dock(
-        dock
+    window.place_workspace_dock(
+        dock,
+        WorkspacePlacement.CENTER,
     )
 
-    assert (
-        window.is_workspace_dock_centered(
-            dock
-        )
+    assert window.is_workspace_dock_centered(
+        dock
     )
 
     dock.close()
@@ -406,10 +418,8 @@ def test_closing_centered_dock_restores_workspace(
         timeout=1000,
     )
 
-    assert not (
-        window.is_workspace_dock_centered(
-            dock
-        )
+    assert not window.is_workspace_dock_centered(
+        dock
     )
 
     assert (
@@ -429,15 +439,13 @@ def test_workspace_dock_can_be_removed(
     window = AppShell()
     qtbot.addWidget(window)
 
-    dock = WorkspaceDock(
-        key="test",
-        title="Test",
-        content=QLabel("Content"),
-        parent=window,
+    dock = _make_dock(
+        window
     )
 
     window.add_workspace_dock(
-        dock
+        dock,
+        WorkspacePlacement.LEFT,
     )
 
     assert dock in window.workspace_docks()
@@ -451,4 +459,124 @@ def test_workspace_dock_can_be_removed(
     assert (
         window.dockWidgetArea(dock)
         == Qt.DockWidgetArea.NoDockWidgetArea
+    )
+
+
+def test_one_placement_method_moves_between_all_states(
+    qtbot,
+) -> None:
+    window = AppShell()
+    qtbot.addWidget(window)
+
+    dock = _make_dock(
+        window
+    )
+
+    window.add_workspace_dock(
+        dock,
+        WorkspacePlacement.LEFT,
+    )
+
+    window.show()
+
+    window.place_workspace_dock(
+        dock,
+        WorkspacePlacement.RIGHT,
+    )
+
+    assert (
+        window.dockWidgetArea(dock)
+        == Qt.DockWidgetArea.RightDockWidgetArea
+    )
+
+    window.place_workspace_dock(
+        dock,
+        WorkspacePlacement.TOP,
+    )
+
+    assert (
+        window.dockWidgetArea(dock)
+        == Qt.DockWidgetArea.TopDockWidgetArea
+    )
+
+    window.place_workspace_dock(
+        dock,
+        WorkspacePlacement.BOTTOM,
+    )
+
+    assert (
+        window.dockWidgetArea(dock)
+        == Qt.DockWidgetArea.BottomDockWidgetArea
+    )
+
+    window.place_workspace_dock(
+        dock,
+        WorkspacePlacement.CENTER,
+    )
+
+    assert window.is_workspace_dock_centered(
+        dock
+    )
+
+    window.place_workspace_dock(
+        dock,
+        WorkspacePlacement.FLOATING,
+    )
+
+    assert dock.isFloating()
+
+    assert not window.is_workspace_dock_centered(
+        dock
+    )
+
+    assert (
+        window.central_surface.maximumWidth()
+        > 0
+    )
+
+
+def test_custom_drop_uses_same_placement_pipeline(
+    qtbot,
+) -> None:
+    window = AppShell()
+    qtbot.addWidget(window)
+
+    dock = _make_dock(
+        window
+    )
+
+    window.add_workspace_dock(
+        dock,
+        WorkspacePlacement.LEFT,
+    )
+
+    window.show()
+
+    window.place_workspace_dock(
+        dock,
+        WorkspacePlacement.FLOATING,
+    )
+
+    qtbot.waitUntil(
+        dock.isFloating,
+        timeout=1000,
+    )
+
+    _simulate_custom_drop(
+        window,
+        dock,
+        WorkspacePlacement.RIGHT,
+    )
+
+    qtbot.waitUntil(
+        lambda: (
+            not dock.isFloating()
+            and window.dockWidgetArea(dock)
+            == Qt.DockWidgetArea.RightDockWidgetArea
+        ),
+        timeout=1000,
+    )
+
+    assert not window.is_workspace_dock_centered(
+        dock
     )

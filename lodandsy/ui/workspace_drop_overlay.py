@@ -2,13 +2,17 @@ from PySide6.QtCore import QPoint, QRect, Qt
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
+from lodandsy.ui.workspace_placement import (
+    WorkspacePlacement,
+)
+
 
 class WorkspaceDropOverlay(QWidget):
-    ZONE_LEFT = "left"
-    ZONE_TOP = "top"
-    ZONE_RIGHT = "right"
-    ZONE_BOTTOM = "bottom"
-    ZONE_CENTER = "center"
+    ZONE_LEFT = WorkspacePlacement.LEFT
+    ZONE_TOP = WorkspacePlacement.TOP
+    ZONE_RIGHT = WorkspacePlacement.RIGHT
+    ZONE_BOTTOM = WorkspacePlacement.BOTTOM
+    ZONE_CENTER = WorkspacePlacement.CENTER
 
     WORKSPACE_FILL = QColor(
         210,
@@ -42,19 +46,23 @@ class WorkspaceDropOverlay(QWidget):
             True,
         )
 
-        self._active_zone: str | None = None
+        self._active_zone: (
+            WorkspacePlacement | None
+        ) = None
 
         self.hide()
 
     @property
-    def active_zone(self) -> str | None:
+    def active_zone(
+        self,
+    ) -> WorkspacePlacement | None:
         return self._active_zone
 
     def show_for_global_position(
         self,
         global_position: QPoint,
         workspace_rect: QRect,
-    ) -> str | None:
+    ) -> WorkspacePlacement | None:
         parent = self.parentWidget()
 
         if parent is None:
@@ -106,39 +114,39 @@ class WorkspaceDropOverlay(QWidget):
     def zone_at(
         self,
         local_position: QPoint,
-    ) -> str | None:
+    ) -> WorkspacePlacement | None:
         zone_rects = self.zone_rects()
 
         if zone_rects[
-            self.ZONE_CENTER
+            WorkspacePlacement.CENTER
         ].contains(local_position):
-            return self.ZONE_CENTER
+            return WorkspacePlacement.CENTER
 
         if zone_rects[
-            self.ZONE_TOP
+            WorkspacePlacement.TOP
         ].contains(local_position):
-            return self.ZONE_TOP
+            return WorkspacePlacement.TOP
 
         if zone_rects[
-            self.ZONE_BOTTOM
+            WorkspacePlacement.BOTTOM
         ].contains(local_position):
-            return self.ZONE_BOTTOM
+            return WorkspacePlacement.BOTTOM
 
         if zone_rects[
-            self.ZONE_LEFT
+            WorkspacePlacement.LEFT
         ].contains(local_position):
-            return self.ZONE_LEFT
+            return WorkspacePlacement.LEFT
 
         if zone_rects[
-            self.ZONE_RIGHT
+            WorkspacePlacement.RIGHT
         ].contains(local_position):
-            return self.ZONE_RIGHT
+            return WorkspacePlacement.RIGHT
 
         return None
 
     def zone_rects(
         self,
-    ) -> dict[str, QRect]:
+    ) -> dict[WorkspacePlacement, QRect]:
         rect = self.rect()
 
         width = rect.width()
@@ -198,11 +206,11 @@ class WorkspaceDropOverlay(QWidget):
         )
 
         return {
-            self.ZONE_LEFT: left_rect,
-            self.ZONE_TOP: top_rect,
-            self.ZONE_RIGHT: right_rect,
-            self.ZONE_BOTTOM: bottom_rect,
-            self.ZONE_CENTER: center_rect,
+            WorkspacePlacement.LEFT: left_rect,
+            WorkspacePlacement.TOP: top_rect,
+            WorkspacePlacement.RIGHT: right_rect,
+            WorkspacePlacement.BOTTOM: bottom_rect,
+            WorkspacePlacement.CENTER: center_rect,
         }
 
     def paintEvent(
