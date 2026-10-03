@@ -1,4 +1,6 @@
-from lodandsy.application.application_session import ApplicationSession
+from lodandsy.application.application_session import (
+    ApplicationSession,
+)
 from lodandsy.ui.card_editor import CardEditorWidget
 
 
@@ -11,6 +13,8 @@ class CardEditorBinding:
         self.session = session
         self.editor = editor
 
+        self._disposed = False
+
         self.editor.content_changed.connect(
             self._on_content_changed
         )
@@ -21,7 +25,14 @@ class CardEditorBinding:
 
         self.refresh()
 
+    @property
+    def is_disposed(self) -> bool:
+        return self._disposed
+
     def refresh(self) -> None:
+        if self._disposed:
+            return
+
         card = self.session.current_card
 
         if card is None:
@@ -31,6 +42,20 @@ class CardEditorBinding:
         self.editor.set_card(
             card.id,
             card.content,
+        )
+
+    def dispose(self) -> None:
+        if self._disposed:
+            return
+
+        self._disposed = True
+
+        self.editor.content_changed.disconnect(
+            self._on_content_changed
+        )
+
+        self.session.current_card_changed.disconnect(
+            self._on_current_card_changed
         )
 
     def _on_current_card_changed(
@@ -44,6 +69,9 @@ class CardEditorBinding:
         card_id: str,
         content: str,
     ) -> None:
+        if self._disposed:
+            return
+
         if card_id != self.session.current_card_id:
             return
 
