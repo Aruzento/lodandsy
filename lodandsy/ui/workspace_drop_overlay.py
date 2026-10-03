@@ -37,12 +37,23 @@ class WorkspaceDropOverlay(QWidget):
             "workspaceDropOverlay"
         )
 
+        self.setWindowFlags(
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowTransparentForInput
+            | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+
         self.setAttribute(
-            Qt.WidgetAttribute.WA_TransparentForMouseEvents,
+            Qt.WidgetAttribute.WA_TranslucentBackground,
             True,
         )
         self.setAttribute(
-            Qt.WidgetAttribute.WA_TranslucentBackground,
+            Qt.WidgetAttribute.WA_ShowWithoutActivating,
+            True,
+        )
+        self.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents,
             True,
         )
 
@@ -63,27 +74,20 @@ class WorkspaceDropOverlay(QWidget):
         global_position: QPoint,
         workspace_rect: QRect,
     ) -> WorkspacePlacement | None:
-        parent = self.parentWidget()
-
-        if parent is None:
-            self.hide_overlay()
-            return None
-
         if not workspace_rect.contains(
             global_position
         ):
             self.hide_overlay()
             return None
 
-        local_top_left = parent.mapFromGlobal(
-            workspace_rect.topLeft()
-        )
-
+        # Сначала overlay получает точную геометрию
+        # текущего workspace.
+        #
+        # Это обязательно должно произойти до
+        # zone_at(), потому что зоны рассчитываются
+        # через self.rect().
         self.setGeometry(
-            QRect(
-                local_top_left,
-                workspace_rect.size(),
-            )
+            workspace_rect
         )
 
         local_position = (
@@ -103,7 +107,7 @@ class WorkspaceDropOverlay(QWidget):
 
         self.show()
         self.raise_()
-        self.update()
+        self.repaint()
 
         return self._active_zone
 

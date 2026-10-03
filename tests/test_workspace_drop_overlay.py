@@ -1,4 +1,4 @@
-from PySide6.QtCore import QPoint, QRect
+from PySide6.QtCore import QPoint, QRect, Qt
 from PySide6.QtWidgets import QWidget
 
 from lodandsy.ui.workspace_drop_overlay import (
@@ -17,6 +17,53 @@ def _make_workspace_rect(
             )
         ),
         parent.size(),
+    )
+
+
+def test_overlay_is_output_only_top_level_window(
+    qtbot,
+) -> None:
+    parent = QWidget()
+    qtbot.addWidget(parent)
+
+    overlay = WorkspaceDropOverlay(
+        parent
+    )
+
+    assert overlay.isWindow()
+
+    assert (
+        overlay.windowType()
+        == Qt.WindowType.Tool
+    )
+
+    flags = overlay.windowFlags()
+
+    assert (
+        flags
+        & Qt.WindowType.FramelessWindowHint
+    )
+
+    assert (
+        flags
+        & Qt.WindowType.WindowTransparentForInput
+    )
+
+    assert (
+        flags
+        & Qt.WindowType.WindowDoesNotAcceptFocus
+    )
+
+    assert overlay.testAttribute(
+        Qt.WidgetAttribute.WA_TranslucentBackground
+    )
+
+    assert overlay.testAttribute(
+        Qt.WidgetAttribute.WA_ShowWithoutActivating
+    )
+
+    assert overlay.testAttribute(
+        Qt.WidgetAttribute.WA_TransparentForMouseEvents
     )
 
 
@@ -50,11 +97,18 @@ def test_center_zone_activates_in_center(
         active_zone
         == WorkspaceDropOverlay.ZONE_CENTER
     )
+
     assert (
         overlay.active_zone
         == WorkspaceDropOverlay.ZONE_CENTER
     )
+
     assert overlay.isVisible()
+
+    assert (
+        overlay.geometry()
+        == workspace_rect
+    )
 
 
 def test_left_zone_activates_on_left_side(
@@ -95,10 +149,12 @@ def test_left_zone_activates_on_left_side(
         active_zone
         == WorkspaceDropOverlay.ZONE_LEFT
     )
+
     assert (
         overlay.active_zone
         == WorkspaceDropOverlay.ZONE_LEFT
     )
+
     assert overlay.isVisible()
 
 
