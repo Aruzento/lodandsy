@@ -500,15 +500,6 @@ class AppShell(QMainWindow):
             )
         )
 
-        if (
-            self._active_workspace_drop_zone
-            is not None
-        ):
-            # WorkspaceDropOverlay is now a separate
-            # native window. Keep the moving dock above
-            # it so the preview stays behind the window.
-            dock.raise_()
-
     def _place_workspace_in_center(
         self,
         dock: WorkspaceDock,

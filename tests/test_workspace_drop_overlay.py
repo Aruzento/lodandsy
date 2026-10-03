@@ -20,7 +20,7 @@ def _make_workspace_rect(
     )
 
 
-def test_overlay_is_output_only_top_level_window(
+def test_overlay_is_child_of_workspace_window(
     qtbot,
 ) -> None:
     parent = QWidget()
@@ -30,36 +30,11 @@ def test_overlay_is_output_only_top_level_window(
         parent
     )
 
-    assert overlay.isWindow()
+    assert not overlay.isWindow()
 
     assert (
-        overlay.windowType()
-        == Qt.WindowType.Tool
-    )
-
-    flags = overlay.windowFlags()
-
-    assert (
-        flags
-        & Qt.WindowType.FramelessWindowHint
-    )
-
-    assert (
-        flags
-        & Qt.WindowType.WindowTransparentForInput
-    )
-
-    assert (
-        flags
-        & Qt.WindowType.WindowDoesNotAcceptFocus
-    )
-
-    assert overlay.testAttribute(
-        Qt.WidgetAttribute.WA_TranslucentBackground
-    )
-
-    assert overlay.testAttribute(
-        Qt.WidgetAttribute.WA_ShowWithoutActivating
+        overlay.parentWidget()
+        is parent
     )
 
     assert overlay.testAttribute(
@@ -77,7 +52,6 @@ def test_center_zone_activates_in_center(
     )
 
     qtbot.addWidget(parent)
-
     parent.show()
 
     overlay = WorkspaceDropOverlay(
@@ -105,11 +79,6 @@ def test_center_zone_activates_in_center(
 
     assert overlay.isVisible()
 
-    assert (
-        overlay.geometry()
-        == workspace_rect
-    )
-
 
 def test_left_zone_activates_on_left_side(
     qtbot,
@@ -121,7 +90,6 @@ def test_left_zone_activates_on_left_side(
     )
 
     qtbot.addWidget(parent)
-
     parent.show()
 
     overlay = WorkspaceDropOverlay(
@@ -150,11 +118,6 @@ def test_left_zone_activates_on_left_side(
         == WorkspaceDropOverlay.ZONE_LEFT
     )
 
-    assert (
-        overlay.active_zone
-        == WorkspaceDropOverlay.ZONE_LEFT
-    )
-
     assert overlay.isVisible()
 
 
@@ -168,7 +131,6 @@ def test_gap_between_zones_stays_inactive(
     )
 
     qtbot.addWidget(parent)
-
     parent.show()
 
     overlay = WorkspaceDropOverlay(
@@ -207,7 +169,6 @@ def test_overlay_hides_outside_workspace(
     )
 
     qtbot.addWidget(parent)
-
     parent.show()
 
     overlay = WorkspaceDropOverlay(

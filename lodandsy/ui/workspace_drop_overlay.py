@@ -37,23 +37,13 @@ class WorkspaceDropOverlay(QWidget):
             "workspaceDropOverlay"
         )
 
-        self.setWindowFlags(
-            Qt.WindowType.Tool
-            | Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowTransparentForInput
-            | Qt.WindowType.WindowDoesNotAcceptFocus
+        self.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents,
+            True,
         )
 
         self.setAttribute(
             Qt.WidgetAttribute.WA_TranslucentBackground,
-            True,
-        )
-        self.setAttribute(
-            Qt.WidgetAttribute.WA_ShowWithoutActivating,
-            True,
-        )
-        self.setAttribute(
-            Qt.WidgetAttribute.WA_TransparentForMouseEvents,
             True,
         )
 
@@ -74,20 +64,27 @@ class WorkspaceDropOverlay(QWidget):
         global_position: QPoint,
         workspace_rect: QRect,
     ) -> WorkspacePlacement | None:
+        parent = self.parentWidget()
+
+        if parent is None:
+            self.hide_overlay()
+            return None
+
         if not workspace_rect.contains(
             global_position
         ):
             self.hide_overlay()
             return None
 
-        # Сначала overlay получает точную геометрию
-        # текущего workspace.
-        #
-        # Это обязательно должно произойти до
-        # zone_at(), потому что зоны рассчитываются
-        # через self.rect().
+        local_top_left = parent.mapFromGlobal(
+            workspace_rect.topLeft()
+        )
+
         self.setGeometry(
-            workspace_rect
+            QRect(
+                local_top_left,
+                workspace_rect.size(),
+            )
         )
 
         local_position = (
@@ -158,12 +155,18 @@ class WorkspaceDropOverlay(QWidget):
 
         short_side = max(
             1,
-            min(width, height),
+            min(
+                width,
+                height,
+            ),
         )
 
         band = max(
             40,
-            min(short_side // 7, 120),
+            min(
+                short_side // 7,
+                120,
+            ),
         )
 
         center_size = max(
@@ -177,6 +180,7 @@ class WorkspaceDropOverlay(QWidget):
             center_size,
             center_size,
         )
+
         center_rect.moveCenter(
             rect.center()
         )

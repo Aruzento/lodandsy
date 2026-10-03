@@ -1,6 +1,7 @@
 from PySide6.QtCore import (
     QEvent,
     QPoint,
+    QSize,
     Qt,
     QTimer,
     Signal,
@@ -14,8 +15,424 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QDockWidget,
+    QHBoxLayout,
+    QLabel,
+    QToolButton,
     QWidget,
 )
+
+
+class WorkspaceTitleBar(QWidget):
+    drag_started = Signal(
+        object,
+        object,
+    )
+    drag_moved = Signal(object)
+    drag_finished = Signal(object)
+
+    float_requested = Signal()
+    minimize_requested = Signal()
+    maximize_restore_requested = Signal()
+    close_requested = Signal()
+
+    HEIGHT = 30
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+
+        self.setObjectName(
+            "workspaceTitleBar"
+        )
+
+        self.setFixedHeight(
+            self.HEIGHT
+        )
+
+        self.title_label = QLabel(
+            self
+        )
+        self.title_label.setObjectName(
+            "workspaceTitle"
+        )
+
+        self.title_label.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents,
+            True,
+        )
+
+        self.float_button = self._make_button(
+            "workspaceFloatButton",
+            "↗",
+            "Float",
+        )
+
+        self.minimize_button = self._make_button(
+            "workspaceMinimizeButton",
+            "—",
+            "Minimize",
+        )
+
+        self.maximize_button = self._make_button(
+            "workspaceMaximizeButton",
+            "□",
+            "Maximize",
+        )
+
+        self.close_button = self._make_button(
+            "workspaceCloseButton",
+            "×",
+            "Close",
+        )
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(
+            8,
+            0,
+            2,
+            0,
+        )
+        layout.setSpacing(2)
+
+        layout.addWidget(
+            self.title_label,
+            1,
+        )
+
+        layout.addWidget(
+            self.float_button
+        )
+        layout.addWidget(
+            self.minimize_button
+        )
+        layout.addWidget(
+            self.maximize_button
+        )
+        layout.addWidget(
+            self.close_button
+        )
+
+        self.float_button.clicked.connect(
+            self.float_requested
+        )
+        self.minimize_button.clicked.connect(
+            self.minimize_requested
+        )
+        self.maximize_button.clicked.connect(
+            self.maximize_restore_requested
+        )
+        self.close_button.clicked.connect(
+            self.close_requested
+        )
+
+        self._press_global: QPoint | None = None
+        self._press_dock_offset: QPoint | None = None
+        self._drag_active = False
+
+        self._tracking_timer = QTimer(self)
+        self._tracking_timer.setInterval(16)
+        self._tracking_timer.timeout.connect(
+            self._track_pointer
+        )
+
+        self.set_floating(
+            False
+        )
+
+    @property
+    def drag_active(self) -> bool:
+        return self._drag_active
+
+    def sizeHint(self) -> QSize:
+        return QSize(
+            240,
+            self.HEIGHT,
+        )
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(
+            100,
+            self.HEIGHT,
+        )
+
+    def set_title(
+        self,
+        title: str,
+    ) -> None:
+        self.title_label.setText(
+            title
+        )
+
+    def set_floating(
+        self,
+        floating: bool,
+    ) -> None:
+        self.float_button.setVisible(
+            not floating
+        )
+
+        self.minimize_button.setVisible(
+            floating
+        )
+
+        self.maximize_button.setVisible(
+            floating
+        )
+
+        if not floating:
+            self.set_maximized(
+                False
+            )
+
+    def set_maximized(
+        self,
+        maximized: bool,
+    ) -> None:
+        if maximized:
+            self.maximize_button.setText(
+                "❐"
+            )
+            self.maximize_button.setToolTip(
+                "Restore"
+            )
+            return
+
+        self.maximize_button.setText(
+            "□"
+        )
+        self.maximize_button.setToolTip(
+            "Maximize"
+        )
+
+    def mousePressEvent(
+        self,
+        event: QMouseEvent,
+    ) -> None:
+        if (
+            event.button()
+            != Qt.MouseButton.LeftButton
+        ):
+            super().mousePressEvent(
+                event
+            )
+            return
+
+        global_position = (
+            event.globalPosition().toPoint()
+        )
+
+        dock = self.parentWidget()
+
+        if dock is None:
+            super().mousePressEvent(
+                event
+            )
+            return
+
+        self._press_global = QPoint(
+            global_position
+        )
+
+        self._press_dock_offset = (
+            dock.mapFromGlobal(
+                global_position
+            )
+        )
+
+        self._drag_active = False
+
+        self._tracking_timer.start()
+
+        event.accept()
+
+    def mouseMoveEvent(
+        self,
+        event: QMouseEvent,
+    ) -> None:
+        if self._press_global is None:
+            super().mouseMoveEvent(
+                event
+            )
+            return
+
+        if not (
+            event.buttons()
+            & Qt.MouseButton.LeftButton
+        ):
+            self._finish_or_cancel(
+                event.globalPosition().toPoint()
+            )
+            event.accept()
+            return
+
+        self._advance_drag(
+            event.globalPosition().toPoint()
+        )
+
+        event.accept()
+
+    def mouseReleaseEvent(
+        self,
+        event: QMouseEvent,
+    ) -> None:
+        if (
+            event.button()
+            == Qt.MouseButton.LeftButton
+            and self._press_global is not None
+        ):
+            self._finish_or_cancel(
+                event.globalPosition().toPoint()
+            )
+
+            event.accept()
+            return
+
+        super().mouseReleaseEvent(
+            event
+        )
+
+    def mouseDoubleClickEvent(
+        self,
+        event: QMouseEvent,
+    ) -> None:
+        if (
+            event.button()
+            != Qt.MouseButton.LeftButton
+        ):
+            super().mouseDoubleClickEvent(
+                event
+            )
+            return
+
+        self._clear_drag_state()
+
+        dock = self.parentWidget()
+
+        if (
+            dock is not None
+            and isinstance(
+                dock,
+                QDockWidget,
+            )
+            and dock.isFloating()
+        ):
+            self.maximize_restore_requested.emit()
+        else:
+            self.float_requested.emit()
+
+        event.accept()
+
+    def cancel_drag(self) -> None:
+        self._clear_drag_state()
+
+    def _advance_drag(
+        self,
+        global_position: QPoint,
+    ) -> None:
+        if (
+            self._press_global is None
+            or self._press_dock_offset is None
+        ):
+            return
+
+        if not self._drag_active:
+            distance = (
+                global_position
+                - self._press_global
+            ).manhattanLength()
+
+            if (
+                distance
+                < QApplication.startDragDistance()
+            ):
+                return
+
+            self._drag_active = True
+
+            self.drag_started.emit(
+                QPoint(global_position),
+                QPoint(
+                    self._press_dock_offset
+                ),
+            )
+
+        self.drag_moved.emit(
+            QPoint(global_position)
+        )
+
+    def _track_pointer(self) -> None:
+        if self._press_global is None:
+            self._tracking_timer.stop()
+            return
+
+        global_position = QCursor.pos()
+
+        if not (
+            QGuiApplication.mouseButtons()
+            & Qt.MouseButton.LeftButton
+        ):
+            self._finish_or_cancel(
+                global_position
+            )
+            return
+
+        self._advance_drag(
+            global_position
+        )
+
+    def _finish_or_cancel(
+        self,
+        global_position: QPoint,
+    ) -> None:
+        was_dragging = (
+            self._drag_active
+        )
+
+        self._clear_drag_state()
+
+        if was_dragging:
+            self.drag_finished.emit(
+                QPoint(global_position)
+            )
+
+    def _clear_drag_state(self) -> None:
+        self._tracking_timer.stop()
+
+        self._press_global = None
+        self._press_dock_offset = None
+        self._drag_active = False
+
+    def _make_button(
+        self,
+        object_name: str,
+        text: str,
+        tooltip: str,
+    ) -> QToolButton:
+        button = QToolButton(self)
+
+        button.setObjectName(
+            object_name
+        )
+        button.setText(
+            text
+        )
+        button.setToolTip(
+            tooltip
+        )
+        button.setAutoRaise(
+            True
+        )
+        button.setFocusPolicy(
+            Qt.FocusPolicy.NoFocus
+        )
+        button.setFixedSize(
+            28,
+            26,
+        )
+
+        return button
 
 
 class WorkspaceDock(QDockWidget):
@@ -43,7 +460,10 @@ class WorkspaceDock(QDockWidget):
         content: QWidget,
         parent: QWidget | None = None,
     ) -> None:
-        super().__init__(title, parent)
+        super().__init__(
+            title,
+            parent,
+        )
 
         if not key:
             raise ValueError(
@@ -60,311 +480,182 @@ class WorkspaceDock(QDockWidget):
             Qt.DockWidgetArea.AllDockWidgetAreas
         )
 
-        # Native Qt docking by dragging is intentionally
-        # disabled. WorkspaceDock owns drag recognition,
-        # AppShell owns placement.
         self.setFeatures(
             QDockWidget.DockWidgetFeature.DockWidgetClosable
             | QDockWidget.DockWidgetFeature.DockWidgetFloatable
         )
 
-        self.setWidget(content)
-
-        self._drag_active = False
-        self._manual_drag = False
-
-        self._drag_grab_offset = QPoint()
-
-        self._docked_press_global: (
-            QPoint | None
-        ) = None
-        self._docked_press_local: (
-            QPoint | None
-        ) = None
-
-        self._native_press_global: (
-            QPoint | None
-        ) = None
-
-        self._floating_controls_ready = False
-
-        self._drag_tracking_timer = QTimer(self)
-        self._drag_tracking_timer.setInterval(16)
-        self._drag_tracking_timer.timeout.connect(
-            self._track_drag
+        self.setWidget(
+            content
         )
 
-        self._settle_timer = QTimer(self)
-        self._settle_timer.setSingleShot(True)
-        self._settle_timer.setInterval(75)
-        self._settle_timer.timeout.connect(
-            self._settle_floating_window
+        self.title_bar = WorkspaceTitleBar(
+            self
+        )
+
+        self.title_bar.set_title(
+            title
+        )
+
+        self.setTitleBarWidget(
+            self.title_bar
+        )
+
+        self._drag_grab_offset = QPoint()
+        self._drag_in_progress = False
+
+        self._floating_window_ready = False
+        self._normalizing_window_type = False
+
+        # Не используем static QTimer.singleShot с bound
+        # method. Таймер принадлежит WorkspaceDock и
+        # уничтожается вместе с ним.
+        self._floating_window_timer = QTimer(
+            self
+        )
+        self._floating_window_timer.setSingleShot(
+            True
+        )
+        self._floating_window_timer.setInterval(
+            0
+        )
+        self._floating_window_timer.timeout.connect(
+            self._ensure_real_floating_window
+        )
+
+        self.title_bar.drag_started.connect(
+            self._on_title_drag_started
+        )
+        self.title_bar.drag_moved.connect(
+            self._on_title_drag_moved
+        )
+        self.title_bar.drag_finished.connect(
+            self._on_title_drag_finished
+        )
+
+        self.title_bar.float_requested.connect(
+            self._on_float_requested
+        )
+        self.title_bar.minimize_requested.connect(
+            self._on_minimize_requested
+        )
+        self.title_bar.maximize_restore_requested.connect(
+            self._on_maximize_restore_requested
+        )
+        self.title_bar.close_requested.connect(
+            self.close
+        )
+
+        self.windowTitleChanged.connect(
+            self.title_bar.set_title
         )
 
         self.topLevelChanged.connect(
             self._on_top_level_changed
         )
 
-    def event(
-        self,
-        event: QEvent,
-    ) -> bool:
-        event_type = event.type()
-
-        if (
-            event_type
-            == QEvent.Type.NonClientAreaMouseButtonPress
-            and self.isFloating()
-        ):
-            self._native_press_global = (
-                self._global_position(event)
-            )
-
-            return super().event(event)
-
-        if (
-            event_type
-            == QEvent.Type.NonClientAreaMouseMove
-            and self.isFloating()
-        ):
-            global_position = (
-                self._global_position(event)
-            )
-
-            if (
-                not self._drag_active
-                and self._native_press_global
-                is not None
-                and self._drag_distance_reached(
-                    self._native_press_global,
-                    global_position,
-                )
-            ):
-                self._begin_drag(
-                    global_position=global_position,
-                    grab_offset=QPoint(),
-                    manual=False,
-                )
-
-            elif (
-                self._drag_active
-                and not self._manual_drag
-            ):
-                self._update_drag(
-                    global_position
-                )
-
-            return super().event(event)
-
-        if (
-            event_type
-            == QEvent.Type.NonClientAreaMouseButtonRelease
-            and self.isFloating()
-        ):
-            result = super().event(event)
-
-            global_position = (
-                self._global_position(event)
-            )
-
-            self._native_press_global = None
-
-            if (
-                self._drag_active
-                and not self._manual_drag
-            ):
-                self._finish_drag(
-                    global_position
-                )
-
-            return result
-
-        return super().event(event)
-
-    def mousePressEvent(
-        self,
-        event: QMouseEvent,
-    ) -> None:
-        if (
-            not self.isFloating()
-            and event.button()
-            == Qt.MouseButton.LeftButton
-            and self._is_docked_title_position(
-                event.position().toPoint()
-            )
-        ):
-            self._docked_press_global = (
-                event.globalPosition().toPoint()
-            )
-            self._docked_press_local = (
-                event.position().toPoint()
-            )
-
-            event.accept()
-            return
-
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(
-        self,
-        event: QMouseEvent,
-    ) -> None:
-        global_position = (
-            event.globalPosition().toPoint()
+        self.title_bar.set_floating(
+            self.isFloating()
         )
-
-        if (
-            self._drag_active
-            and self._manual_drag
-        ):
-            self._update_drag(
-                global_position
-            )
-
-            event.accept()
-            return
-
-        if (
-            not self.isFloating()
-            and self._docked_press_global
-            is not None
-            and self._docked_press_local
-            is not None
-            and (
-                event.buttons()
-                & Qt.MouseButton.LeftButton
-            )
-        ):
-            if self._drag_distance_reached(
-                self._docked_press_global,
-                global_position,
-            ):
-                grab_offset = QPoint(
-                    self._docked_press_local
-                )
-
-                self._docked_press_global = None
-                self._docked_press_local = None
-
-                self._begin_drag(
-                    global_position=global_position,
-                    grab_offset=grab_offset,
-                    manual=True,
-                )
-
-            event.accept()
-            return
-
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(
-        self,
-        event: QMouseEvent,
-    ) -> None:
-        global_position = (
-            event.globalPosition().toPoint()
-        )
-
-        if (
-            self._drag_active
-            and self._manual_drag
-            and event.button()
-            == Qt.MouseButton.LeftButton
-        ):
-            self._finish_drag(
-                global_position
-            )
-
-            event.accept()
-            return
-
-        if (
-            self._docked_press_global
-            is not None
-        ):
-            self._clear_docked_press()
-
-            event.accept()
-            return
-
-        super().mouseReleaseEvent(event)
-
-    def mouseDoubleClickEvent(
-        self,
-        event: QMouseEvent,
-    ) -> None:
-        if (
-            not self.isFloating()
-            and event.button()
-            == Qt.MouseButton.LeftButton
-            and self._is_docked_title_position(
-                event.position().toPoint()
-            )
-        ):
-            self._clear_docked_press()
-
-            self.float_requested.emit(
-                self
-            )
-
-            event.accept()
-            return
-
-        super().mouseDoubleClickEvent(event)
 
     def closeEvent(
         self,
         event: QCloseEvent,
     ) -> None:
-        super().closeEvent(event)
+        self._floating_window_timer.stop()
+        self.title_bar.cancel_drag()
+
+        super().closeEvent(
+            event
+        )
 
         if not event.isAccepted():
             return
-
-        self._cancel_drag()
 
         self.closed.emit(
             self
         )
 
-    def _begin_drag(
+    def changeEvent(
         self,
-        global_position: QPoint,
-        grab_offset: QPoint,
-        manual: bool,
+        event: QEvent,
     ) -> None:
-        if self._drag_active:
+        super().changeEvent(
+            event
+        )
+
+        if (
+            event.type()
+            == QEvent.Type.WindowStateChange
+        ):
+            self.title_bar.set_maximized(
+                self.isMaximized()
+            )
+
+    def _on_title_drag_started(
+        self,
+        global_position: object,
+        grab_offset: object,
+    ) -> None:
+        if not isinstance(
+            global_position,
+            QPoint,
+        ):
             return
 
-        self._drag_active = True
-        self._manual_drag = manual
-        self._drag_grab_offset = QPoint(
+        if not isinstance(
+            grab_offset,
+            QPoint,
+        ):
+            return
+
+        self._drag_in_progress = True
+
+        resolved_offset = QPoint(
             grab_offset
         )
 
-        self._drag_tracking_timer.start()
+        if self.isMaximized():
+            self.showNormal()
+
+            resolved_offset = QPoint(
+                max(
+                    0,
+                    self.width() // 2,
+                ),
+                min(
+                    max(
+                        0,
+                        grab_offset.y(),
+                    ),
+                    max(
+                        0,
+                        self.title_bar.height() - 1,
+                    ),
+                ),
+            )
+
+        self._drag_grab_offset = QPoint(
+            resolved_offset
+        )
 
         self.drag_started.emit(
             self,
-            global_position,
-            QPoint(grab_offset),
+            QPoint(global_position),
+            QPoint(resolved_offset),
         )
 
-        self._update_drag(
-            global_position
-        )
-
-    def _update_drag(
+    def _on_title_drag_moved(
         self,
-        global_position: QPoint,
+        global_position: object,
     ) -> None:
-        if not self._drag_active:
+        if not isinstance(
+            global_position,
+            QPoint,
+        ):
             return
 
-        if (
-            self._manual_drag
-            and self.isFloating()
-        ):
+        if self.isFloating():
             self.move(
                 global_position
                 - self._drag_grab_offset
@@ -372,160 +663,139 @@ class WorkspaceDock(QDockWidget):
 
         self.drag_moved.emit(
             self,
-            global_position,
+            QPoint(global_position),
         )
 
-    def _finish_drag(
+    def _on_title_drag_finished(
         self,
-        global_position: QPoint,
+        global_position: object,
     ) -> None:
-        if not self._drag_active:
+        if not isinstance(
+            global_position,
+            QPoint,
+        ):
             return
 
-        self._drag_active = False
-        self._manual_drag = False
-        self._drag_grab_offset = QPoint()
-
-        self._drag_tracking_timer.stop()
-
-        self._clear_docked_press()
-        self._native_press_global = None
+        self._drag_in_progress = False
 
         self.drag_finished.emit(
             self,
-            global_position,
+            QPoint(global_position),
         )
 
-        self._schedule_floating_settle()
-
-    def _cancel_drag(self) -> None:
-        self._drag_active = False
-        self._manual_drag = False
         self._drag_grab_offset = QPoint()
 
-        self._drag_tracking_timer.stop()
+        if self.isFloating():
+            self._schedule_floating_window_normalization()
 
-        self._clear_docked_press()
-        self._native_press_global = None
-
-    def _track_drag(self) -> None:
-        if not self._drag_active:
-            self._drag_tracking_timer.stop()
+    def _on_float_requested(self) -> None:
+        if self.isFloating():
             return
 
-        global_position = QCursor.pos()
-
-        if self._manual_drag:
-            if not (
-                QGuiApplication.mouseButtons()
-                & Qt.MouseButton.LeftButton
-            ):
-                self._finish_drag(
-                    global_position
-                )
-                return
-
-        self._update_drag(
-            global_position
+        self.float_requested.emit(
+            self
         )
 
-    def _clear_docked_press(self) -> None:
-        self._docked_press_global = None
-        self._docked_press_local = None
+    def _on_minimize_requested(self) -> None:
+        if not self.isFloating():
+            return
 
-    def _is_docked_title_position(
+        self._floating_window_timer.stop()
+
+        self._ensure_real_floating_window()
+
+        self.showMinimized()
+
+    def _on_maximize_restore_requested(
         self,
-        position: QPoint,
-    ) -> bool:
-        content = self.widget()
+    ) -> None:
+        if not self.isFloating():
+            return
 
-        if content is None:
-            return False
+        self._floating_window_timer.stop()
 
-        content_geometry = content.geometry()
+        self._ensure_real_floating_window()
 
-        if (
-            self.features()
-            & QDockWidget.DockWidgetFeature.DockWidgetVerticalTitleBar
-        ):
-            return (
-                position.x()
-                < content_geometry.left()
-            )
+        if self.isMaximized():
+            self.showNormal()
+            return
 
-        return (
-            position.y()
-            < content_geometry.top()
-        )
-
-    @staticmethod
-    def _drag_distance_reached(
-        start: QPoint,
-        current: QPoint,
-    ) -> bool:
-        distance = (
-            start
-            - current
-        ).manhattanLength()
-
-        return (
-            distance
-            >= QApplication.startDragDistance()
-        )
+        self.showMaximized()
 
     def _on_top_level_changed(
         self,
         floating: bool,
     ) -> None:
+        self.title_bar.set_floating(
+            floating
+        )
+
+        self.title_bar.set_maximized(
+            self.isMaximized()
+        )
+
         if not floating:
-            self._floating_controls_ready = False
-            self._native_press_global = None
+            self._floating_window_timer.stop()
+
+            self._floating_window_ready = False
+            self._normalizing_window_type = False
             return
 
-        self._schedule_floating_settle()
+        if self._drag_in_progress:
+            return
 
-    def _schedule_floating_settle(self) -> None:
-        self._settle_timer.start()
+        self._schedule_floating_window_normalization()
 
-    def _settle_floating_window(self) -> None:
+    def _schedule_floating_window_normalization(
+        self,
+    ) -> None:
+        if not self.isFloating():
+            self._floating_window_timer.stop()
+            return
+
+        if self._floating_window_ready:
+            self._floating_window_timer.stop()
+            return
+
+        self._floating_window_timer.start()
+
+    def _ensure_real_floating_window(
+        self,
+    ) -> None:
         if not self.isFloating():
             return
 
-        if self._drag_active:
-            self._schedule_floating_settle()
+        if self._floating_window_ready:
+            return
+
+        if self._normalizing_window_type:
             return
 
         if (
-            QGuiApplication.mouseButtons()
-            != Qt.MouseButton.NoButton
+            self.windowType()
+            == Qt.WindowType.Window
         ):
-            self._schedule_floating_settle()
+            self._floating_window_ready = True
             return
 
-        self._enable_floating_window_controls()
-
-    def _enable_floating_window_controls(
-        self,
-    ) -> None:
-        if self._floating_controls_ready:
-            return
+        self._normalizing_window_type = True
 
         geometry = self.geometry()
 
-        floating_flags = (
-            Qt.WindowType.Window
-            | Qt.WindowType.CustomizeWindowHint
-            | Qt.WindowType.WindowTitleHint
-            | Qt.WindowType.WindowSystemMenuHint
-            | Qt.WindowType.WindowMinimizeButtonHint
-            | Qt.WindowType.WindowMaximizeButtonHint
-            | Qt.WindowType.WindowCloseButtonHint
+        current_flags = self.windowFlags()
+
+        non_type_flags = (
+            current_flags
+            & ~Qt.WindowType.WindowType_Mask
         )
 
-        self._floating_controls_ready = True
+        window_flags = (
+            non_type_flags
+            | Qt.WindowType.Window
+        )
 
         self.setWindowFlags(
-            floating_flags
+            window_flags
         )
 
         self.setGeometry(
@@ -536,17 +806,5 @@ class WorkspaceDock(QDockWidget):
         self.raise_()
         self.activateWindow()
 
-    @staticmethod
-    def _global_position(
-        event: QEvent,
-    ) -> QPoint:
-        if isinstance(
-            event,
-            QMouseEvent,
-        ):
-            return (
-                event.globalPosition()
-                .toPoint()
-            )
-
-        return QCursor.pos()
+        self._normalizing_window_type = False
+        self._floating_window_ready = True
