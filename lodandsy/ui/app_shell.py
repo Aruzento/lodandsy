@@ -32,10 +32,14 @@ class AppShell(QMainWindow):
         self.setWindowTitle("LODANDSY")
         self.resize(1280, 800)
 
-        self.setDockNestingEnabled(False)
+        # WorkspaceDock может образовывать несколько
+        # рядов/колонок. Сам drag при этом остаётся нашим:
+        # DockWidgetMovable у WorkspaceDock отключён.
+        self.setDockNestingEnabled(True)
 
         self.setDockOptions(
             QMainWindow.DockOption.AnimatedDocks
+            | QMainWindow.DockOption.AllowNestedDocks
             | QMainWindow.DockOption.AllowTabbedDocks
         )
 
@@ -239,13 +243,10 @@ class AppShell(QMainWindow):
                 f"{placement}"
             )
 
-        self._dock_workspace_in_area(
+        self._place_workspace_at_edge(
             dock,
+            placement,
             area,
-        )
-
-        self._normalize_workspace_dock_size(
-            dock
         )
 
     def remove_workspace_dock(
@@ -499,6 +500,139 @@ class AppShell(QMainWindow):
                 workspace_rect,
             )
         )
+
+    def _place_workspace_at_edge(
+        self,
+        dock: WorkspaceDock,
+        placement: WorkspacePlacement,
+        area: Qt.DockWidgetArea,
+    ) -> None:
+        # Ищем окно, которое сейчас находится ближе
+        # всего к свободной central_surface с нужной стороны.
+        #
+        # Новый dock должен вставиться между этим anchor
+        # и свободным workspace — именно там нарисован preview.
+        anchor = self._inner_workspace_anchor(
+            area,
+            exclude=dock,
+        )
+
+        # Сначала оба QDockWidget должны принадлежать
+        # layout QMainWindow.
+        self._dock_workspace_in_area(
+            dock,
+            area,
+        )
+
+        if anchor is not None:
+            if placement in (
+                WorkspacePlacement.LEFT,
+                WorkspacePlacement.RIGHT,
+            ):
+                orientation = (
+                    Qt.Orientation.Horizontal
+                )
+            else:
+                orientation = (
+                    Qt.Orientation.Vertical
+                )
+
+            if placement in (
+                WorkspacePlacement.LEFT,
+                WorkspacePlacement.TOP,
+            ):
+                # LEFT:
+                # anchor | new | central
+                #
+                # TOP:
+                # anchor
+                # new
+                # central
+                self.splitDockWidget(
+                    anchor,
+                    dock,
+                    orientation,
+                )
+            else:
+                # RIGHT:
+                # central | new | anchor
+                #
+                # BOTTOM:
+                # central
+                # new
+                # anchor
+                self.splitDockWidget(
+                    dock,
+                    anchor,
+                    orientation,
+                )
+
+            dock.show()
+            dock.raise_()
+
+        self._normalize_workspace_dock_size(
+            dock
+        )
+
+    def _inner_workspace_anchor(
+        self,
+        area: Qt.DockWidgetArea,
+        exclude: WorkspaceDock,
+    ) -> WorkspaceDock | None:
+        candidates = [
+            current
+            for current in self._workspace_docks
+            if (
+                current is not exclude
+                and not current.isFloating()
+                and not current.isHidden()
+                and (
+                    current
+                    not in self._centered_workspace_docks
+                )
+                and self.dockWidgetArea(
+                    current
+                )
+                == area
+            )
+        ]
+
+        if not candidates:
+            return None
+
+        if area == Qt.DockWidgetArea.LeftDockWidgetArea:
+            return max(
+                candidates,
+                key=lambda current: (
+                    current.geometry().right()
+                ),
+            )
+
+        if area == Qt.DockWidgetArea.RightDockWidgetArea:
+            return min(
+                candidates,
+                key=lambda current: (
+                    current.geometry().left()
+                ),
+            )
+
+        if area == Qt.DockWidgetArea.TopDockWidgetArea:
+            return max(
+                candidates,
+                key=lambda current: (
+                    current.geometry().bottom()
+                ),
+            )
+
+        if area == Qt.DockWidgetArea.BottomDockWidgetArea:
+            return min(
+                candidates,
+                key=lambda current: (
+                    current.geometry().top()
+                ),
+            )
+
+        return None
 
     def _place_workspace_in_center(
         self,

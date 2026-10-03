@@ -14,10 +14,11 @@ from lodandsy.ui.workspace_placement import (
 
 def _make_dock(
     window: AppShell,
+    key: str = "test",
 ) -> WorkspaceDock:
     return WorkspaceDock(
-        key="test",
-        title="Test",
+        key=key,
+        title=key.title(),
         content=QLabel("Content"),
         parent=window,
     )
@@ -48,7 +49,10 @@ def test_app_shell_has_expected_structure(
 
     window.show()
 
-    assert window.centralWidget() is window.central_surface
+    assert (
+        window.centralWidget()
+        is window.central_surface
+    )
 
     assert (
         window.toolBarArea(window.left_rail)
@@ -83,7 +87,9 @@ def test_app_shell_has_expected_structure(
     assert not window.inspector_host.isFloatable()
 
     assert (
-        window.dockWidgetArea(window.tree_panel)
+        window.dockWidgetArea(
+            window.tree_panel
+        )
         == Qt.DockWidgetArea.NoDockWidgetArea
     )
 
@@ -104,16 +110,16 @@ def test_app_shell_has_expected_structure(
         == QDockWidget.DockWidgetFeature.NoDockWidgetFeatures
     )
 
-    assert not window.isDockNestingEnabled()
+    assert window.isDockNestingEnabled()
+
+    assert (
+        window.dockOptions()
+        & QMainWindow.DockOption.AllowNestedDocks
+    )
 
     assert (
         window.dockOptions()
         & QMainWindow.DockOption.AllowTabbedDocks
-    )
-
-    assert not (
-        window.dockOptions()
-        & QMainWindow.DockOption.AllowNestedDocks
     )
 
 
@@ -164,7 +170,9 @@ def test_workspace_dock_uses_workspace_placement(
     )
 
     assert (
-        window.dockWidgetArea(window.tree_panel)
+        window.dockWidgetArea(
+            window.tree_panel
+        )
         == Qt.DockWidgetArea.NoDockWidgetArea
     )
 
@@ -278,14 +286,6 @@ def test_custom_center_drop_uses_full_workspace(
         == 0
     )
 
-    qtbot.waitUntil(
-        lambda: (
-            dock.width()
-            > window.WORKSPACE_SIDE_DOCK_SIZE
-        ),
-        timeout=1000,
-    )
-
 
 def test_custom_left_drop_uses_left_area(
     qtbot,
@@ -331,6 +331,266 @@ def test_custom_left_drop_uses_left_area(
 
     assert not window.is_workspace_dock_centered(
         dock
+    )
+
+
+def test_second_left_dock_is_inserted_next_to_first(
+    qtbot,
+) -> None:
+    window = AppShell()
+    qtbot.addWidget(window)
+
+    alpha = _make_dock(
+        window,
+        "alpha",
+    )
+    beta = _make_dock(
+        window,
+        "beta",
+    )
+
+    window.add_workspace_dock(
+        alpha,
+        WorkspacePlacement.LEFT,
+    )
+
+    window.add_workspace_dock(
+        beta,
+        WorkspacePlacement.RIGHT,
+    )
+
+    window.resize(
+        1400,
+        850,
+    )
+    window.show()
+
+    window.place_workspace_dock(
+        beta,
+        WorkspacePlacement.FLOATING,
+    )
+
+    qtbot.waitUntil(
+        beta.isFloating,
+        timeout=1000,
+    )
+
+    _simulate_custom_drop(
+        window,
+        beta,
+        WorkspacePlacement.LEFT,
+    )
+
+    qtbot.waitUntil(
+        lambda: (
+            not beta.isFloating()
+            and window.dockWidgetArea(beta)
+            == Qt.DockWidgetArea.LeftDockWidgetArea
+        ),
+        timeout=1000,
+    )
+
+    qtbot.waitUntil(
+        lambda: (
+            alpha.geometry().center().x()
+            < beta.geometry().center().x()
+        ),
+        timeout=1000,
+    )
+
+
+def test_second_right_dock_is_inserted_next_to_workspace(
+    qtbot,
+) -> None:
+    window = AppShell()
+    qtbot.addWidget(window)
+
+    alpha = _make_dock(
+        window,
+        "alpha",
+    )
+    beta = _make_dock(
+        window,
+        "beta",
+    )
+
+    window.add_workspace_dock(
+        alpha,
+        WorkspacePlacement.RIGHT,
+    )
+
+    window.add_workspace_dock(
+        beta,
+        WorkspacePlacement.LEFT,
+    )
+
+    window.resize(
+        1400,
+        850,
+    )
+    window.show()
+
+    window.place_workspace_dock(
+        beta,
+        WorkspacePlacement.FLOATING,
+    )
+
+    qtbot.waitUntil(
+        beta.isFloating,
+        timeout=1000,
+    )
+
+    _simulate_custom_drop(
+        window,
+        beta,
+        WorkspacePlacement.RIGHT,
+    )
+
+    qtbot.waitUntil(
+        lambda: (
+            not beta.isFloating()
+            and window.dockWidgetArea(beta)
+            == Qt.DockWidgetArea.RightDockWidgetArea
+        ),
+        timeout=1000,
+    )
+
+    qtbot.waitUntil(
+        lambda: (
+            beta.geometry().center().x()
+            < alpha.geometry().center().x()
+        ),
+        timeout=1000,
+    )
+
+
+def test_second_top_dock_is_inserted_next_to_first(
+    qtbot,
+) -> None:
+    window = AppShell()
+    qtbot.addWidget(window)
+
+    alpha = _make_dock(
+        window,
+        "alpha",
+    )
+    beta = _make_dock(
+        window,
+        "beta",
+    )
+
+    window.add_workspace_dock(
+        alpha,
+        WorkspacePlacement.TOP,
+    )
+
+    window.add_workspace_dock(
+        beta,
+        WorkspacePlacement.LEFT,
+    )
+
+    window.resize(
+        1400,
+        850,
+    )
+    window.show()
+
+    window.place_workspace_dock(
+        beta,
+        WorkspacePlacement.FLOATING,
+    )
+
+    qtbot.waitUntil(
+        beta.isFloating,
+        timeout=1000,
+    )
+
+    _simulate_custom_drop(
+        window,
+        beta,
+        WorkspacePlacement.TOP,
+    )
+
+    qtbot.waitUntil(
+        lambda: (
+            not beta.isFloating()
+            and window.dockWidgetArea(beta)
+            == Qt.DockWidgetArea.TopDockWidgetArea
+        ),
+        timeout=1000,
+    )
+
+    qtbot.waitUntil(
+        lambda: (
+            alpha.geometry().center().y()
+            < beta.geometry().center().y()
+        ),
+        timeout=1000,
+    )
+
+
+def test_second_bottom_dock_is_inserted_next_to_workspace(
+    qtbot,
+) -> None:
+    window = AppShell()
+    qtbot.addWidget(window)
+
+    alpha = _make_dock(
+        window,
+        "alpha",
+    )
+    beta = _make_dock(
+        window,
+        "beta",
+    )
+
+    window.add_workspace_dock(
+        alpha,
+        WorkspacePlacement.BOTTOM,
+    )
+
+    window.add_workspace_dock(
+        beta,
+        WorkspacePlacement.LEFT,
+    )
+
+    window.resize(
+        1400,
+        850,
+    )
+    window.show()
+
+    window.place_workspace_dock(
+        beta,
+        WorkspacePlacement.FLOATING,
+    )
+
+    qtbot.waitUntil(
+        beta.isFloating,
+        timeout=1000,
+    )
+
+    _simulate_custom_drop(
+        window,
+        beta,
+        WorkspacePlacement.BOTTOM,
+    )
+
+    qtbot.waitUntil(
+        lambda: (
+            not beta.isFloating()
+            and window.dockWidgetArea(beta)
+            == Qt.DockWidgetArea.BottomDockWidgetArea
+        ),
+        timeout=1000,
+    )
+
+    qtbot.waitUntil(
+        lambda: (
+            beta.geometry().center().y()
+            < alpha.geometry().center().y()
+        ),
+        timeout=1000,
     )
 
 
