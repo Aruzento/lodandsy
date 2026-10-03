@@ -3,6 +3,7 @@ from PySide6.QtCore import (
     QRect,
     QSize,
     Qt,
+    QTimer,
 )
 from PySide6.QtWidgets import QMainWindow, QWidget
 
@@ -128,6 +129,20 @@ class AppShell(QMainWindow):
             WorkspaceDock | None
         ) = None
 
+        self._workspace_drop_rect: (
+            QRect | None
+        ) = None
+
+        self._pending_center_dock: (
+            WorkspaceDock | None
+        ) = None
+
+        self._center_drop_timer = QTimer(self)
+        self._center_drop_timer.setSingleShot(True)
+        self._center_drop_timer.timeout.connect(
+            self._apply_pending_center_drop
+        )
+
     def add_workspace_dock(
         self,
         dock: WorkspaceDock,
@@ -160,8 +175,8 @@ class AppShell(QMainWindow):
                 self._on_workspace_top_level_changed
             )
 
-            dock.visibilityChanged.connect(
-                self._on_workspace_visibility_changed
+            dock.closed.connect(
+                self._on_workspace_dock_closed
             )
 
         dock.setAllowedAreas(
@@ -194,6 +209,10 @@ class AppShell(QMainWindow):
 
         if self._dragging_workspace_dock is dock:
             self._clear_workspace_drop_overlay()
+
+        if self._pending_center_dock is dock:
+            self._pending_center_dock = None
+            self._center_drop_timer.stop()
 
         self.removeDockWidget(
             dock
@@ -232,6 +251,10 @@ class AppShell(QMainWindow):
         self._centered_workspace_dock = dock
 
         self._collapse_central_surface()
+
+        dock.set_center_drop_active(
+            False
+        )
 
         dock.setAllowedAreas(
             Qt.DockWidgetArea.AllDockWidgetAreas
@@ -310,27 +333,27 @@ class AppShell(QMainWindow):
 
         self._dragging_workspace_dock = dock
 
+        workspace_rect = (
+            self._workspace_drop_rect_for_drag()
+        )
+
         center_active = (
             self.workspace_drop_overlay
             .show_for_global_position(
                 global_position,
-                self._workspace_global_rect(),
+                workspace_rect,
             )
         )
 
-        if center_active:
-            dock.setAllowedAreas(
-                Qt.DockWidgetArea.NoDockWidgetArea
-            )
-        else:
-            dock.setAllowedAreas(
-                Qt.DockWidgetArea.AllDockWidgetAreas
-            )
+        dock.set_center_drop_active(
+            center_active
+        )
 
     def _on_workspace_dock_drag_finished(
         self,
         dock: object,
-        global_position: object,
+        _global_position: object,
+        center_drop: bool,
     ) -> None:
         if not isinstance(
             dock,
@@ -338,36 +361,37 @@ class AppShell(QMainWindow):
         ):
             return
 
-        if not isinstance(
-            global_position,
-            QPoint,
-        ):
-            return
-
-        center_drop = False
-
-        if dock.isFloating():
-            center_drop = (
-                self.workspace_drop_overlay
-                .show_for_global_position(
-                    global_position,
-                    self._workspace_global_rect(),
-                )
-            )
-
-        dock.setAllowedAreas(
-            Qt.DockWidgetArea.AllDockWidgetAreas
+        dock.set_center_drop_active(
+            False
         )
 
         self._clear_workspace_drop_overlay()
 
         if center_drop:
-            self.center_workspace_dock(
-                dock
-            )
+            self._pending_center_dock = dock
+
+            self._center_drop_timer.start(0)
+
             return
 
         self._normalize_workspace_dock_size(
+            dock
+        )
+
+    def _apply_pending_center_drop(
+        self,
+    ) -> None:
+        dock = self._pending_center_dock
+
+        self._pending_center_dock = None
+
+        if dock is None:
+            return
+
+        if dock not in self._workspace_docks:
+            return
+
+        self.center_workspace_dock(
             dock
         )
 
@@ -381,10 +405,17 @@ class AppShell(QMainWindow):
         ):
             return
 
-        if not dock.isFloating():
-            self._normalize_workspace_dock_size(
-                dock
-            )
+        if dock.isFloating():
+            return
+
+        if self.is_workspace_dock_centered(
+            dock
+        ):
+            return
+
+        self._normalize_workspace_dock_size(
+            dock
+        )
 
     def _on_workspace_top_level_changed(
         self,
@@ -402,24 +433,22 @@ class AppShell(QMainWindow):
             self._leave_center_mode(
                 dock
             )
+
+            self._workspace_drop_rect = None
+
             return
 
         if self._dragging_workspace_dock is dock:
             self._clear_workspace_drop_overlay()
 
-    def _on_workspace_visibility_changed(
+    def _on_workspace_dock_closed(
         self,
-        visible: bool,
+        dock: object,
     ) -> None:
-        dock = self.sender()
-
         if not isinstance(
             dock,
             WorkspaceDock,
         ):
-            return
-
-        if visible:
             return
 
         self._leave_center_mode(
@@ -429,7 +458,13 @@ class AppShell(QMainWindow):
         if self._dragging_workspace_dock is dock:
             self._clear_workspace_drop_overlay()
 
-    def _workspace_global_rect(self) -> QRect:
+        if self._pending_center_dock is dock:
+            self._pending_center_dock = None
+            self._center_drop_timer.stop()
+
+    def _workspace_global_rect(
+        self,
+    ) -> QRect:
         top_left = (
             self.central_surface.mapToGlobal(
                 QPoint(
@@ -442,6 +477,45 @@ class AppShell(QMainWindow):
         return QRect(
             top_left,
             self.central_surface.size(),
+        )
+
+    def _workspace_drop_rect_for_drag(
+        self,
+    ) -> QRect:
+        current_rect = (
+            self._workspace_global_rect()
+        )
+
+        current_area = (
+            current_rect.width()
+            * current_rect.height()
+        )
+
+        stored_rect = (
+            self._workspace_drop_rect
+        )
+
+        if stored_rect is None:
+            self._workspace_drop_rect = QRect(
+                current_rect
+            )
+
+            return QRect(
+                current_rect
+            )
+
+        stored_area = (
+            stored_rect.width()
+            * stored_rect.height()
+        )
+
+        if current_area > stored_area:
+            self._workspace_drop_rect = QRect(
+                current_rect
+            )
+
+        return QRect(
+            self._workspace_drop_rect
         )
 
     def _collapse_central_surface(self) -> None:
@@ -472,11 +546,12 @@ class AppShell(QMainWindow):
         dock = self._dragging_workspace_dock
 
         if dock is not None:
-            dock.setAllowedAreas(
-                Qt.DockWidgetArea.AllDockWidgetAreas
+            dock.set_center_drop_active(
+                False
             )
 
         self._dragging_workspace_dock = None
+        self._workspace_drop_rect = None
 
         self.workspace_drop_overlay.hide_overlay()
 

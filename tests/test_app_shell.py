@@ -1,4 +1,4 @@
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtWidgets import (
     QDockWidget,
     QLabel,
@@ -199,6 +199,71 @@ def test_workspace_dock_can_be_centered(
     )
 
 
+def test_center_drop_signal_uses_full_workspace(
+    qtbot,
+) -> None:
+    window = AppShell()
+    qtbot.addWidget(window)
+
+    dock = WorkspaceDock(
+        key="test",
+        title="Test",
+        content=QLabel("Content"),
+        parent=window,
+    )
+
+    window.add_workspace_dock(
+        dock
+    )
+
+    window.show()
+
+    dock.setFloating(True)
+
+    qtbot.waitUntil(
+        dock.isFloating,
+        timeout=1000,
+    )
+
+    dock.floating_drag_finished.emit(
+        dock,
+        QPoint(
+            500,
+            500,
+        ),
+        True,
+    )
+
+    qtbot.waitUntil(
+        lambda: (
+            window.is_workspace_dock_centered(
+                dock
+            )
+        ),
+        timeout=1000,
+    )
+
+    assert not dock.isFloating()
+
+    assert (
+        window.central_surface.maximumWidth()
+        == 0
+    )
+
+    assert (
+        window.central_surface.maximumHeight()
+        == 0
+    )
+
+    qtbot.waitUntil(
+        lambda: (
+            dock.width()
+            > window.WORKSPACE_SIDE_DOCK_SIZE
+        ),
+        timeout=1000,
+    )
+
+
 def test_restoring_centered_dock_restores_workspace(
     qtbot,
 ) -> None:
@@ -224,6 +289,59 @@ def test_restoring_centered_dock_restores_workspace(
 
     window.restore_workspace_dock_size(
         dock
+    )
+
+    assert not (
+        window.is_workspace_dock_centered(
+            dock
+        )
+    )
+
+    assert (
+        window.central_surface.maximumWidth()
+        > 0
+    )
+
+    assert (
+        window.central_surface.maximumHeight()
+        > 0
+    )
+
+
+def test_closing_centered_dock_restores_workspace(
+    qtbot,
+) -> None:
+    window = AppShell()
+    qtbot.addWidget(window)
+
+    dock = WorkspaceDock(
+        key="test",
+        title="Test",
+        content=QLabel("Content"),
+        parent=window,
+    )
+
+    window.add_workspace_dock(
+        dock
+    )
+
+    window.show()
+
+    window.center_workspace_dock(
+        dock
+    )
+
+    assert (
+        window.is_workspace_dock_centered(
+            dock
+        )
+    )
+
+    dock.close()
+
+    qtbot.waitUntil(
+        lambda: not dock.isVisible(),
+        timeout=1000,
     )
 
     assert not (
