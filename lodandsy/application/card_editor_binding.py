@@ -9,9 +9,12 @@ class CardEditorBinding:
         self,
         session: ApplicationSession,
         editor: CardEditorWidget,
+        card_id: str,
     ) -> None:
         self.session = session
         self.editor = editor
+        self.card_id = card_id
+        self.session.cards.get(card_id)
 
         self._disposed = False
 
@@ -19,9 +22,8 @@ class CardEditorBinding:
             self._on_content_changed
         )
 
-        self.session.current_card_changed.connect(
-            self._on_current_card_changed
-        )
+        self.session.card_changed.connect(self._on_card_changed)
+        self.session.cards_deleted.connect(self._on_cards_deleted)
 
         self.refresh()
 
@@ -33,11 +35,7 @@ class CardEditorBinding:
         if self._disposed:
             return
 
-        card = self.session.current_card
-
-        if card is None:
-            self.editor.clear_card()
-            return
+        card = self.session.cards.get(self.card_id)
 
         self.editor.set_card(
             card.id,
@@ -54,15 +52,17 @@ class CardEditorBinding:
             self._on_content_changed
         )
 
-        self.session.current_card_changed.disconnect(
-            self._on_current_card_changed
-        )
+        self.session.card_changed.disconnect(self._on_card_changed)
+        self.session.cards_deleted.disconnect(self._on_cards_deleted)
 
-    def _on_current_card_changed(
-        self,
-        _card_id: object,
-    ) -> None:
-        self.refresh()
+    def _on_cards_deleted(self, card_ids: tuple[str, ...]) -> None:
+        if self.card_id in card_ids:
+            self.editor.clear_card()
+            self.dispose()
+
+    def _on_card_changed(self, card_id: str, fields: frozenset[str]) -> None:
+        if card_id == self.editor.card_id and "content" in fields:
+            self.refresh()
 
     def _on_content_changed(
         self,
@@ -72,10 +72,7 @@ class CardEditorBinding:
         if self._disposed:
             return
 
-        if card_id != self.session.current_card_id:
+        if card_id != self.card_id:
             return
 
-        self.session.cards.update_content(
-            card_id,
-            content,
-        )
+        self.session.update_card(card_id, content=content)

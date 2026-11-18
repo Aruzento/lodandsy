@@ -7,7 +7,8 @@ name = "lodandsy"
 version = "0.1.0"
 requires-python = ">=3.14,<3.15"
 dependencies = [
-    "PySide6>=6.11,<7",
+    "PySide6==6.11.2",
+    "PySide6-QtAds==5.1.1",
 ]
 
 [project.optional-dependencies]
@@ -16,6 +17,9 @@ dev = [
     "pytest-qt",
     "ruff",
 ]
+
+[tool.setuptools.packages.find]
+include = ["lodandsy*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,5 +1,3 @@
-from collections.abc import Callable
-
 from lodandsy.application.application_session import ApplicationSession
 from lodandsy.ui.inspector_panel import InspectorPanel
 
@@ -9,11 +7,9 @@ class CardInspectorBinding:
         self,
         session: ApplicationSession,
         inspector: InspectorPanel,
-        on_cards_changed: Callable[[], None] | None = None,
     ) -> None:
         self.session = session
         self.inspector = inspector
-        self.on_cards_changed = on_cards_changed
 
         self.inspector.title_changed.connect(
             self._on_title_changed
@@ -25,6 +21,10 @@ class CardInspectorBinding:
         self.session.current_card_changed.connect(
             self._on_current_card_changed
         )
+        self.session.card_created.connect(self._on_structure_changed)
+        self.session.cards_deleted.connect(self._on_structure_changed)
+        self.session.card_changed.connect(self._on_card_changed)
+        self.session.cards_replaced.connect(self.refresh)
 
         self.refresh()
 
@@ -58,12 +58,7 @@ class CardInspectorBinding:
         if card_id != self.session.current_card_id:
             return
 
-        self.session.cards.rename(
-            card_id,
-            title,
-        )
-
-        self._notify_cards_changed()
+        self.session.update_card(card_id, title=title)
 
     def _on_parent_changed(
         self,
@@ -77,18 +72,14 @@ class CardInspectorBinding:
             parent_id
         )
 
-        self.session.cards.reparent(
-            card_id,
-            resolved_parent_id,
-        )
+        self.session.update_card(card_id, parent_id=resolved_parent_id)
 
-        self._notify_cards_changed()
-
-    def _notify_cards_changed(self) -> None:
-        if self.on_cards_changed is not None:
-            self.on_cards_changed()
-
+    def _on_structure_changed(self, _ids: object) -> None:
         self.refresh()
+
+    def _on_card_changed(self, card_id: str, fields: frozenset[str]) -> None:
+        if fields & {"title", "parent_id"}:
+            self.refresh()
 
     def _build_parent_options(
         self,
@@ -96,7 +87,7 @@ class CardInspectorBinding:
     ) -> list[tuple[str | None, str]]:
         blocked_ids = {
             card_id,
-            *self._descendant_ids(card_id),
+            *self.session.cards.descendant_ids(card_id),
         }
 
         options: list[tuple[str | None, str]] = [
@@ -115,28 +106,6 @@ class CardInspectorBinding:
             )
 
         return options
-
-    def _descendant_ids(
-        self,
-        card_id: str,
-    ) -> set[str]:
-        descendants: set[str] = set()
-        pending = [card_id]
-
-        while pending:
-            current_id = pending.pop()
-
-            for card in self.session.cards.all():
-                if card.parent_id != current_id:
-                    continue
-
-                if card.id in descendants:
-                    continue
-
-                descendants.add(card.id)
-                pending.append(card.id)
-
-        return descendants
 
     @staticmethod
     def _optional_card_id(

@@ -2,6 +2,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QToolBar, QWidget
 
+from lodandsy.ui.icons import icon
+
 
 class LeftRail(QToolBar):
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -13,6 +15,8 @@ class LeftRail(QToolBar):
         self.setAllowedAreas(Qt.ToolBarArea.LeftToolBarArea)
 
         self.tree_action = QAction("Tree", self)
+        self.tree_action.setIcon(icon("tree"))
+        self.tree_action.setToolTip("Показать / скрыть дерево карточек")
         self.tree_action.setCheckable(True)
         self.tree_action.setChecked(True)
 

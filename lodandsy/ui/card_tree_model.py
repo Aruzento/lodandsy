@@ -11,6 +11,7 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 
 from lodandsy.domain.card import Card
+from lodandsy.domain.entity_summary import EntitySummary
 
 CARD_ID_ROLE = Qt.ItemDataRole.UserRole
 CARD_MIME_TYPE = "application/x-lodandsy-card-id"
@@ -18,13 +19,25 @@ CARD_MIME_TYPE = "application/x-lodandsy-card-id"
 
 class CardTreeModel(QStandardItemModel):
     reparent_requested = Signal(str, object)
+    move_requested = Signal(str, object, int)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
 
         self._card_ids: set[str] = set()
+        self._items: dict[str, QStandardItem] = {}
 
-    def set_cards(self, cards: Iterable[Card]) -> None:
+    def index_for_card(self, card_id: str) -> QModelIndex:
+        item = self._items.get(card_id)
+        return item.index() if item is not None else QModelIndex()
+
+    def card_ids(self) -> tuple[str, ...]:
+        return tuple(self._items)
+
+    def set_title(self, card_id: str, title: str) -> None:
+        self._items[card_id].setText(title)
+
+    def set_cards(self, cards: Iterable[Card | EntitySummary]) -> None:
         card_list = list(cards)
 
         card_ids = {
@@ -42,6 +55,7 @@ class CardTreeModel(QStandardItemModel):
             card.id: self._create_item(card)
             for card in card_list
         }
+        self._items = items
 
         root = self.invisibleRootItem()
 
@@ -121,13 +135,7 @@ class CardTreeModel(QStandardItemModel):
         if card_id not in self._card_ids:
             return False
 
-        # Пока разрешаем только:
-        #
-        # Card -> Card
-        # Card -> root
-        #
-        # Но не вставку между соседями.
-        if row != -1 or column != -1:
+        if column not in {-1, 0} or row < -1 or row > self.rowCount(parent):
             return False
 
         current = parent
@@ -183,10 +191,13 @@ class CardTreeModel(QStandardItemModel):
 
             new_parent_id = parent_id
 
-        self.reparent_requested.emit(
-            card_id,
-            new_parent_id,
-        )
+        if row < 0:
+            self.reparent_requested.emit(card_id, new_parent_id)
+        else:
+            source = self.index_for_card(card_id)
+            if source.parent() == parent and source.row() < row:
+                row -= 1
+            self.move_requested.emit(card_id, new_parent_id, row)
 
         return True
 
@@ -215,7 +226,7 @@ class CardTreeModel(QStandardItemModel):
         return card_id
 
     @staticmethod
-    def _create_item(card: Card) -> QStandardItem:
+    def _create_item(card: Card | EntitySummary) -> QStandardItem:
         item = QStandardItem(card.title)
         item.setEditable(False)
         item.setData(card.id, CARD_ID_ROLE)

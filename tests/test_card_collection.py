@@ -13,7 +13,7 @@ def test_create_card() -> None:
     )
 
     assert cards.get(world.id) is world
-    assert city.parent_id == world.id
+    assert cards.get(city.id).parent_id == world.id
 
 
 def test_rename_card() -> None:
@@ -25,7 +25,7 @@ def test_rename_card() -> None:
         "New title",
     )
 
-    assert card.title == "New title"
+    assert cards.get(card.id).title == "New title"
 
 
 def test_reparent_card() -> None:
@@ -48,7 +48,7 @@ def test_reparent_card() -> None:
         kingdom.id,
     )
 
-    assert city.parent_id == kingdom.id
+    assert cards.get(city.id).parent_id == kingdom.id
 
 
 def test_reparent_card_to_root() -> None:
@@ -66,7 +66,7 @@ def test_reparent_card_to_root() -> None:
         None,
     )
 
-    assert city.parent_id is None
+    assert cards.get(city.id).parent_id is None
 
 
 def test_reparent_rejects_self_parent() -> None:
@@ -118,7 +118,7 @@ def test_reparent_rejects_unknown_parent() -> None:
     ):
         cards.reparent(
             card.id,
-            "missing-parent",
+            "00000000-0000-0000-0000-000000000001",
         )
 
 
@@ -206,5 +206,5 @@ def test_update_content() -> None:
         "# Heading\n\nSome text",
     )
 
-    assert card.content == "# Heading\n\nSome text"
+    assert cards.get(card.id).content == "# Heading\n\nSome text"
     

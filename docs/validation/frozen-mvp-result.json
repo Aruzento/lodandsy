@@ -1,0 +1,14 @@
+{
+  "passed": true,
+  "frozen": true,
+  "python": "3.14.8 (tags/v3.14.8:8e6e75d, Sep 30 2026, 18:19:33) [MSC v.1944 64 bit (AMD64)]",
+  "qt": "6.11.2",
+  "platform": "windows",
+  "cards_maps_tools_sqlite": true,
+  "backup_restore": true,
+  "independent_windows": true,
+  "layout_reopen": true,
+  "broken_markers_survive": true,
+  "unicode_paths": true,
+  "manual_acceptance": "not performed by this automated smoke"
+}

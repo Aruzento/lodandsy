@@ -1,261 +1,76 @@
+import pytest
 from PySide6.QtWidgets import QLabel
 
 from lodandsy.ui.app_shell import AppShell
 from lodandsy.ui.window_manager import WindowManager
-from lodandsy.ui.workspace_placement import (
-    WorkspacePlacement,
-)
 
 
-def _make_window_manager(
-    qtbot,
-) -> tuple[
-    AppShell,
-    WindowManager,
-]:
+def make_manager(qtbot):
     shell = AppShell()
-
-    qtbot.addWidget(
-        shell
-    )
-
+    qtbot.addWidget(shell)
     shell.show()
-
-    manager = WindowManager(
-        shell
-    )
-
-    return (
-        shell,
-        manager,
-    )
+    return shell, WindowManager(shell)
 
 
-def test_window_manager_opens_workspace_window(
-    qtbot,
-) -> None:
-    shell, manager = (
-        _make_window_manager(
-            qtbot
-        )
-    )
-
-    dock = manager.open_window(
-        key="test",
-        title="Test window",
-        content_factory=lambda: QLabel(
-            "Content"
-        ),
-        placement=WorkspacePlacement.LEFT,
-    )
-
-    assert (
-        manager.find_window("test")
-        is dock
-    )
-
-    assert (
-        dock
-        in shell.workspace_docks()
-    )
-
-    assert (
-        dock.key
-        == "test"
-    )
-
-    assert (
-        dock.windowTitle()
-        == "Test window"
-    )
+def test_window_manager_opens_workspace_window(qtbot):
+    shell, manager = make_manager(qtbot)
+    window = manager.open_window("test", "Test", lambda: QLabel("Content"))
+    assert manager.find_window("test") is window
+    assert window.key == "test"
+    assert window.windowTitle() == "Test"
+    assert window.widget().text() == "Content"
+    assert window.dock in shell.workspace.dockWidgetsMap().values()
 
 
-def test_repeated_open_returns_existing_window(
-    qtbot,
-) -> None:
-    _shell, manager = (
-        _make_window_manager(
-            qtbot
-        )
-    )
-
-    factory_calls = 0
-
-    def create_content():
-        nonlocal factory_calls
-
-        factory_calls += 1
-
-        return QLabel(
-            f"Content {factory_calls}"
-        )
-
-    first = manager.open_window(
-        key="same",
-        title="First",
-        content_factory=create_content,
-    )
-
-    second = manager.open_window(
-        key="same",
-        title="Second",
-        content_factory=create_content,
-        placement=WorkspacePlacement.RIGHT,
-    )
-
-    assert second is first
-
-    assert factory_calls == 1
-
-    assert (
-        manager.window_keys()
-        == ("same",)
-    )
+def test_repeated_open_returns_existing_window(qtbot):
+    shell, manager = make_manager(qtbot)
+    calls = []
+    def factory():
+        calls.append(True)
+        return QLabel("Content")
+    first = manager.open_window("same", "First", factory)
+    assert manager.open_window("same", "Second", factory) is first
+    assert len(calls) == 1 and manager.window_keys() == ("same",)
 
 
-def test_focus_window_shows_existing_window(
-    qtbot,
-) -> None:
-    _shell, manager = (
-        _make_window_manager(
-            qtbot
-        )
-    )
-
-    dock = manager.open_window(
-        key="test",
-        title="Test",
-        content_factory=lambda: QLabel(
-            "Content"
-        ),
-    )
-
-    dock.hide()
-
-    assert not dock.isVisible()
-
-    focused = manager.focus_window(
-        "test"
-    )
-
-    assert focused is dock
-
-    assert dock.isVisible()
+def test_focus_window_shows_existing_window(qtbot):
+    shell, manager = make_manager(qtbot)
+    window = manager.open_window("test", "Test", lambda: QLabel("Content"))
+    window.dock.hide()
+    assert not window.dock.isVisible()
+    assert manager.focus_window("test") is window
+    assert window.dock.isVisible()
 
 
-def test_focus_unknown_window_returns_none(
-    qtbot,
-) -> None:
-    _shell, manager = (
-        _make_window_manager(
-            qtbot
-        )
-    )
-
-    assert (
-        manager.focus_window(
-            "missing"
-        )
-        is None
-    )
+def test_focus_unknown_window_returns_none(qtbot):
+    shell, manager = make_manager(qtbot)
+    assert manager.focus_window("missing") is None
 
 
-def test_close_window_removes_it_from_registry(
-    qtbot,
-) -> None:
-    shell, manager = (
-        _make_window_manager(
-            qtbot
-        )
-    )
-
-    dock = manager.open_window(
-        key="test",
-        title="Test",
-        content_factory=lambda: QLabel(
-            "Content"
-        ),
-    )
-
-    assert manager.close_window(
-        "test"
-    )
-
-    assert (
-        manager.find_window(
-            "test"
-        )
-        is None
-    )
-
-    assert (
-        dock
-        not in shell.workspace_docks()
-    )
+def test_close_window_removes_it_from_registry(qtbot):
+    shell, manager = make_manager(qtbot)
+    window = manager.open_window("test", "Test", lambda: QLabel("Content"))
+    assert manager.close_window("test")
+    assert manager.find_window("test") is None
+    assert window.dock not in shell.workspace.dockWidgetsMap().values()
 
 
-def test_closed_key_can_be_opened_again(
-    qtbot,
-) -> None:
-    shell, manager = (
-        _make_window_manager(
-            qtbot
-        )
-    )
-
-    factory_calls = 0
-
-    def create_content():
-        nonlocal factory_calls
-
-        factory_calls += 1
-
-        return QLabel(
-            f"Content {factory_calls}"
-        )
-
-    first = manager.open_window(
-        key="test",
-        title="Test",
-        content_factory=create_content,
-    )
-
-    assert manager.close_window(
-        "test"
-    )
-
-    second = manager.open_window(
-        key="test",
-        title="Test",
-        content_factory=create_content,
-    )
-
-    assert second is not first
-
-    assert factory_calls == 2
-
-    assert (
-        manager.find_window(
-            "test"
-        )
-        is second
-    )
-
-    assert (
-        shell.workspace_docks()
-        == (second,)
-    )
+def test_closed_key_can_be_opened_again(qtbot):
+    shell, manager = make_manager(qtbot)
+    first = manager.open_window("test", "Test", lambda: QLabel("Content"))
+    assert manager.close_window("test")
+    second = manager.open_window("test", "Test", lambda: QLabel("Content"))
+    assert second is not first and manager.find_window("test") is second
+    assert list(shell.workspace.dockWidgetsMap().values()) == [second.dock]
 
 
-def test_close_unknown_window_returns_false(
-    qtbot,
-) -> None:
-    _shell, manager = (
-        _make_window_manager(
-            qtbot
-        )
-    )
+def test_close_unknown_window_returns_false(qtbot):
+    shell, manager = make_manager(qtbot)
+    assert not manager.close_window("missing")
 
-    assert not manager.close_window(
-        "missing"
-    )
+
+def test_invalid_factory_does_not_register_a_window(qtbot):
+    shell, manager = make_manager(qtbot)
+    with pytest.raises(TypeError, match="QWidget"):
+        manager.open_window("bad", "Bad", lambda: object())
+    assert manager.window_keys() == ()

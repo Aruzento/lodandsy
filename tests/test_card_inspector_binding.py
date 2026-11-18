@@ -83,16 +83,16 @@ def test_binding_updates_title(
 
     changed = 0
 
-    def on_changed() -> None:
+    def on_changed(card_id: str, fields: object) -> None:
         nonlocal changed
         changed += 1
 
     binding = CardInspectorBinding(
         session,
         inspector,
-        on_cards_changed=on_changed,
     )
 
+    session.card_changed.connect(on_changed)
     session.select_card(card.id)
 
     inspector.title_edit.setText(

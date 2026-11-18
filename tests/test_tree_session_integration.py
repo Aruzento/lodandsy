@@ -121,13 +121,13 @@ def test_tree_selection_updates_editor_and_inspector(
     cards = CardCollection()
 
     world = cards.create("World")
-    world.content = "# World"
+    world = cards.update(world.id, content="# World")
 
     city = cards.create(
         "City",
         parent_id=world.id,
     )
-    city.content = "# City"
+    city = cards.update(city.id, content="# City")
 
     window = AppShell()
     qtbot.addWidget(window)
@@ -143,6 +143,7 @@ def test_tree_selection_updates_editor_and_inspector(
     editor_binding = CardEditorBinding(
         controller.session,
         editor,
+        city.id,
     )
 
     model = window.tree_panel.tree_model
@@ -194,7 +195,7 @@ def test_deleting_selected_card_clears_session_and_views(
         "City",
         parent_id=world.id,
     )
-    city.content = "# City"
+    city = cards.update(city.id, content="# City")
 
     window = AppShell()
     qtbot.addWidget(window)
@@ -210,6 +211,7 @@ def test_deleting_selected_card_clears_session_and_views(
     editor_binding = CardEditorBinding(
         controller.session,
         editor,
+        city.id,
     )
 
     model = window.tree_panel.tree_model

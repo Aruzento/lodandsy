@@ -8,6 +8,7 @@ __pycache__/
 # Tests and tools
 .pytest_cache/
 .ruff_cache/
+.prototype-deps/
 
 # Packaging
 *.egg-info/

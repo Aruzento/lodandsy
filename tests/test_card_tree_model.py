@@ -93,7 +93,7 @@ def test_drop_on_root_requests_root_parent(
     ]
 
 
-def test_drop_between_rows_is_rejected() -> None:
+def test_drop_between_rows_requests_validated_move(qtbot) -> None:
     first = Card(title="First")
     second = Card(title="Second")
 
@@ -103,12 +103,11 @@ def test_drop_between_rows_is_rejected() -> None:
     first_index = model.index(0, 0)
     mime_data = model.mimeData([first_index])
 
+    with qtbot.waitSignal(model.move_requested) as signal:
+        assert model.dropMimeData(mime_data, Qt.DropAction.MoveAction, 2, 0, QModelIndex())
+    assert signal.args == [first.id, None, 1]
     assert not model.canDropMimeData(
-        mime_data,
-        Qt.DropAction.MoveAction,
-        1,
-        0,
-        QModelIndex(),
+        mime_data, Qt.DropAction.MoveAction, 3, 0, QModelIndex()
     )
 
 
