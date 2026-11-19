@@ -1,10 +1,18 @@
 from PySide6.QtCore import QModelIndex, QPoint, Qt, Signal
-from PySide6.QtGui import QContextMenuEvent, QDrag
+from PySide6.QtGui import QContextMenuEvent, QDrag, QKeyEvent
 from PySide6.QtWidgets import QTreeView
 
 
 class CardTreeView(QTreeView):
     context_menu_requested = Signal(QModelIndex, QPoint)
+    open_requested = Signal(QModelIndex)
+
+    def keyPressEvent(self, event: QKeyEvent):
+        if event.key() in {Qt.Key.Key_Return, Qt.Key.Key_Enter}:
+            self.open_requested.emit(self.currentIndex())
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def startDrag(
         self,

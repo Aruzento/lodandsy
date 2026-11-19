@@ -9,7 +9,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication, QInputDialog, QLineEdit
 
-from lodandsy.application.module_controller import read_map_image
+from lodandsy.application.map_pyramid import ensure_pyramid
 from lodandsy.application.module_session import ModuleSession
 from lodandsy.application.sqlite_project_store import (
     ProjectError,
@@ -167,11 +167,17 @@ def test_missing_map_image_remains_editable_and_keeps_links(project, tmp_path, q
     assert "Разорванная" in widget.view._pins[0].toolTip()
 
 
-def test_map_image_policy_rejects_svg_and_oversize_header(tmp_path):
+def test_map_image_policy_rejects_svg_in_production_decoder(tmp_path):
     svg = tmp_path / "image.svg"
     svg.write_text('<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"/>')
-    with pytest.raises(ValueError, match="Поддерживаются"):
-        read_map_image(svg)
+    store = SQLiteProjectStore.create(tmp_path / "world")
+    try:
+        asset = store.import_asset(svg)
+        with pytest.raises(ValueError, match="Поддерживаются"):
+            ensure_pyramid(store.root, asset)
+        assert not store.load().maps
+    finally:
+        store.close()
 
 
 def test_marker_commands_link_new_card_rename_move_unlink_and_undo(project, tmp_path, monkeypatch):

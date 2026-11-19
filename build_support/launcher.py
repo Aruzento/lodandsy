@@ -4,6 +4,9 @@ from pathlib import Path
 
 
 def launch():
+    if "--map-worker" in sys.argv:
+        from lodandsy.application.map_pyramid_worker import main
+        return main(sys.argv[sys.argv.index("--map-worker") + 1:])
     if "--self-test" in sys.argv:
         from build_support.windows_smoke import main
     else:

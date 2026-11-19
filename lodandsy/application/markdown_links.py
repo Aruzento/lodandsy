@@ -7,9 +7,13 @@ from urllib.parse import quote, unquote, urlsplit
 from lodandsy.domain.card import validate_card_id
 
 
+def escape_markdown_label(title: str) -> str:
+    return re.sub(f"([{re.escape(string.punctuation)}])", r"\\\1", title)
+
+
 def card_link(card_id: str, title: str) -> str:
     validate_card_id(card_id)
-    label = re.sub(f"([{re.escape(string.punctuation)}])", r"\\\1", title)
+    label = escape_markdown_label(title)
     return f"[{label}](lodandsy://card/{card_id})"
 
 

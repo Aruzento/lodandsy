@@ -54,8 +54,7 @@ def main():
                   "import_ms": round(elapsed, 2), "gui_ticks": len(ticks),
                   "largest_tick_gap_ms": round(max(ticks, default=0), 2),
                   "scene_pins": 1000, "scene_refresh_ms": round(scene_ms, 2),
-                  "image_cache_bytes": sum(
-                      i.sizeInBytes() for i in controller.modules._images.values())}
+                  "tile_cache_bytes": controller.modules.tiles.bytes}
         print(json.dumps(result))
         project.saver.shutdown()
         controller.modules.shutdown()

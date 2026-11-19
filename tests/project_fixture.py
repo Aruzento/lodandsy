@@ -14,6 +14,7 @@ def project(qtbot):
     yield controller, project
     window.close_guard = None
     controller.modules.shutdown()
+    controller.card_images.shutdown()
     project.saver.shutdown()
     if project.store:
         project.store.close()

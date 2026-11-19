@@ -1,36 +1,23 @@
-from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 
 from PySide6.QtCore import QEventLoop, QObject, Qt, Signal
-from PySide6.QtGui import QImageReader
-from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
+from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox, QProgressDialog
 
+from lodandsy.application.map_pyramid import MAX_SOURCE_BYTES, ensure_pyramid
+from lodandsy.application.map_tiles import MapTiles
 from lodandsy.application.module_session import ModuleSession
+from lodandsy.ui.map_settings_dialogs import MapGridDialog, TokenPropertiesDialog
 from lodandsy.ui.map_widget import MapWidget
 from lodandsy.ui.tools_widgets import DiceWidget, RandomTableWidget
-
-
-def read_map_image(path):
-    path = Path(path)
-    if path.stat().st_size > 64 * 1024**2:
-        raise ValueError("Изображение превышает 64 MiB")
-    reader = QImageReader(str(path))
-    if bytes(reader.format()).lower() not in {b"png", b"jpeg", b"bmp", b"gif", b"webp"}:
-        raise ValueError("Поддерживаются PNG, JPEG, BMP, GIF и WebP")
-    size = reader.size()
-    if size.width() <= 0 or size.height() <= 0 or size.width() * size.height() > 16_000_000:
-        raise ValueError("Изображение должно содержать не более 16 миллионов пикселей")
-    image = reader.read()
-    if image.isNull():
-        raise ValueError("Не удалось прочитать изображение: " + reader.errorString())
-    return image
 
 
 class ModuleController(QObject):
     _result = Signal(object)
     import_finished = Signal()
     busy_changed = Signal()
+    import_progress = Signal(int)
 
     def __init__(self, app):
         super().__init__(app.window)
@@ -40,7 +27,10 @@ class ModuleController(QObject):
         self._callbacks = {}
         self._next_job = 0
         self._generation = 0
-        self._images = OrderedDict()
+        self.tiles = MapTiles(self)
+        self._cancel = Event()
+        self._decode_cancels = set()
+        self.progress = None
         self._map_ui = {}
         self.importing = False
         self._result.connect(self._finish, Qt.ConnectionType.QueuedConnection)
@@ -51,26 +41,20 @@ class ModuleController(QObject):
             lambda key: app.window_manager.close_window(f"table:{key}"))
         app.session.cards_deleted.connect(self._refresh_links)
         app.session.card_created.connect(self._refresh_links)
-        self.map_menu = app.window.menuBar().addMenu("Карты")
-        self.map_menu.aboutToShow.connect(self._map_menu)
-        self.tools_menu = app.window.menuBar().addMenu("Инструменты")
-        self.tools_menu.aboutToShow.connect(self._tools_menu)
 
-    def _map_menu(self):
-        self.map_menu.clear()
-        action = self.map_menu.addAction("Создать карту из изображения…", self.request_map)
-        action.setEnabled(not self.importing)
-        self.map_menu.addSeparator()
-        for document in self.session.maps.values():
-            self.map_menu.addAction(document.title, lambda key=document.id: self.open_map(key))
+    def request_create(self, kind):
+        if kind == "map":
+            self.request_map()
+        elif kind == "table":
+            self.request_table()
+        else:
+            raise ValueError("Unsupported module kind")
 
-    def _tools_menu(self):
-        self.tools_menu.clear()
-        self.tools_menu.addAction("Кубики", self.open_dice)
-        self.tools_menu.addAction("Создать случайную таблицу…", self.request_table)
-        self.tools_menu.addSeparator()
-        for table in self.session.tables.values():
-            self.tools_menu.addAction(table.title, lambda key=table.id: self.open_table(key))
+    def request_rename(self, kind, key):
+        self._rename(kind, key)
+
+    def request_delete(self, kind, key):
+        self._delete(kind, key)
 
     def _run(self, operation, callback):
         self._next_job += 1
@@ -94,15 +78,12 @@ class ModuleController(QObject):
         if generation == self._generation and callback is not None:
             callback(value, error)
 
-    def _cache(self, asset_id, image):
-        self._images[asset_id] = image
-        self._images.move_to_end(asset_id)
-        while sum(item.sizeInBytes() for item in self._images.values()) > 64 * 1024**2:
-            self._images.popitem(last=False)
-
     def reset(self, maps=(), tables=()):
+        for cancel in self._decode_cancels:
+            cancel.set()
+        self._decode_cancels.clear()
         self._generation += 1
-        self._images.clear()
+        self.tiles.reset()
         self._map_ui.clear()
         self.session.reset(maps, tables)
 
@@ -118,7 +99,10 @@ class ModuleController(QObject):
 
     def shutdown(self):
         self.wait_import()
+        for cancel in self._decode_cancels:
+            cancel.set()
         self._executor.shutdown(wait=True)
+        self.tiles.shutdown()
 
     def request_map(self):
         project = self.app.project_controller
@@ -142,28 +126,38 @@ class ModuleController(QObject):
         if self.importing or project.store is None:
             raise ValueError("Дождитесь импорта или выберите проект")
         store = project.store
+        known_assets = tuple(project.assets.values())
         self.importing = True
+        self._cancel.clear()
+        self.progress = QProgressDialog("Импорт и построение пирамиды…", "Отмена", 0, 100,
+                                        self.app.window)
+        self.progress.setAutoClose(False)
+        self.progress.setMinimumDuration(0)
+        self.progress.canceled.connect(self._cancel.set)
+        self.import_progress.connect(self.progress.setValue)
         self.busy_changed.emit()
         self.app.window.statusBar().showMessage("Импорт изображения…")
         def operation():
             # Decode before copying; no DB reference is published until bytes are ready.
-            image = read_map_image(path)
-            asset = store.import_asset(path)
-            # Validate the actual copied bytes if the source changed during import.
-            image = read_map_image(store.root / asset.path)
-            return asset, image
+            asset = store.import_asset(path, known_assets=known_assets, max_bytes=MAX_SOURCE_BYTES,
+                                       cancelled=self._cancel.is_set)
+            pyramid = ensure_pyramid(store.root, asset, self._cancel, self.import_progress.emit)
+            return asset, pyramid
         def complete(value, error):
             try:
                 if error:
-                    self._error(error)
+                    if not self._cancel.is_set():
+                        self._error(error)
                 else:
                     asset, image = value
                     project.assets[asset.id] = asset
-                    self._cache(asset.id, image)
                     document = self.session.create_map(title, asset.id)
                     self.open_map(document.id)
             finally:
                 self.importing = False
+                self.progress.close()
+                self.progress.deleteLater()
+                self.progress = None
                 self.app.window.statusBar().clearMessage()
                 self.busy_changed.emit()
                 self.import_finished.emit()
@@ -215,6 +209,18 @@ class ModuleController(QObject):
             return self.app.window_manager.focus_window(key)
         def factory():
             widget = MapWidget(self.session.undo_stack(map_id))
+            widget.project_root = self.app.project_root
+            self.app.card_images.ready.connect(widget.image_ready)
+            widget.grid_requested.connect(lambda: self._grid_settings(map_id))
+            widget.view.token_moved.connect(
+                lambda token, x, y: self._move_token(map_id, token, x, y, widget.view))
+            widget.view.token_action.connect(
+                lambda token, action: self._token_action(map_id, token, action))
+            widget.view.token_add_requested.connect(lambda x, y: self._add_token(map_id, x, y))
+            def add_token():
+                center = widget.view.mapToScene(widget.view.viewport().rect().center())
+                self._add_token(map_id, center.x(), center.y())
+            widget.token_add.triggered.connect(add_token)
             widget.view.pin_moved.connect(
                 lambda pin, x, y: self.session.edit_pin(map_id, pin, x=x, y=y))
             widget.view.pin_action.connect(
@@ -225,19 +231,23 @@ class ModuleController(QObject):
             widget.delete_requested.connect(lambda: self._delete("map", map_id))
             return widget
         window = self.app.window_manager.open_window(key, document.title, factory)
-        window.closed.connect(
-            lambda closed: self._map_ui.update({map_id: closed.widget().pending_camera
-                                               or closed.widget().view.camera()}))
+        window.closed.connect(lambda closed: self._remember_map_camera(map_id, closed.widget()))
         widget = window.widget()
+        cancel = Event()
+        self._decode_cancels.add(cancel)
+        window.closed.connect(lambda _closed: cancel.set())
+        self.tiles.failed.connect(widget.message.setText)
         def loaded(image, error):
+            self._decode_cancels.discard(cancel)
             if self.app.window_manager.find_window(key) is not window:
                 return
             if error:
                 widget.message.setText("Изображение недоступно: " + error)
                 widget.view.scene().setSceneRect(0, 0, 1000, 700)
             else:
-                self._cache(document.asset_id, image)
-                widget.view.set_image(image)
+                self.tiles.errors.clear()
+                widget.view.set_pyramid(image, self.tiles)
+                widget.token_add.setEnabled(True)
                 widget.message.setText("Колесо — масштаб · фон — перемещение · ПКМ — маркеры · "
                                        "двойной щелчок по маркеру — Card")
             self._refresh_map(map_id)
@@ -245,24 +255,20 @@ class ModuleController(QObject):
             if camera:
                 widget.view.restore_camera(camera)
             widget.pending_camera = None
-        image = self._images.get(document.asset_id)
-        if image is not None:
-            loaded(image, None)
+        project = getattr(self.app, "project_controller", None)
+        asset = project.assets.get(document.asset_id) if project else None
+        if asset and self.app.project_root:
+            root = self.app.project_root
+            self._run(lambda: ensure_pyramid(root, asset, cancel), loaded)
         else:
-            project = getattr(self.app, "project_controller", None)
-            asset = project.assets.get(document.asset_id) if project else None
-            if asset and self.app.project_root:
-                path = (self.app.project_root / asset.path).resolve()
-                assets_root = (self.app.project_root / "assets").resolve()
-                if (assets_root.is_relative_to(self.app.project_root.resolve())
-                        and path.is_relative_to(assets_root)):
-                    self._run(lambda: read_map_image(path), loaded)
-                else:
-                    loaded(None, "ресурс находится вне assets проекта")
-            else:
-                loaded(None, "ресурс отсутствует")
+            loaded(None, "ресурс отсутствует")
         self._refresh_map(map_id)
         return window
+
+    def _remember_map_camera(self, map_id, widget):
+        state = widget.camera_state()
+        if map_id in self.session.maps and state is not None:
+            self._map_ui[map_id] = state
 
     def _refresh_map(self, key):
         window = self.app.window_manager.find_window(f"map:{key}")
@@ -270,6 +276,110 @@ class ModuleController(QObject):
             document = self.session.get_map(key)
             window.setWindowTitle(document.title)
             window.widget().view.set_pins(document.pins, {c.id for c in self.app.cards.all()})
+            project = getattr(self.app, "project_controller", None)
+            window.widget().view.set_annotations(document, {c.id for c in self.app.cards.all()},
+                self.app.project_root, project.assets if project else {},
+                self.app.card_images.cached_preview)
+
+    def _grid_settings(self, map_id):
+        dialog = MapGridDialog(self.session.get_map(map_id).grid, self.app.window)
+        if dialog.exec():
+            self.session.edit_map(map_id, grid=dialog.grid(), command="Изменить сетку")
+
+    def _move_token(self, map_id, token_id, x, y, view):
+        window = self.app.window_manager.find_window(f"map:{map_id}")
+        document = self.session.maps.get(map_id)
+        if (window is None or window.widget().view is not view or document is None
+                or not any(token.id == token_id for token in document.tokens)):
+            return
+        self.session.move_token(map_id, token_id, x, y,
+                                bounds=(view.map_width, view.map_height))
+        token = next(token for token in self.session.get_map(map_id).tokens if token.id == token_id)
+        for item in view._tokens:
+            if item.token.id == token_id:
+                item.setPos(token.x, token.y)  # Snap back also when the command is a no-op.
+
+    def _image_filename(self):
+        filename, _ = QFileDialog.getOpenFileName(self.app.window, "Изображение токена", "",
+            "Изображения (*.png *.jpg *.jpeg *.webp *.bmp *.gif)")
+        return filename
+
+    def _add_token(self, map_id, x, y):
+        if self.app.card_images.importing:
+            self.app.window.show_notice("Дождитесь завершения импорта изображения")
+            return
+        filename = self._image_filename()
+        if not filename:
+            return
+        title, ok = QInputDialog.getText(self.app.window, "Новый токен", "Название:")
+        if ok and title.strip():
+            self.import_token(map_id, Path(filename), title, x, y)
+
+    def import_token(self, map_id, source, title, x, y):
+        from lodandsy.domain.module_values import validate_title
+        title = validate_title(title)
+        document = self.session.get_map(map_id)
+        window = self.app.window_manager.find_window(f"map:{map_id}")
+        view = window.widget().view if window else None
+        if document.grid.snap:
+            x, y = document.grid.snap_point(x, y)
+        if view:
+            x, y = max(0, min(view.map_width, x)), max(0, min(view.map_height, y))
+        def publish(asset, error):
+            if error:
+                self._error(error)
+                return False
+            if map_id not in self.session.maps:
+                return False
+            size = document.grid.cell_size if document.grid.enabled else 64
+            token = self.session.add_token(map_id, title, asset.id, x, y, width=size, height=size)
+            if view and self.app.window_manager.find_window(f"map:{map_id}") is window:
+                for item in view._tokens:
+                    item.setSelected(item.token.id == token.id)
+            return True
+        self.app.card_images.import_image(source, publish)
+
+    def _token_action(self, map_id, token_id, action):
+        token = next((t for t in self.session.get_map(map_id).tokens if t.id == token_id), None)
+        if token is None:
+            return
+        if action == "delete":
+            self.session.delete_token(map_id, token_id)
+        elif action == "unlink":
+            self.session.edit_token(map_id, token_id, card_id=None)
+        elif action == "open":
+            try:
+                self.app.open_card_editor(token.card_id)
+            except ValueError:
+                self._error("Карточка не связана, удалена или отсутствует. Токен сохранён.")
+        elif action == "properties":
+            dialog = TokenPropertiesDialog(token, self.app.cards.all(), self.app.window)
+            if dialog.exec():
+                self.session.edit_token(map_id, token_id, **dialog.changes())
+        elif action == "create":
+            title, ok = QInputDialog.getText(self.app.window, "Новая карточка", "Название:",
+                                           text=token.title)
+            if ok and title.strip():
+                card = self.app.create_card(title)
+                self.session.edit_token(map_id, token_id, card_id=card.id)
+                self.app.open_card_editor(card.id)
+        elif action == "image":
+            if self.app.card_images.importing:
+                self.app.window.show_notice("Дождитесь завершения импорта изображения")
+                return
+            filename = self._image_filename()
+            if not filename:
+                return
+            def publish(asset, error):
+                if error:
+                    self._error(error)
+                    return False
+                current = self.session.maps.get(map_id)
+                if current is None or not any(t.id == token_id for t in current.tokens):
+                    return False
+                self.session.edit_token(map_id, token_id, asset_id=asset.id)
+                return True
+            self.app.card_images.import_image(Path(filename), publish)
 
     def _refresh_links(self, *_args):
         for key in self.session.maps:

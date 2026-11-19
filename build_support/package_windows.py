@@ -24,6 +24,12 @@ def main():
     licenses.mkdir(exist_ok=True)
     for path in (CACHE / "license-texts").glob("*.txt"):
         shutil.copy2(path, licenses / path.name)
+    shutil.copytree(ROOT / "build_support/licenses", licenses / "libvips", dirs_exist_ok=True)
+    import json
+    provenance = json.loads((licenses / "libvips/Vips-provenance.json").read_text())
+    native = next((APP / "_internal").glob("libvips-42-*.dll"))
+    if hashlib.sha256(native.read_bytes()).hexdigest() != provenance["native_sha256"]:
+        raise RuntimeError("Native libvips changed; repeat license/provenance verification")
     for name in ["LGPL-3.0-only.txt", "GPL-3.0-only.txt"]:
         if not (licenses / name).exists():
             raise RuntimeError("Supply Qt license texts; see build_support/README.md")
@@ -39,14 +45,15 @@ def main():
         shutil.copy2(ROOT / "build_support" / name, APP / name)
     # Include the exact application/build source, without private projects or local attachments.
     source = APP / "source"
-    for folder in ["lodandsy", "build_support", "tests", "docs"]:
+    for folder in ["lodandsy", "build_support", "tests", "docs", "prototypes"]:
         for path in (ROOT / folder).rglob("*"):
-            if path.is_file() and path.suffix in {".py", ".md", ".spec", ".ps1", ".json"}:
+            if path.is_file() and (path.suffix in {".py", ".md", ".spec", ".ps1", ".json", ".txt"}
+                                  or path.is_relative_to(ROOT / "build_support/licenses")):
                 target = source / path.relative_to(ROOT)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(path, target)
     for name in ["pyproject.toml", "requirements-runtime.lock", "requirements-dev.lock",
-                 "requirements-build.lock", "README.md"]:
+                 "requirements-build.lock", "README.md", "AGENTS.md", "START-CODEX.md"]:
         shutil.copy2(ROOT / name, source / name)
     shutil.copytree(ROOT / ".github", source / ".github", dirs_exist_ok=True)
     archive = CACHE / args.archive

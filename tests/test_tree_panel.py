@@ -23,11 +23,12 @@ def test_tree_shows_card_hierarchy(qtbot) -> None:
 
     model = panel.tree_model
 
-    world_index = model.index(0, 0)
+    world_index = panel.tree_model.index_for_card(world.id)
     kingdom_index = model.index(0, 0, world_index)
     city_index = model.index(0, 0, kingdom_index)
 
-    assert model.rowCount() == 1
+    assert model.rowCount() == 4
+    assert model.rowCount(model.section_index("card")) == 1
 
     assert world_index.data() == "World"
     assert world_index.data(CARD_ID_ROLE) == world.id
@@ -52,7 +53,7 @@ def test_tree_emits_selected_card_id(qtbot) -> None:
 
     panel.set_cards([world, city])
 
-    world_index = panel.tree_model.index(0, 0)
+    world_index = panel.tree_model.index_for_card(world.id)
     city_index = panel.tree_model.index(0, 0, world_index)
 
     with qtbot.waitSignal(
@@ -72,7 +73,7 @@ def test_tree_emits_open_request(qtbot) -> None:
 
     panel.set_cards([card])
 
-    card_index = panel.tree_model.index(0, 0)
+    card_index = panel.tree_model.index_for_card(card.id)
 
     with qtbot.waitSignal(
         panel.card_open_requested,
@@ -102,10 +103,7 @@ def test_parent_card_can_be_deleted(
         city,
     ])
 
-    world_index = panel.tree_model.index(
-        0,
-        0,
-    )
+    world_index = panel.tree_model.index_for_card(world.id)
 
     monkeypatch.setattr(
         QMessageBox,

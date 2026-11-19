@@ -16,7 +16,7 @@ class LeftRail(QToolBar):
 
         self.tree_action = QAction("Tree", self)
         self.tree_action.setIcon(icon("tree"))
-        self.tree_action.setToolTip("Показать / скрыть дерево карточек")
+        self.tree_action.setToolTip("Показать / скрыть дерево проекта")
         self.tree_action.setCheckable(True)
         self.tree_action.setChecked(True)
 

@@ -12,25 +12,33 @@ UI_STATE_NAME = ".lodandsy-ui.json"
 
 def capture_workspace(controller):
     panel = controller.window.tree_panel
-    states = {}
+    current_ids = {card.id for card in controller.cards.all()}
+    states = {key: values for key, values in controller.saved_card_preferences.items()
+              if key in current_ids}
     for card_id, editor in controller.card_editors.items():
         state = controller.card_document_states[card_id]
         state.capture(editor)
-        states[card_id] = {name: getattr(state, name) for name in [
-            "position", "anchor", "vertical_scroll", "horizontal_scroll", "preview_scroll", "mode",
-            "splitter_sizes",
-        ]}
+    for card_id, state in controller.card_document_states.items():
+        states[card_id] = state.ui_values()
+    cameras = {key: camera for key, camera in controller.modules._map_ui.items()
+               if key in controller.modules.session.maps}
+    for key in controller.window_manager.window_keys():
+        if key.startswith("map:"):
+            camera = controller.window_manager.find_window(key).widget().camera_state()
+            if camera is not None:
+                cameras[key[4:]] = camera
     return {
         "version": 1,
         "documents": list(controller.window_manager.window_keys()),
         "active": controller.window_manager.active_window_key,
         "selected": controller.session.current_card_id,
+        "navigator_selected": controller.window.tree_panel.current_node_key(),
+        "navigator_expanded": panel.expanded_keys(),
+        "navigator_scroll": panel.tree_view.verticalScrollBar().value(),
         "expanded": [key for key in panel.tree_model.card_ids()
                      if panel.tree_view.isExpanded(panel.tree_model.index_for_card(key))],
         "cards": states,
-        "maps": {key[4:]: (controller.window_manager.find_window(key).widget().pending_camera
-                          or controller.window_manager.find_window(key).widget().view.camera())
-                 for key in controller.window_manager.window_keys() if key.startswith("map:")},
+        "maps": cameras,
         "geometry": base64.b64encode(bytes(controller.window.saveGeometry())).decode("ascii"),
         "chrome": base64.b64encode(bytes(controller.window.saveState(1))).decode("ascii"),
         "layout": base64.b64encode(bytes(controller.window.workspace.saveState(1))).decode("ascii"),
@@ -63,26 +71,24 @@ def restore_workspace(controller, data):
     controller.window.workspace.ensure_visible()
     cameras = data.get("maps", {})
     if isinstance(cameras, dict):
+        controller.modules._map_ui.update({key: camera for key, camera in cameras.items()
+            if key in controller.modules.session.maps and isinstance(camera, dict)})
         for key, camera in cameras.items():
             window = controller.window_manager.find_window(f"map:{key}")
             if window and isinstance(camera, dict):
-                window.widget().pending_camera = camera
-                window.widget().view.restore_camera(camera)
-    for card_id, values in data.get("cards", {}).items():
-        if card_id not in controller.card_editors or not isinstance(values, dict):
-            continue
-        state = controller.card_document_states[card_id]
-        for name in ["position", "anchor", "vertical_scroll", "horizontal_scroll",
-                     "preview_scroll"]:
-            value = values.get(name)
-            if type(value) is int and value >= 0:
-                setattr(state, name, value)
-        if values.get("mode") in [0, 1, 2]:
-            state.mode = values["mode"]
-        sizes = values.get("splitter_sizes", [])
-        if isinstance(sizes, list) and all(type(size) is int and size >= 0 for size in sizes):
-            state.splitter_sizes = sizes[:2]
-        state.restore(controller.card_editors[card_id])
+                window.widget().restore_camera_state(camera)
+    saved = data.get("cards", {})
+    if not isinstance(saved, dict):
+        raise ValueError("Повреждён список настроек карточек")
+    ids = {card.id for card in controller.cards.all()}
+    controller.saved_card_preferences = {key: values for key, values in saved.items()
+                                         if key in ids and isinstance(values, dict)}
+    for card_id, editor in controller.card_editors.items():
+        values = controller.saved_card_preferences.get(card_id)
+        if values is not None:
+            state = controller.card_document_states[card_id]
+            state.load_ui_values(values)
+            state.restore(editor)
     panel = controller.window.tree_panel
     expanded = data.get("expanded", [])
     panel.tree_view.collapseAll()
@@ -90,6 +96,16 @@ def restore_workspace(controller, data):
         for key in expanded:
             if isinstance(key, str):
                 panel.tree_view.setExpanded(panel.tree_model.index_for_card(key), True)
+    navigator_expanded = data.get("navigator_expanded")
+    if isinstance(navigator_expanded, list):
+        panel.tree_view.collapseAll()
+        for key in navigator_expanded:
+            if isinstance(key, str):
+                panel.tree_view.setExpanded(panel.tree_model.index_for_node(key), True)
+    else:
+        # Old UI files only know Card IDs; their new section must remain reachable.
+        for kind in ("card", "map", "table"):
+            panel.tree_view.setExpanded(panel.tree_model.section_index(kind), True)
     selected = data.get("selected")
     if isinstance(selected, str):
         try:
@@ -98,6 +114,15 @@ def restore_workspace(controller, data):
             controller.session.clear_selection()
     else:
         controller.session.clear_selection()
+    navigator_selected = data.get("navigator_selected")
+    if isinstance(navigator_selected, str):
+        index = panel.tree_model.index_for_node(navigator_selected)
+        if index.isValid():
+            panel.tree_view.setCurrentIndex(index)
+    navigator_scroll = data.get("navigator_scroll")
+    if type(navigator_scroll) is int and navigator_scroll >= 0:
+        bar = panel.tree_view.verticalScrollBar()
+        bar.setValue(min(navigator_scroll, bar.maximum()))
     active = data.get("active")
     if isinstance(active, str):
         controller.window_manager.focus_window(active)

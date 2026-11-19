@@ -1,0 +1,10 @@
+{
+  "native_sha256": "06dab07cc386748513337a31672b1d5269fbc770a14ff403080575665bf0813f",
+  "version": "8.18.7",
+  "binary_archive_sha256": "5aeaaa952c2919723f1689e36c009ec4f1b5233ac293ad89be5ac50e76fa818a",
+  "sdk_archive_sha256": "da0520612fae24c516d5842bac5b85e8012e38ee548c1e1375f9f60fd0dce8a9",
+  "binary_archive_url": "https://github.com/kleisauke/libvips-packaging/releases/download/v8.18.7/libvips-8.18.7-win-x64.tar.gz",
+  "sdk_archive_url": "https://github.com/libvips/build-win64-mxe/releases/download/v8.18.7/vips-dev-x64-web-8.18.7-static-ffi.zip",
+  "native_sources_and_build": "https://github.com/libvips/build-win64-mxe/tree/v8.18.7",
+  "packaging_sources": "https://github.com/kleisauke/libvips-packaging/tree/v8.18.7"
+}

@@ -15,7 +15,7 @@ def test_tree_editor_inspector_share_one_card_state(qtbot):
     controller = AppController(window, cards)
     panel = window.tree_panel
     panel.tree_view.setCurrentIndex(panel.tree_model.index_for_card(city.id))
-    window.tree_panel.card_open_requested.emit(city.id)
+    window.tree_panel.request_open(panel.tree_model.index_for_card(city.id))
     editor = controller.card_editors[city.id]
     assert controller.session.current_card is cards.get(city.id)
     assert editor.text_edit.toPlainText() == "# Original"

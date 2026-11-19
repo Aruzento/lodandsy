@@ -50,6 +50,7 @@ class ProjectController(QObject):
         session.cards_deleted.connect(self.saver.mark_dirty)
         controller.modules.session.changed.connect(self.saver.mark_dirty)
         controller.modules.busy_changed.connect(self._update_status)
+        controller.card_images.busy_changed.connect(self._update_status)
         self.saver.state_changed.connect(self._update_status)
         self.status = QLabel()
         self.retry = QPushButton("Повторить сохранение")
@@ -102,10 +103,12 @@ class ProjectController(QObject):
         self.status.setToolTip(text)
         self.retry.setVisible(self.saver.state == SaveState.ERROR)
         for action in [self.new_action, self.open_action, self.backup_action, self.restore_action]:
-            action.setEnabled(not self.saver.saving and not self.controller.modules.importing)
+            action.setEnabled(not self.saver.saving and not self.controller.modules.importing
+                              and not self.controller.card_images.importing)
         self.window.setWindowTitle(f"LODANDSY — {name}" + (" *" if self.saver.dirty else ""))
 
     def create_project(self, folder: Path, *, preserve_current=True, discard=False):
+        self.controller.card_images.wait_import()
         self.controller.modules.wait_import()
         self.saver.wait_current()
         if self.saver.dirty and self.store is not None and not discard:
@@ -140,6 +143,7 @@ class ProjectController(QObject):
         return True
 
     def open_project(self, folder: Path, *, discard=False):
+        self.controller.card_images.wait_import()
         self.controller.modules.wait_import()
         self.saver.wait_current()
         if self.store is not None and self.store.root == Path(folder).resolve():
@@ -179,6 +183,7 @@ class ProjectController(QObject):
             self._show_error(error)
 
     def save_current(self) -> bool:
+        self.controller.card_images.wait_import()
         if self.store is None:
             folder = QFileDialog.getExistingDirectory(self.window, "Пустая папка нового проекта")
             if not folder:
@@ -195,6 +200,7 @@ class ProjectController(QObject):
             self.window.setEnabled(True)
 
     def _confirm_changes(self) -> bool:
+        self.controller.card_images.wait_import()
         self.controller.modules.wait_import()
         self.saver.wait_current()
         if not self.saver.dirty:
@@ -218,6 +224,7 @@ class ProjectController(QObject):
             return False
         self.saver.shutdown()
         self.controller.modules.shutdown()
+        self.controller.card_images.shutdown()
         if self.store is not None:
             self.store.close()
         return True

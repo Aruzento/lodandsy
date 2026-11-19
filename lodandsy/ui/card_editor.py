@@ -1,11 +1,10 @@
 from pathlib import Path
 
 from PySide6.QtCore import QByteArray, QSignalBlocker, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QImage, QImageReader, QTextCursor, QTextDocument
+from PySide6.QtGui import QFont, QImage, QTextCursor, QTextDocument
 from PySide6.QtWidgets import (
     QComboBox,
     QLabel,
-    QPlainTextEdit,
     QSplitter,
     QTextBrowser,
     QToolButton,
@@ -13,8 +12,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from lodandsy.application.card_images import read_card_image
 from lodandsy.application.markdown_links import preview_markdown, resolve_asset_image
 from lodandsy.ui.icons import icon
+from lodandsy.ui.markdown_source_edit import MarkdownSourceEdit
+from lodandsy.ui.markdown_toolbar import MarkdownToolbar
 
 
 class PreviewDocument(QTextDocument):
@@ -37,32 +39,64 @@ class PreviewDocument(QTextDocument):
 
 
 class MarkdownBrowser(QTextBrowser):
+    zoom_requested = Signal(int)
     project_root: Path | None = None
+    view_family = "Segoe UI"
+    view_size = 11
+    image_provider = None
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._images: dict[str, QImage | None] = {}
         self._image_pixels = 0
+        self._source = ""
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(80)
+        self._resize_timer.timeout.connect(lambda: self.render_markdown(self._source))
         self.setDocument(PreviewDocument(self.loadResource, self))
+        self._apply_typography()
+
+    def _apply_typography(self):
+        font = QFont(self.view_family)
+        font.setPointSizeF(self.view_size)
+        self.document().setDefaultFont(font)
+        self.document().setDefaultStyleSheet(
+            "h1, h2, h3 { color: #ceb075; } blockquote { color: #aab7ca; } "
+            "table { border-collapse: collapse; } "
+            "td, th { padding: 5px; border: 1px solid #38465c; }")
+
+    def wheelEvent(self, event):
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if event.angleDelta().y():
+                self.zoom_requested.emit(10 if event.angleDelta().y() > 0 else -10)
+            event.accept()
+            return
+        super().wheelEvent(event)
 
     def _image(self, name: str) -> QImage | None:
         if name in self._images:
             return self._images[name]
         self._images[name] = None
+        if self._image_pixels + 4 * 1024**2 > 8 * 1024**2:
+            return None
         path = resolve_asset_image(self.project_root, name)
         if path is None:
             return None
-        reader = QImageReader(str(path))
-        if bytes(reader.format()).lower() not in {b"png", b"jpeg", b"bmp", b"gif", b"webp"}:
+        try:
+            # Production uses the shared worker; standalone widgets only decode tiny assets.
+            image = (self.image_provider(self.project_root, name) if self.image_provider
+                     else read_card_image(path) if path.stat().st_size <= 1024**2 else None)
+        except (OSError, ValueError):
             return None
-        size = reader.size()
-        pixels = size.width() * size.height()
-        if not size.isValid() or self._image_pixels + pixels > 64_000_000:
+        if image is None:
+            # Reserve pending thumbnails too; otherwise a large document can continually
+            # evict/re-request images before the first asynchronous render completes.
+            self._image_pixels += 4 * 1024**2
             return None
-        image = reader.read()
-        if image.isNull():
+        if image.isNull() or self._image_pixels + image.sizeInBytes() > 8 * 1024**2:
             return None
-        self._image_pixels += pixels
+        self._image_pixels += image.sizeInBytes()
         self._images[name] = image
         return image
 
@@ -72,10 +106,12 @@ class MarkdownBrowser(QTextBrowser):
         return None
 
     def render_markdown(self, source: str):
+        self._source = source
         scroll = self.verticalScrollBar().value()
         self._images.clear()
         self._image_pixels = 0
         self.setDocument(PreviewDocument(self.loadResource, self))
+        self._apply_typography()
         self.setMarkdown(preview_markdown(source))
         replacements = []
         block = self.document().begin()
@@ -85,13 +121,24 @@ class MarkdownBrowser(QTextBrowser):
                 fragment = iterator.fragment()
                 if fragment.isValid() and fragment.charFormat().isImageFormat():
                     name = fragment.charFormat().toImageFormat().name()
-                    if self._image(name) is None:
+                    image = self._image(name)
+                    if image is None:
                         message = (
                             "[Удалённое изображение заблокировано]"
                             if QUrl(name).scheme().lower() in {"http", "https"}
                             else "[Изображение недоступно: проверьте assets, формат и размер]"
                         )
                         replacements.append((fragment.position(), fragment.length(), message))
+                    else:
+                        fmt = fragment.charFormat().toImageFormat()
+                        width = min(image.width(), max(32, self.viewport().width() - 24))
+                        fmt.setWidth(width)
+                        fmt.setHeight(width * image.height() / image.width())
+                        cursor = QTextCursor(self.document())
+                        cursor.setPosition(fragment.position())
+                        cursor.setPosition(fragment.position() + fragment.length(),
+                                           QTextCursor.MoveMode.KeepAnchor)
+                        cursor.setCharFormat(fmt)
                 iterator += 1
             block = block.next()
         for position, length, message in reversed(replacements):
@@ -101,8 +148,14 @@ class MarkdownBrowser(QTextBrowser):
             cursor.insertText(message)
         self.verticalScrollBar().setValue(scroll)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "_resize_timer"):
+            self._resize_timer.start()
+
 
 class CardEditorWidget(QWidget):
+    image_requested = Signal(object)
     content_changed = Signal(str, str)
     link_activated = Signal(QUrl)
     preview_rendered = Signal()
@@ -118,12 +171,13 @@ class CardEditorWidget(QWidget):
 
         self._card_id: str | None = None
 
-        self.text_edit = QPlainTextEdit(self)
+        self.text_edit = MarkdownSourceEdit(self)
         self.text_edit.setObjectName("cardContentEditor")
         self.text_edit.setPlaceholderText(
             "Write Markdown..."
         )
         self.text_edit.setEnabled(False)
+        self.text_edit.image_requested.connect(self.image_requested.emit)
 
         self.mode_combo = QComboBox(self)
         self.mode_combo.addItems(["Источник", "Просмотр", "Рядом"])
@@ -151,14 +205,17 @@ class CardEditorWidget(QWidget):
         self._preview_timer.setInterval(150)
         self._preview_timer.timeout.connect(self.render_preview)
         self.mode_combo.currentIndexChanged.connect(self._set_view_mode)
+        self.format_toolbar = MarkdownToolbar(self)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.mode_combo)
         layout.addWidget(self.copy_link_button)
+        layout.addWidget(self.format_toolbar)
         layout.addWidget(self.splitter, 1)
         layout.addWidget(self.link_status)
         self._set_view_mode(0)
+        self.format_toolbar.update_enabled()
 
         self.text_edit.textChanged.connect(
             self._on_text_changed
@@ -179,6 +236,11 @@ class CardEditorWidget(QWidget):
             self.preview.render_markdown(self.text_edit.toPlainText())
             self.preview_rendered.emit()
 
+    def queue_preview(self, root, name):
+        if (self.mode_combo.currentIndex() != 0 and root == self.preview.project_root
+                and name in self.preview._images and self.preview._images[name] is None):
+            self._preview_timer.start()
+
     def _copy_link(self):
         if self._card_id is not None:
             self.copy_link_requested.emit(self._card_id)
@@ -194,6 +256,9 @@ class CardEditorWidget(QWidget):
         self.text_edit.setEnabled(True)
         self.mode_combo.setEnabled(True)
         self.copy_link_button.setEnabled(True)
+        self.format_toolbar.set_fonts()
+        self.format_toolbar.update_enabled()
+        self.format_toolbar.sync_paragraph()
         self.render_preview()
         del blocker
 
@@ -217,6 +282,9 @@ class CardEditorWidget(QWidget):
         self.text_edit.setEnabled(True)
         self.mode_combo.setEnabled(True)
         self.copy_link_button.setEnabled(True)
+        self.format_toolbar.set_fonts()
+        self.format_toolbar.update_enabled()
+        self.format_toolbar.sync_paragraph()
         self.render_preview()
 
         del blocker
@@ -230,6 +298,7 @@ class CardEditorWidget(QWidget):
         self.text_edit.setEnabled(False)
         self.mode_combo.setEnabled(False)
         self.copy_link_button.setEnabled(False)
+        self.format_toolbar.update_enabled()
         self.preview.clear()
         self.link_status.hide()
 

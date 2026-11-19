@@ -2,6 +2,7 @@ from PySide6.QtCore import QObject, Signal
 
 from lodandsy.domain.card import Card
 from lodandsy.domain.card_collection import CardCollection
+from lodandsy.domain.card_templates import card_template
 
 
 class ApplicationSession(QObject):
@@ -21,8 +22,9 @@ class ApplicationSession(QObject):
         self.cards = cards
         self._current_card_id: str | None = None
 
-    def create_card(self, title: str, parent_id: str | None = None) -> Card:
-        card = self.cards.create(title, parent_id)
+    def create_card(self, title: str, parent_id: str | None = None, *, template_id="empty") -> Card:
+        template = card_template(template_id)
+        card = self.cards.create(title, parent_id, content=template.content)
         self.card_created.emit(card.id)
         return card
 

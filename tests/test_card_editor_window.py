@@ -20,7 +20,8 @@ def make_controller(qtbot):
 
 def test_tree_open_request_opens_managed_card_editor(qtbot):
     controller, a, b = make_controller(qtbot)
-    controller.window.tree_panel.card_open_requested.emit(a.id)
+    controller.window.tree_panel.request_open(
+        controller.window.tree_panel.tree_model.index_for_card(a.id))
     dock = controller.window_manager.find_window(controller.card_editor_window_key(a.id))
     assert dock.widget() is controller.card_editors[a.id]
     assert dock.widget().card_id == a.id

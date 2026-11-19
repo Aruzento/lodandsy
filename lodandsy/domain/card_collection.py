@@ -65,10 +65,10 @@ class CardCollection:
             pending.extend(reversed(self._children[current_id]))
         return tuple(result)
 
-    def create(self, title: str, parent_id: str | None = None) -> Card:
+    def create(self, title: str, parent_id: str | None = None, *, content: str = "") -> Card:
         if parent_id is not None:
             self.get(parent_id)
-        card = Card(title=title, parent_id=parent_id)
+        card = Card(title=title, parent_id=parent_id, content=content)
         if card.id in self._cards:
             raise ValueError("Card ids must be unique")
         self._cards[card.id] = card

@@ -69,6 +69,7 @@ class InspectorPanel(QDockWidget):
         ],
     ) -> None:
         self._card_id = card_id
+        self.title_edit.setReadOnly(False)
         self._title = title
 
         id_blocker = QSignalBlocker(self.id_edit)
@@ -107,6 +108,14 @@ class InspectorPanel(QDockWidget):
         del id_blocker
         del title_blocker
         del parent_blocker
+
+    def show_entity_summary(self, entity_id, title):
+        self.clear_card()
+        self.id_edit.setText(entity_id)
+        self.title_edit.setText(title)
+        self.id_edit.setEnabled(True)
+        self.title_edit.setEnabled(True)
+        self.title_edit.setReadOnly(True)
 
     def clear_card(self) -> None:
         self._card_id = None

@@ -14,11 +14,12 @@ from uuid import uuid4
 
 from lodandsy.domain.card import Card, validate_card_id
 from lodandsy.domain.card_collection import CardCollection
-from lodandsy.domain.map_document import MapDocument, MapPin
+from lodandsy.domain.map_document import MapDocument, MapGrid, MapPin, MapToken
 from lodandsy.domain.tools import RandomTable
 
 DATABASE_NAME = "project.sqlite3"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+MAX_BACKUP_BYTES = 4 * 1024**3
 
 
 class ProjectError(ValueError):
@@ -142,6 +143,7 @@ class SQLiteProjectStore:
                     "CREATE INDEX entity_parent_position ON entity(parent_id,position)"
                 )
                 cls._upgrade_v2(connection)
+                cls._upgrade_v3(connection)
                 connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             (root / "assets").mkdir()
         except sqlite3.Error as error:
@@ -178,7 +180,7 @@ class SQLiteProjectStore:
         try:
             with closing(connect_database(self.path, readonly=True)) as connection:
                 version = connection.execute("PRAGMA user_version").fetchone()[0]
-                if version not in {1, 2, SCHEMA_VERSION}:
+                if version not in {1, 2, 3, SCHEMA_VERSION}:
                     raise ProjectError(f"Unsupported project schema version: {version}")
                 self._loaded_version = version
                 if connection.execute("PRAGMA quick_check").fetchone() != ("ok",):
@@ -234,18 +236,34 @@ class SQLiteProjectStore:
         connection.execute("PRAGMA user_version=3")
 
     @staticmethod
+    def _upgrade_v3(connection):
+        connection.execute("ALTER TABLE map_document ADD COLUMN tokens TEXT NOT NULL DEFAULT '[]'")
+        connection.execute("ALTER TABLE map_document ADD COLUMN grid TEXT NOT NULL DEFAULT '{}'")
+        connection.execute("UPDATE map_document SET payload_version=2")
+        connection.execute("PRAGMA user_version=4")
+
+    @staticmethod
     def _load_modules(connection):
         maps, tables = [], []
         try:
-            for key, title, asset, version, payload in connection.execute(
-                "SELECT id,title,asset_id,payload_version,pins FROM map_document ORDER BY rowid"
+            schema = connection.execute("PRAGMA user_version").fetchone()[0]
+            fields = ",tokens,grid" if schema >= 4 else ", '[]', '{}'"
+            for key, title, asset, version, payload, tokens_payload, grid_payload in (
+                connection.execute("SELECT id,title,asset_id,payload_version,pins" + fields
+                                   + " FROM map_document ORDER BY rowid")
             ):
-                if version != 1:
+                if version != (2 if schema >= 4 else 1):
                     raise ProjectError(f"Unsupported Map payload version: {version}")
                 pins = json.loads(payload)
                 if not isinstance(pins, list):
                     raise ValueError("Invalid markers")
-                maps.append(MapDocument(title, asset, key, tuple(MapPin(**pin) for pin in pins)))
+                tokens = json.loads(tokens_payload)
+                grid = json.loads(grid_payload)
+                if not isinstance(tokens, list) or not isinstance(grid, dict):
+                    raise ValueError("Invalid tokens/grid")
+                maps.append(MapDocument(title, asset, key, tuple(MapPin(**pin) for pin in pins),
+                                        tuple(MapToken(**token) for token in tokens),
+                                        MapGrid(**grid)))
             for key, title, version, payload in connection.execute(
                 "SELECT id,title,payload_version,rows FROM random_table ORDER BY rowid"
             ):
@@ -290,7 +308,9 @@ class SQLiteProjectStore:
                     raise ProjectError("Schema changed before migration; refusing to continue")
                 if version == 1:
                     self._upgrade_v1(connection)
-                self._upgrade_v2(connection)
+                if version <= 2:
+                    self._upgrade_v2(connection)
+                self._upgrade_v3(connection)
         except sqlite3.Error as error:
             raise ProjectError(f"Migration failed; original schema retained: {error}") from error
 
@@ -340,9 +360,11 @@ class SQLiteProjectStore:
             connection.executemany("INSERT INTO asset VALUES(?,?,?,?)", [
                 (a.id, a.path, a.sha256, a.size) for a in snapshot.assets
             ])
-            connection.executemany("INSERT INTO map_document VALUES(?,?,?,?,?)", [
-                (m.id, m.title, m.asset_id, 1,
-                 json.dumps([asdict(pin) for pin in m.pins], ensure_ascii=False))
+            connection.executemany("INSERT INTO map_document VALUES(?,?,?,?,?,?,?)", [
+                (m.id, m.title, m.asset_id, 2,
+                 json.dumps([asdict(pin) for pin in m.pins], ensure_ascii=False),
+                 json.dumps([asdict(token) for token in m.tokens], ensure_ascii=False),
+                 json.dumps(asdict(m.grid)))
                 for m in snapshot.maps
             ])
             connection.executemany("INSERT INTO random_table VALUES(?,?,?,?)", [
@@ -351,7 +373,8 @@ class SQLiteProjectStore:
             connection.execute("UPDATE metadata SET revision=?", (snapshot.revision,))
 
     @project_operation
-    def import_asset(self, source: Path) -> AssetRecord:
+    def import_asset(self, source: Path, *, known_assets=(), max_bytes=None,
+                     cancelled=lambda: False) -> AssetRecord:
         self._check_open()
         source = Path(source)
         suffix = source.suffix.lower()
@@ -372,11 +395,22 @@ class SQLiteProjectStore:
         try:
             with source.open("rb") as incoming, temporary.open("xb") as outgoing:
                 for chunk in iter(lambda: incoming.read(1024 * 1024), b""):
+                    if cancelled():
+                        raise ProjectError("Импорт ресурса отменён")
+                    if max_bytes is not None and size + len(chunk) > max_bytes:
+                        raise ProjectError("Asset exceeds import size limit")
                     outgoing.write(chunk)
                     checksum.update(chunk)
                     size += len(chunk)
                 outgoing.flush()
                 os.fsync(outgoing.fileno())
+            for existing in known_assets:
+                if existing.sha256 == checksum.hexdigest() and existing.size == size:
+                    try:
+                        self._verify_asset(existing)
+                    except (OSError, ValueError):
+                        continue
+                    return existing
             os.replace(temporary, target)
         finally:
             temporary.unlink(missing_ok=True)
@@ -412,6 +446,9 @@ class SQLiteProjectStore:
                     assets = tuple(AssetRecord(*row) for row in backup.execute(
                         "SELECT id,path,sha256,size FROM asset"
                     ))
+            total = database.stat().st_size + sum(asset.size for asset in assets)
+            if total > MAX_BACKUP_BYTES:
+                raise ProjectError("Backup exceeds the supported 4 GiB restore budget")
             archive = destination.with_name(destination.name + f".{uuid4().hex}.tmp")
             try:
                 with zipfile.ZipFile(archive, "x", compression=zipfile.ZIP_DEFLATED) as bundle:
@@ -442,7 +479,12 @@ class SQLiteProjectStore:
                             continue
                         if not path.resolve().is_relative_to(asset_folder.resolve()):
                             raise ProjectError("Asset path is outside the project")
+                        total += path.stat().st_size
+                        if total > MAX_BACKUP_BYTES:
+                            raise ProjectError("Backup exceeds the supported 4 GiB restore budget")
                         bundle.write(path, relative)
+                    if sum(entry.file_size for entry in bundle.infolist()) > MAX_BACKUP_BYTES:
+                        raise ProjectError("Backup grew beyond the supported 4 GiB restore budget")
                 with archive.open("r+b") as stream:
                     os.fsync(stream.fileno())
                 os.replace(archive, destination)
@@ -465,7 +507,7 @@ class SQLiteProjectStore:
                 names = [entry.filename for entry in entries]
                 if len(set(names)) != len(names) or DATABASE_NAME not in names:
                     raise ProjectError("Invalid backup inventory")
-                if sum(entry.file_size for entry in entries) > 4 * 1024**3:
+                if sum(entry.file_size for entry in entries) > MAX_BACKUP_BYTES:
                     raise ProjectError("Backup exceeds the 4 GiB restore limit")
                 for entry in entries:
                     parts = PurePosixPath(entry.filename).parts

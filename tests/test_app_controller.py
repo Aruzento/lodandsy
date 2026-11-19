@@ -41,7 +41,7 @@ def test_reparent_request_updates_data_and_tree(
 
     model = window.tree_panel.tree_model
 
-    world_index = model.index(0, 0)
+    world_index = model.index_for_card(world.id)
 
     kingdom_index = model.index(
         0,
@@ -101,7 +101,7 @@ def test_tree_commands_update_collection_and_tree(
 
     model = window.tree_panel.tree_model
 
-    world_index = model.index(0, 0)
+    world_index = model.index_for_card(world.id)
     city_index = model.index(
         0,
         0,
@@ -121,7 +121,7 @@ def test_tree_commands_update_collection_and_tree(
 
     assert cards.get(city.id).title == "Capital"
 
-    world_index = model.index(0, 0)
+    world_index = model.index_for_card(world.id)
     city_index = model.index(
         0,
         0,
@@ -136,7 +136,7 @@ def test_tree_commands_update_collection_and_tree(
 
     assert cards.all() == (world,)
 
-    world_index = model.index(0, 0)
+    world_index = model.index_for_card(world.id)
 
     assert model.rowCount(world_index) == 0
     assert controller.cards is cards

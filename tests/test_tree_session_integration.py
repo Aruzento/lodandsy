@@ -29,10 +29,7 @@ def test_tree_selection_updates_session(
 
     model = window.tree_panel.tree_model
 
-    world_index = model.index(
-        0,
-        0,
-    )
+    world_index = model.index_for_card(world.id)
 
     city_index = model.index(
         0,
@@ -85,10 +82,7 @@ def test_tree_can_switch_session_selection(
 
     model = window.tree_panel.tree_model
 
-    world_index = model.index(
-        0,
-        0,
-    )
+    world_index = model.index_for_card(world.id)
 
     city_index = model.index(
         0,
@@ -148,10 +142,7 @@ def test_tree_selection_updates_editor_and_inspector(
 
     model = window.tree_panel.tree_model
 
-    world_index = model.index(
-        0,
-        0,
-    )
+    world_index = model.index_for_card(world.id)
 
     city_index = model.index(
         0,
@@ -216,10 +207,7 @@ def test_deleting_selected_card_clears_session_and_views(
 
     model = window.tree_panel.tree_model
 
-    world_index = model.index(
-        0,
-        0,
-    )
+    world_index = model.index_for_card(world.id)
 
     city_index = model.index(
         0,
