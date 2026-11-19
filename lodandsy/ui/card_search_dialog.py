@@ -59,7 +59,19 @@ class CardSearchDialog(QDialog):
                 )
             )
             if card.kind == "card":
-                content = html_text(content)
+                from lodandsy.domain.card_schema import field_definition
+
+                values = [html_text(content)]
+                for key, value in payload.values:
+                    if value is not None:
+                        values.append(
+                            html_text(value)
+                            if field_definition(key).data_type == "richtext"
+                            else ", ".join(value)
+                            if isinstance(value, tuple)
+                            else str(value)
+                        )
+                content = " ".join(values)
             if needle and needle not in card.title.casefold() and needle not in content.casefold():
                 continue
             self.results.addItem(card.title)

@@ -58,15 +58,18 @@ def test_worker_limits_rebuild_version_checksum_missing_tiles_and_cancel(tmp_pat
     store.close()
 
 
-@pytest.mark.parametrize("fmt,extension", [("JPEG", "jpg"), ("WEBP", "webp"),
-                                         ("BMP", "bmp"), ("GIF", "gif")])
+@pytest.mark.parametrize(
+    "fmt,extension", [("JPEG", "jpg"), ("WEBP", "webp"), ("BMP", "bmp"), ("GIF", "gif")]
+)
 def test_supported_formats_and_old_m1_bmp_gif(tmp_path, fmt, extension):
     path = tmp_path / f"image.{extension}"
     if fmt == "GIF":
         # Qt is a GIF reader; a fixed valid single-frame image exercises legacy projects.
         import base64
-        path.write_bytes(base64.b64decode(
-            "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"))
+
+        path.write_bytes(
+            base64.b64decode("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7")
+        )
     else:
         source_image(path, fmt=fmt)
     store = SQLiteProjectStore.create(tmp_path / "world")
@@ -87,7 +90,7 @@ def test_large_map_import_multiple_windows_tokens_and_reopen(project, qtbot, tmp
     widget = app.modules.open_map(document.id).widget()
     qtbot.waitUntil(lambda: widget.view.map_width == 5000, timeout=30000)
     card = app.create_card("Place")
-    app.modules.session.add_token(document.id, "Token", None, 1850, 3050, entity_id=card.id)
+    app.modules.session.add_token(document.id, card.id, 1850, 3050)
     app.modules.import_map(source, "Second")
     qtbot.waitUntil(lambda: not app.modules.importing, timeout=30000)
     second = next(item for item in app.modules.session.maps.values() if item.id != document.id)
@@ -101,8 +104,9 @@ def test_large_map_import_multiple_windows_tokens_and_reopen(project, qtbot, tmp
     project._save_ui_state()
     project.create_project(tmp_path / "other", preserve_current=False)
     project.open_project(tmp_path / "world")
-    qtbot.waitUntil(lambda: app.modules.open_map(document.id).widget().view.map_width == 5000,
-                    timeout=30000)
+    qtbot.waitUntil(
+        lambda: app.modules.open_map(document.id).widget().view.map_width == 5000, timeout=30000
+    )
     assert project.store.load().maps == original.maps
     assert app.modules.session.get_map(document.id).tokens[0].x == 1850
 
@@ -119,7 +123,7 @@ def test_tile_renderer_lod_memory_and_corrupt_cache(qtbot, tmp_path):
     view.show()
     qtbot.waitUntil(lambda: len(tiles.images) > 0)
     canvas = QImage(800, 600, QImage.Format.Format_RGB32)
-    for zoom in (.1, .5, 1, 3, 10):
+    for zoom in (0.1, 0.5, 1, 3, 10):
         view.resetTransform()
         view.scale(zoom, zoom)
         painter = QPainter(canvas)
@@ -148,10 +152,17 @@ def test_source_or_cache_path_escape_is_rejected(tmp_path):
 def test_decoder_memory_limit_is_enforced_in_child_process():
     environment = dict(os.environ)
     environment["PYTHONPATH"] = os.pathsep.join([os.getcwd(), sysconfig.get_path("purelib")])
-    result = subprocess.run([sys._base_executable, "-c",
-        "from lodandsy.application.map_pyramid_worker import limit_worker; "
-        "limit_worker(); bytearray(600 * 1024**2)"],
-        env=environment, capture_output=True, timeout=15)
+    result = subprocess.run(
+        [
+            sys._base_executable,
+            "-c",
+            "from lodandsy.application.map_pyramid_worker import limit_worker; "
+            "limit_worker(); bytearray(600 * 1024**2)",
+        ],
+        env=environment,
+        capture_output=True,
+        timeout=15,
+    )
     assert result.returncode != 0 and b"MemoryError" in result.stderr
 
 
@@ -159,7 +170,7 @@ def test_cancel_running_decoder_leaves_only_complete_or_no_cache(tmp_path):
     store = SQLiteProjectStore.create(tmp_path / "world")
     asset = store.import_asset(source_image(tmp_path / "large.png", (6000, 4000)))
     cancel = Event()
-    timer = Timer(.25, cancel.set)
+    timer = Timer(0.25, cancel.set)
     timer.start()
     try:
         with pytest.raises(ValueError, match="отмен"):
@@ -209,17 +220,18 @@ def test_large_aspect_map_camera_keeps_zoom_below_old_point_zero_one(qtbot):
     view = MapView()
     qtbot.addWidget(view)
     view.map_width, view.map_height = 1_000_000, 100
-    view.restore_camera({"x": .4, "y": .5, "zoom": .0005})
-    assert view.transform().m11() == .0005
+    view.restore_camera({"x": 0.4, "y": 0.5, "zoom": 0.0005})
+    assert view.transform().m11() == 0.0005
 
 
 def test_unloaded_map_camera_is_not_guessed_and_closed_preferences_survive(project):
     from lodandsy.application.workspace_state import capture_workspace
+
     app, _ = project
     document = app.modules.session.create_map("Pending background", str(uuid4()))
     widget = app.modules.open_map(document.id).widget()
     assert document.id not in capture_workspace(app)["maps"]
-    camera = {"x": .4, "y": .6, "zoom": .0005}
+    camera = {"x": 0.4, "y": 0.6, "zoom": 0.0005}
     widget.restore_camera_state(camera)
     assert capture_workspace(app)["maps"][document.id] == camera
     app.window_manager.close_window(f"map:{document.id}")
@@ -228,6 +240,7 @@ def test_unloaded_map_camera_is_not_guessed_and_closed_preferences_survive(proje
 
 def test_loaded_map_camera_restore_does_not_mask_later_pan_zoom(project, qtbot, tmp_path):
     from lodandsy.application.workspace_state import capture_workspace, restore_workspace
+
     app, project = project
     project.create_project(tmp_path / "world")
     app.modules.import_map(source_image(tmp_path / "map.png"), "Map")
@@ -236,16 +249,17 @@ def test_loaded_map_camera_restore_does_not_mask_later_pan_zoom(project, qtbot, 
     widget = app.modules.open_map(document.id).widget()
     qtbot.waitUntil(lambda: widget.view._background is not None)
     data = capture_workspace(app)
-    data["maps"][document.id] = {"x": .4, "y": .5, "zoom": .5}
+    data["maps"][document.id] = {"x": 0.4, "y": 0.5, "zoom": 0.5}
     restore_workspace(app, data)
     assert widget.pending_camera is None
     widget.view.scale(1.5, 1.5)
-    assert capture_workspace(app)["maps"][document.id]["zoom"] == .75
+    assert capture_workspace(app)["maps"][document.id]["zoom"] == 0.75
 
 
 @pytest.mark.parametrize("registered", [True, False])
 def test_backup_never_publishes_above_restore_budget(tmp_path, monkeypatch, registered):
     from lodandsy.application import sqlite_project_store as storage
+
     store = SQLiteProjectStore.create(tmp_path / "world")
     source = source_image(tmp_path / "image.png")
     if registered:

@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QApplication
 
 from lodandsy.application.app_controller import AppController
 from lodandsy.application.project_controller import ProjectController
-from lodandsy.domain.map_document import MapToken
+from lodandsy.domain.map_document import TokenInstance
 from lodandsy.ui.app_shell import AppShell
 
 
@@ -49,10 +49,11 @@ def main():
         timer.stop()
         document = next(iter(controller.modules.session.maps.values()))
         widget = controller.modules.open_map(document.id).widget()
-        tokens = tuple(MapToken(str(i), None, (i % 100) * 64, (i // 100) * 64) for i in range(1000))
+        card = controller.create_card("Shared Card")
+        tokens = tuple(TokenInstance(card.id, (i % 100) * 64, (i // 100) * 64) for i in range(1000))
         start = time.perf_counter()
         widget.view.set_annotations(
-            replace(document, tokens=tokens), set(), root, {}, lambda *a: None
+            replace(document, tokens=tokens), controller.cards.get, root, {}, lambda *a: None
         )
         scene_ms = (time.perf_counter() - start) * 1000
         result = {

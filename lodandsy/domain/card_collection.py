@@ -1,6 +1,6 @@
 from dataclasses import replace
 
-from lodandsy.domain.card import EMPTY_DOCUMENT, Card, CardPayload
+from lodandsy.domain.card import EMPTY_DOCUMENT, Card
 from lodandsy.domain.document_payloads import project_entities
 
 
@@ -27,8 +27,19 @@ class CardCollection:
         entity = self.entities.get(key)
         if entity.kind != "card":
             raise ValueError(f"Not a Card: {key}")
-        return self.entities.project(key, lambda e, p: Card(
-            e.title, key, e.parent_id, p.content, p.portrait))
+        return self.entities.project(
+            key,
+            lambda e, p: Card(
+                e.title,
+                key,
+                e.parent_id,
+                p.content,
+                p.portrait,
+                p.card_type,
+                p.template_id,
+                p.values,
+            ),
+        )
 
     def child_ids(self, parent_id):
         return self.entities.child_ids(parent_id)
@@ -36,20 +47,47 @@ class CardCollection:
     def descendant_ids(self, key):
         return self.entities.descendant_ids(key)
 
-    def create(self, title, parent_id=None, *, content=EMPTY_DOCUMENT, portrait=None):
-        card = Card(title, parent_id=parent_id, content=content, portrait=portrait)
-        self.entities.create("card", card.title, CardPayload(card.content, portrait), parent_id,
-                             id=card.id)
+    def create(
+        self,
+        title,
+        parent_id=None,
+        *,
+        content=EMPTY_DOCUMENT,
+        portrait=None,
+        card_type="note",
+        template_id="empty",
+        values=(),
+    ):
+        card = Card(
+            title,
+            parent_id=parent_id,
+            content=content,
+            portrait=portrait,
+            card_type=card_type,
+            template_id=template_id,
+            values=values,
+        )
+        self.entities.create("card", card.title, card.payload(), parent_id, id=card.id)
         return self.get(card.id)
 
     def update(self, key, **changes):
-        if changes.keys() - {"title", "parent_id", "position", "content", "portrait"}:
+        if changes.keys() - {
+            "title",
+            "parent_id",
+            "position",
+            "content",
+            "portrait",
+            "card_type",
+            "template_id",
+            "values",
+        }:
             raise ValueError("Unsupported Card fields")
         current = self.get(key)
         updated = replace(current, **{k: v for k, v in changes.items() if k != "position"})
-        self.entities.update(key, **{k: v for k, v in changes.items()
-                                    if k not in {"content", "portrait"}})
-        self.entities.put_payload(key, CardPayload(updated.content, updated.portrait))
+        self.entities.update(
+            key, **{k: v for k, v in changes.items() if k in {"title", "parent_id", "position"}}
+        )
+        self.entities.put_payload(key, updated.payload())
         return self.get(key)
 
     def rename(self, key, title):

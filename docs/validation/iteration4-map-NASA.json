@@ -1,0 +1,42 @@
+{
+  "source": "nasa-blue-marble.jpg",
+  "source_bytes": 29698041,
+  "width": 21600,
+  "height": 10800,
+  "import_and_open_s": 22.268,
+  "cached_reopen_s": 6.589,
+  "gui_peak_rss_mib": 172.0,
+  "decoder_peak_rss_mib": 157.59,
+  "pan_zoom_render_p50_ms": 2.41,
+  "pan_zoom_render_p95_ms": 3.94,
+  "max_gui_tick_gap_ms": 949.99,
+  "tile_cache_bytes": 67108864,
+  "max_visible_tiles": 25,
+  "token_count": 1000,
+  "placed_objects": 30,
+  "layers_per_map": 2,
+  "save_ms": 78.10199999948964,
+  "backup_block_ms": 943.3012999943458,
+  "backup_bytes": 29306419,
+  "drag_p50_ms": 26.835600030608475,
+  "drag_p95_ms": 31.48389997659251,
+  "phase_tick_gaps_max_ms": {
+    "setup": 33.637500018812716,
+    "import": 33.51829998428002,
+    "scene_setup": 402.6041000033729,
+    "renderer": 28.670900035649538,
+    "drag": 32.64809999382123,
+    "save": 30.208999989554286,
+    "backup": 949.9906999990344,
+    "reopen": 48.26469998806715
+  },
+  "tile_disk_bytes": 291157996,
+  "ram_gib": 31.37,
+  "dpi": [
+    96.0,
+    96.0
+  ],
+  "logical_cpu": 12,
+  "platform": "windows",
+  "manual_smoothness": "not evaluated by this automated measurement"
+}

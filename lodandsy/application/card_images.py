@@ -1,4 +1,5 @@
 """Bounded raster decoding and immutable asset publication for visual documents."""
+
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
@@ -35,14 +36,22 @@ def _decode_card_image(reader):
         raise ValueError("Изображение должно содержать не более 32 миллионов пикселей")
     reader.setAutoTransform(True)
     if max(size.width(), size.height()) > THUMB_EDGE:
-        reader.setScaledSize(size.scaled(QSize(THUMB_EDGE, THUMB_EDGE),
-                                        Qt.AspectRatioMode.KeepAspectRatio))
+        reader.setScaledSize(
+            size.scaled(QSize(THUMB_EDGE, THUMB_EDGE), Qt.AspectRatioMode.KeepAspectRatio)
+        )
     image = reader.read()
     if image.isNull():
         raise ValueError("Повреждённое изображение: " + reader.errorString())
-    return (image.scaled(THUMB_EDGE, THUMB_EDGE, Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation)
-            if max(image.width(), image.height()) > THUMB_EDGE else image)
+    return (
+        image.scaled(
+            THUMB_EDGE,
+            THUMB_EDGE,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        if max(image.width(), image.height()) > THUMB_EDGE
+        else image
+    )
 
 
 class CardImages(QObject):
@@ -59,10 +68,13 @@ class CardImages(QObject):
         self._cache = OrderedDict()
         self._lookup = OrderedDict()
         self._pending = set()
+        self._generation = 0
+        self._sizes = OrderedDict()
         self._result.connect(self._finish, Qt.ConnectionType.QueuedConnection)
 
     def _submit(self, operation, callback):
         future = self._executor.submit(operation)
+
         def done(job):
             try:
                 result = job.result(), None
@@ -72,6 +84,7 @@ class CardImages(QObject):
                 self._result.emit((callback, *result))
             except RuntimeError:
                 pass
+
         future.add_done_callback(done)
 
     def _finish(self, result):
@@ -97,16 +110,52 @@ class CardImages(QObject):
         if key in self._pending or len(self._pending) >= 32:
             return None
         self._pending.add(key)
+        generation = self._generation
+
         def complete(value, error):
             self._pending.discard(key)
+            if generation != self._generation:
+                self.ready.emit(root, name)
+                return
             self._cache[key] = value if not error else QImage()
-            while (len(self._cache) > 128 or sum(
-                    item.sizeInBytes() for item in self._cache.values() if item is not None
-                    ) > 16 * 1024**2):
+            while (
+                len(self._cache) > 128
+                or sum(item.sizeInBytes() for item in self._cache.values() if item is not None)
+                > 16 * 1024**2
+            ):
                 self._cache.popitem(last=False)
             self.ready.emit(root, name)
+
         self._submit(lambda: read_card_image(path), complete)
         return None
+
+    def invalidate(self):
+        self._generation += 1
+        self._cache.clear()
+        self._lookup.clear()
+        self._sizes.clear()
+
+    def image_size(self, root, name):
+        path = resolve_asset_image(root, name)
+        if path is None:
+            return None
+        try:
+            stat = path.stat()
+            key = (str(path), stat.st_mtime_ns, stat.st_size)
+            if key in self._sizes:
+                self._sizes.move_to_end(key)
+                return self._sizes[key]
+            reader = QImageReader(str(path))
+            size = reader.size()
+            if reader.device() is not None:
+                reader.device().close()
+            value = size if size.isValid() and size.width() * size.height() <= MAX_PIXELS else None
+            self._sizes[key] = value
+            while len(self._sizes) > 256:
+                self._sizes.popitem(last=False)
+            return value
+        except OSError:
+            return None
 
     def _remember_lookup(self, lookup, key):
         self._lookup[lookup] = (time.monotonic(), key)
@@ -117,7 +166,7 @@ class CardImages(QObject):
     def cached_preview(self, root, name):
         """Tokens can share an immutable asset thousands of times in one scene frame."""
         stamp, key = self._lookup.get((root, name), (0, None))
-        if time.monotonic() - stamp < .25:
+        if time.monotonic() - stamp < 0.25:
             if key is None:
                 return QImage()
             if key in self._cache:
@@ -136,13 +185,18 @@ class CardImages(QObject):
         if project.store is None and not project.save_current():
             return
         if source is None:
-            name, _ = QFileDialog.getOpenFileName(editor, "Вставить изображение", "",
-                "Изображения (*.png *.jpg *.jpeg *.webp *.bmp *.gif)")
+            name, _ = QFileDialog.getOpenFileName(
+                editor,
+                "Вставить изображение",
+                "",
+                "Изображения (*.png *.jpg *.jpeg *.webp *.bmp *.gif)",
+            )
             if not name:
                 return
             source = Path(name)
-        alt, accepted = QInputDialog.getText(editor, "Изображение", "Описание (alt):",
-                                             text="Изображение")
+        alt, accepted = QInputDialog.getText(
+            editor, "Изображение", "Описание (alt):", text="Изображение"
+        )
         if accepted:
             self.insert(editor, source, alt)
 
@@ -151,10 +205,12 @@ class CardImages(QObject):
         if self.importing or project.store is None or editor.card_id is None:
             raise ValueError("Дождитесь импорта и выберите проект и карточку")
         card_id = editor.card_id
+        section_key = editor.current_section
         cursor = QTextCursor(editor.text_edit.textCursor())
         # Insertion survives intervening edits without replacing unrelated text.
         cursor.setPosition(cursor.selectionEnd())
         cursor.setKeepPositionOnInsert(True)
+
         def publish(asset, error):
             if error:
                 self.app.window.show_notice(error)
@@ -166,8 +222,11 @@ class CardImages(QObject):
             cursor.endEditBlock()
             from lodandsy.application.rich_text_codec import serialize_document
 
-            self.app.session.update_card(card_id, content=serialize_document(cursor.document()))
+            self.app.session.update_card_fields(
+                card_id, {section_key: serialize_document(cursor.document())}
+            )
             return True
+
         self.import_image(source, publish)
 
     def import_image(self, source, publish):
@@ -180,6 +239,7 @@ class CardImages(QObject):
         self.importing = True
         self.busy_changed.emit()
         self.app.window.statusBar().showMessage("Импорт изображения…")
+
         def operation():
             with TemporaryDirectory(prefix="lodandsy-card-") as folder:
                 if isinstance(source, QImage):
@@ -194,6 +254,7 @@ class CardImages(QObject):
                 asset = store.import_asset(path, known_assets=known, max_bytes=MAX_BYTES)
                 read_card_image(store.root / asset.path)
                 return asset
+
         def complete(asset, error):
             try:
                 if project.store is store:
@@ -211,6 +272,7 @@ class CardImages(QObject):
                 self.busy_changed.emit()
                 self.finished.emit()
                 self.app.window.statusBar().clearMessage()
+
         self._submit(operation, complete)
 
     def portrait(self, editor, source=None):
@@ -225,11 +287,13 @@ class CardImages(QObject):
             return
         key = editor.card_id
         if source is None:
-            name, _ = QFileDialog.getOpenFileName(editor, "Портрет", "",
-                "Изображения (*.png *.jpg *.jpeg *.webp *.bmp *.gif)")
+            name, _ = QFileDialog.getOpenFileName(
+                editor, "Портрет", "", "Изображения (*.png *.jpg *.jpeg *.webp *.bmp *.gif)"
+            )
             if not name:
                 return
             source = Path(name)
+
         def publish(asset, error):
             if error:
                 self.app.window.show_notice(error)
@@ -239,6 +303,7 @@ class CardImages(QObject):
             previous = self.app.cards.get(key).portrait or Portrait()
             self.app.session.update_card(key, portrait=replace(previous, asset_id=asset.id))
             return True
+
         self.import_image(source, publish)
 
     def wait_import(self):

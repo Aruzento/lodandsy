@@ -108,7 +108,9 @@ class TableModel(QAbstractTableModel):
             self.dataChanged.emit(index, index)
             return False
         had_draft = self.drafts.pop((row, col), None) is not None
-        self.apply(updated)
+        if updated != self.document:
+            self.document = updated
+            self.document_changed.emit(updated)
         if had_draft:
             self.draft_changed.emit()
         self.dataChanged.emit(index, index)
@@ -120,24 +122,29 @@ class TableModel(QAbstractTableModel):
             self.document_changed.emit(document)
 
     def set_document(self, document):
-        if document == self.document:
+        before = self.document
+        if document is before or document == before:
             return
-        structural = document.columns != self.document.columns or tuple(
+        structural = document.columns != before.columns or tuple(
             r.id for r in document.rows
-        ) != tuple(r.id for r in self.document.rows)
+        ) != tuple(r.id for r in before.rows)
         if structural:
             self.beginResetModel()
         self.document = document
-        valid_rows, valid_cols = {r.id for r in document.rows}, {c.id for c in document.columns}
-        for key in list(self.drafts):
-            if key[0] not in valid_rows or key[1] not in valid_cols:
-                del self.drafts[key]
         if structural:
+            valid_rows, valid_cols = {r.id for r in document.rows}, {c.id for c in document.columns}
+            for key in list(self.drafts):
+                if key[0] not in valid_rows or key[1] not in valid_cols:
+                    del self.drafts[key]
             self.endResetModel()
-        elif document.rows and document.columns:
-            self.dataChanged.emit(
-                self.index(0, 0), self.index(self.rowCount() - 1, self.columnCount() - 1)
-            )
+        else:
+            for y, (old, new) in enumerate(zip(before.rows, document.rows)):
+                if old is new or old == new:
+                    continue
+                for x, column in enumerate(document.columns):
+                    if old.value(column.id) != new.value(column.id):
+                        index = self.index(y, x)
+                        self.dataChanged.emit(index, index)
 
     def paste(self, start, text):
         if len(text.encode("utf-8")) > 2**20:

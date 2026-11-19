@@ -1,5 +1,6 @@
 # ADR-016 — единый токен и видимая мировая сетка
 
+Итерация4: актуальные payload/поля/шаблоны/размещения/кеши — ADR-019…022. Противоречащие части этой записи являются историей; безопасный Qt HTML, S3 и текущий стек сохраняются.
 ARU-77, заменяет модель ADR-012. Map payload v3 / SQLite schema8, один MapToken:
 UUID/title/kind character|item/optional asset_id/entity_id/x/y/cells_w/cells_h/z.
 MapPin и старые pixel sizes удалены без миграции по прямому решению владельца.

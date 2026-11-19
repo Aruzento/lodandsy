@@ -48,6 +48,7 @@ class ProjectController(QObject):
         session.entity_changed.connect(self.saver.mark_dirty)
         session.card_created.connect(self.saver.mark_dirty)
         session.card_changed.connect(self.saver.mark_dirty)
+        session.field_draft_changed.connect(self.saver.mark_dirty)
         session.cards_deleted.connect(self.saver.mark_dirty)
         controller.modules.session.changed.connect(self.saver.mark_dirty)
         controller.modules.busy_changed.connect(self._update_status)
@@ -58,6 +59,9 @@ class ProjectController(QObject):
         self.retry.clicked.connect(self.save_current)
         self.window.statusBar().addWidget(self.status, 1)
         self.window.statusBar().addPermanentWidget(self.retry)
+        from lodandsy.application.mow_import_controller import MowImportController
+
+        self.mow_importer = MowImportController(self)
         self._build_menu()
         self.window.close_guard = self.can_close
         if self.controller.cards.all():
@@ -87,8 +91,17 @@ class ProjectController(QObject):
             self.restore_action,
         ]:
             menu.addAction(action)
+        self.mow_actions = []
+        for title, directory in [("Импорт карточки MOW…", False), ("Импорт каталога MOW…", True)]:
+            action = menu.addAction(title)
+            action.triggered.connect(
+                lambda checked=False, d=directory: self.mow_importer.request(d)
+            )
+            self.mow_actions.append(action)
 
     def _snapshot(self, revision):
+        if self.controller.session.field_drafts:
+            raise ProjectError("Исправьте поля карточек или отмените ошибочный ввод")
         if any(self.controller.modules._table_drafts.values()):
             raise ProjectError(
                 "Исправьте ошибочные ячейки таблиц или отмените ввод перед сохранением"
@@ -126,7 +139,13 @@ class ProjectController(QObject):
         self.status.setStyleSheet(f"color: {color};")
         self.status.setToolTip(text)
         self.retry.setVisible(self.saver.state == SaveState.ERROR)
-        for action in [self.new_action, self.open_action, self.backup_action, self.restore_action]:
+        for action in [
+            self.new_action,
+            self.open_action,
+            self.backup_action,
+            self.restore_action,
+            *self.mow_actions,
+        ]:
             action.setEnabled(
                 not self.saver.saving
                 and not self.controller.modules.importing

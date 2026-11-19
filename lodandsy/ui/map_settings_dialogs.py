@@ -79,49 +79,69 @@ def dialog_buttons(parent, layout):
 
 
 class TokenPropertiesDialog(QDialog):
-    def __init__(self, token, cards, parent=None):
+    def __init__(self, token, presentation, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Свойства токена")
+        self.setWindowTitle("Свойства размещения · " + presentation.label)
         layout = QFormLayout(self)
-        self.title = QLineEdit(token.title, self)
-        self.width = QSpinBox(self)
-        self.height = QSpinBox(self)
+        self.title = QLineEdit(token.label_override or "", self)
+        self.title.setPlaceholderText("Из карточки: " + presentation.label)
+        self.width, self.height = QSpinBox(self), QSpinBox(self)
         for box, value in [(self.width, token.cells_w), (self.height, token.cells_h)]:
-            box.setRange(1, 100)
-            box.setValue(value)
+            box.setRange(0, 100)
+            box.setSpecialValueText("Из карточки")
+            box.setValue(value or 0)
         self.kind = QComboBox(self)
-        self.kind.addItem("Персонаж (круг)", "character")
-        self.kind.addItem("Предмет (исходная форма)", "item")
-        self.kind.setCurrentIndex(self.kind.findData(token.kind))
+        for label, value in [
+            ("Из карточки", None),
+            ("Персонаж (круг)", "character"),
+            ("Предмет", "item"),
+        ]:
+            self.kind.addItem(label, value)
+        self.kind.setCurrentIndex(self.kind.findData(token.kind_override))
         self.z = QSpinBox(self)
         self.z.setRange(0, 10000)
         self.z.setValue(token.z)
-        self.card = QComboBox(self)
-        self.card.addItem("Без связи", None)
-        for card in cards:
-            self.card.addItem(f"{card.title} · {card.id}", card.id)
-        if token.entity_id and self.card.findData(token.entity_id) == -1:
-            self.card.addItem(f"Разорванная ссылка · {token.entity_id}", token.entity_id)
-        self.card.setCurrentIndex(max(0, self.card.findData(token.entity_id)))
         for label, widget in [
-            ("Название:", self.title),
-            ("Тип:", self.kind),
+            ("Своя подпись:", self.title),
+            ("Свой вид:", self.kind),
             ("Ширина (клетки):", self.width),
             ("Высота (клетки):", self.height),
             ("Порядок:", self.z),
-            ("Документ:", self.card),
         ]:
             layout.addRow(label, widget)
         self.buttons = dialog_buttons(self, layout)
-        self.ok = self.buttons.button(QDialogButtonBox.StandardButton.Ok)
-        self.title.textChanged.connect(lambda text: self.ok.setEnabled(bool(text.strip())))
+
+    def changes(self):
+        return dict(
+            label_override=self.title.text().strip() or None,
+            cells_w=self.width.value() or None,
+            cells_h=self.height.value() or None,
+            kind_override=self.kind.currentData(),
+            z=self.z.value(),
+        )
+
+
+class MapObjectDialog(QDialog):
+    def __init__(self, item, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Свойства изображения на карте")
+        form = QFormLayout(self)
+        self.values = {}
+        for key, label, minimum, maximum in [
+            ("width", "Ширина", 0.01, 1e7),
+            ("height", "Высота", 0.01, 1e7),
+            ("rotation", "Поворот", -360, 360),
+            ("z", "Порядок внутри слоя", 0, 9999),
+        ]:
+            box = QDoubleSpinBox(self)
+            box.setRange(minimum, maximum)
+            box.setDecimals(0 if key == "z" else 2)
+            box.setValue(getattr(item, key))
+            form.addRow(label, box)
+            self.values[key] = box
+        dialog_buttons(self, form)
 
     def changes(self):
         return {
-            "title": self.title.text().strip(),
-            "cells_w": self.width.value(),
-            "cells_h": self.height.value(),
-            "kind": self.kind.currentData(),
-            "z": self.z.value(),
-            "entity_id": self.card.currentData(),
+            key: int(box.value()) if key == "z" else box.value() for key, box in self.values.items()
         }

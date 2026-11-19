@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage, QPainter
-from PySide6.QtWidgets import QApplication, QFileDialog, QInputDialog
+from PySide6.QtWidgets import QApplication
 
 from lodandsy.application.module_session import ModuleSession
 from lodandsy.application.sqlite_project_store import (
@@ -15,7 +15,8 @@ from lodandsy.application.sqlite_project_store import (
     SQLiteProjectStore,
     connect_database,
 )
-from lodandsy.domain.map_document import MapDocument, MapGrid, MapToken
+from lodandsy.domain.card import Card
+from lodandsy.domain.map_document import MapDocument, MapGrid, TokenInstance, resolve_token
 from lodandsy.ui.map_settings_dialogs import MapGridDialog, TokenPropertiesDialog
 from lodandsy.ui.map_widget import MapView
 
@@ -48,12 +49,12 @@ def open_map(app, project, tmp_path, qtbot):
         ("cells_h", float("inf")),
         ("z", True),
         ("z", 10001),
-        ("asset_id", "bad"),
-        ("entity_id", "bad"),
+        ("image_override", "bad"),
+        ("card_id", "bad"),
     ],
 )
 def test_token_invariants_reject_invalid_geometry_and_ids(field, value):
-    token = MapToken("Token", str(uuid4()), 10, 20)
+    token = TokenInstance(str(uuid4()), 10, 20)
     with pytest.raises(ValueError):
         replace(token, **{field: value})
 
@@ -61,8 +62,8 @@ def test_token_invariants_reject_invalid_geometry_and_ids(field, value):
 def test_grid_snap_undo_resize_does_not_move_tokens_and_other_token_is_independent(qapp):
     session = ModuleSession()
     document = session.create_map("Map", str(uuid4()))
-    pin = session.add_token(document.id, "M1", None, 0.2, 0.3)
-    token = session.add_token(document.id, "Token", str(uuid4()), 105, 130)
+    pin = session.add_card_placement(Card("M1"), document.id, 0.2, 0.3)
+    token = session.add_card_placement(Card("Token"), document.id, 105, 130)
     grid = MapGrid(True, 50, 10, 15, 0.5, True)
     session.edit_map(document.id, grid=grid)
     assert session.get_map(document.id).tokens[1] == token
@@ -85,8 +86,8 @@ def test_grid_snap_undo_resize_does_not_move_tokens_and_other_token_is_independe
 def test_module_object_ids_cannot_change_during_edit_or_collide(qapp, monkeypatch):
     session = ModuleSession()
     document = session.create_map("Map", str(uuid4()))
-    pin = session.add_token(document.id, "Pin", None, 0.2, 0.3)
-    token = session.add_token(document.id, "Token", str(uuid4()), 10, 20)
+    pin = session.add_card_placement(Card("Pin"), document.id, 0.2, 0.3)
+    token = session.add_card_placement(Card("Token"), document.id, 10, 20)
     table = session.create_table("Table")
     with pytest.raises(ValueError, match="отсутствует"):
         session.move_token(document.id, str(uuid4()), 0, 0)
@@ -105,67 +106,54 @@ def test_module_object_ids_cannot_change_during_edit_or_collide(qapp, monkeypatc
     assert session.get_table(table.id) == table
 
 
-def test_ui_import_properties_links_and_missing_image(project, qtbot, tmp_path, monkeypatch):
+def test_ui_import_properties_canonical_images_and_multi_map(project, qtbot, tmp_path):
     app, project = project
-    app.window.show()
     document, widget = open_map(app, project, tmp_path, qtbot)
-    card = app.create_card("Card")
     source = image_file(tmp_path / "token.png", 30, 30)
-    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(source), ""))
-    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("Token", True))
-    monkeypatch.setattr(QInputDialog, "getItem", lambda *a, **k: (a[3][0], True))
-    widget.token_add.trigger()
+    app.modules.create_card_token(document.id, source, "Canonical", 100, 100)
     qtbot.waitUntil(lambda: not app.card_images.importing)
     first = app.modules.session.get_map(document.id).tokens[0]
-    assert len(project.assets) == 2
+    card = app.cards.get(first.card_id)
+    app.modules.session.add_token(document.id, card.id, 200, 200)
+    other = app.modules.session.create_map("Other", document.asset_id)
+    app.modules.session.add_token(other.id, card.id, 200, 200)
+    second_widget = app.modules.open_map(other.id).widget()
+    app.session.update_card_fields(card.id, {"title": "Renamed", "hp": 0, "summary": "HP 0"})
+    assert all(i.presentation.label == "Renamed" for i in widget.view._tokens)
+    assert second_widget.view._tokens[0].presentation.label == "Renamed"
+    app.session.update_card_fields(card.id, {"hp": 17})
+    assert "HP: 17" in second_widget.view._tokens[0].presentation.summary
+    app.session.update_card(card.id, portrait=None)
+    assert second_widget.view._tokens[0].presentation.asset_id is None
 
     def properties():
         dialog = QApplication.activeModalWidget()
         assert isinstance(dialog, TokenPropertiesDialog)
-        dialog.title.setText("Renamed")
+        dialog.title.setText("Local")
         dialog.width.setValue(2)
         dialog.height.setValue(3)
-        dialog.z.setValue(7)
-        dialog.card.setCurrentIndex(dialog.card.findData(card.id))
         dialog.accept()
 
     QTimer.singleShot(0, properties)
     app.modules._token_action(document.id, first.id, "properties")
-    first = app.modules.session.get_map(document.id).tokens[0]
-    assert (first.title, first.cells_w, first.cells_h, first.z, first.entity_id) == (
-        "Renamed",
-        2,
-        3,
-        7,
-        card.id,
-    )
-    app.modules.import_token(document.id, source, "Second", 200, 200)
-    qtbot.waitUntil(lambda: not app.card_images.importing)
-    second = app.modules.session.get_map(document.id).tokens[1]
-    app.modules.session.edit_token(document.id, second.id, entity_id=card.id)
-    assert first.asset_id == second.asset_id and len(project.assets) == 2
+    assert widget.view._tokens[0].presentation.label == "Local"
+    assert widget.view._tokens[1].presentation.label == "Renamed"
+    app.modules._token_action(document.id, first.id, "reset")
+    assert widget.view._tokens[0].presentation.label == "Renamed"
+    assert len(project.assets) == 2
     app.modules._token_action(document.id, first.id, "open")
-    assert app.card_editor_window_key(card.id) in app.window_manager.window_keys()
+    assert app.window_manager.find_window(app.card_editor_window_key(card.id))
+    assert project.save_current()
+    assert project.store.load().maps[0].tokens[0].card_id == card.id
     app.delete_card(card.id)
-    assert len(app.modules.session.get_map(document.id).tokens) == 2
-    assert all("Разорванная" in item.toolTip() for item in widget.view._tokens)
-    asset = project.assets[first.asset_id]
-    qtbot.waitUntil(lambda: not app.card_images._pending)
-    (project.store.root / asset.path).unlink()
-    qtbot.wait(260)  # Bounded token lookup TTL; no image copies are retained outside the LRU.
-    canvas = QImage(600, 400, QImage.Format.Format_RGB32)
-    painter = QPainter(canvas)
-    widget.view.render(painter)
-    painter.end()
-    assert len(app.modules.session.get_map(document.id).tokens) == 2
-    assert any("Изображение" in item.toolTip() for item in widget.view._tokens)
+    assert not widget.view._tokens and not second_widget.view._tokens
 
 
 def test_grid_dialog_render_and_selection_do_not_snap_existing_tokens(project, qtbot, tmp_path):
     app, project = project
     app.window.show()
     document, widget = open_map(app, project, tmp_path, qtbot)
-    token = app.modules.session.add_token(document.id, "Token", document.asset_id, 123, 137)
+    token = app.modules.session.add_token(document.id, app.create_card("Token").id, 123, 137)
 
     def configure():
         dialog = QApplication.activeModalWidget()
@@ -203,7 +191,7 @@ def test_grid_dialog_render_and_selection_do_not_snap_existing_tokens(project, q
 def test_annotation_updates_reuse_items_and_noop_snap_restores_view(project, qtbot, tmp_path):
     app, project = project
     document, widget = open_map(app, project, tmp_path, qtbot)
-    token = app.modules.session.add_token(document.id, "Token", document.asset_id, 135, 135)
+    token = app.modules.session.add_token(document.id, app.create_card("Token").id, 135, 135)
     item = widget.view._tokens[0]
     app.modules.session.edit_map(document.id, grid=MapGrid(True, 50, 10, 10, 0.5, True))
     assert widget.view._tokens[0] is item
@@ -212,7 +200,7 @@ def test_annotation_updates_reuse_items_and_noop_snap_restores_view(project, qtb
     widget.view.token_moved.emit(token.id, 140, 141)
     assert app.modules.session.undo_stack(document.id).count() == count
     assert item.pos().x() == item.pos().y() == 135
-    app.modules.session.edit_token(document.id, token.id, title="Renamed", cells_w=2)
+    app.modules.session.edit_token(document.id, token.id, label_override="Renamed", cells_w=2)
     assert widget.view._tokens[0] is item and item.boundingRect().width() == 100
 
 
@@ -220,12 +208,12 @@ def test_user_titles_stay_plain_in_graphics_tooltips(project, qtbot, tmp_path):
     app, project = project
     document, widget = open_map(app, project, tmp_path, qtbot)
     title = '<img src="https://example.com/no-network.png">'
-    token = app.modules.session.add_token(document.id, title, document.asset_id, 50, 50)
-    app.modules.session.add_token(document.id, title, None, 0.5, 0.5)
+    token = app.modules.session.add_token(document.id, app.create_card(title).id, 50, 50)
+    app.modules.session.add_token(document.id, token.card_id, 0.5, 0.5)
     assert "<img" not in widget.view._tokens[0].toolTip()
     assert "&lt;img" in widget.view._tokens[0].toolTip()
     assert "&lt;img" in widget.view._tokens[0].toolTip()
-    assert app.modules.session.get_map(document.id).tokens[0].title == token.title == title
+    assert app.cards.get(token.card_id).title == title
 
 
 @pytest.mark.parametrize("zoom", [0.5, 2])
@@ -233,7 +221,7 @@ def test_drag_world_coordinates_and_snap_are_independent_of_zoom(project, qtbot,
     app, project = project
     app.window.show()
     document, widget = open_map(app, project, tmp_path, qtbot)
-    token = app.modules.session.add_token(document.id, "Token", document.asset_id, 120, 130)
+    token = app.modules.session.add_token(document.id, app.create_card("Token").id, 120, 130)
     app.modules.session.edit_map(document.id, grid=MapGrid(True, 50, 10, 10, 0.5, True))
     view = widget.view
     view.resetTransform()
@@ -271,15 +259,18 @@ def test_character_circle_item_aspect_alpha_and_cell_footprint(qapp):
 
     view = MapView()
     document = MapDocument("Map", str(uuid4()), grid=MapGrid(cell_size=64))
-    view.set_annotations(document, set(), None, {}, lambda *a: None)
+    view.set_annotations(document, lambda key: None, None, {}, lambda *a: None)
     image = QImage(80, 40, QImage.Format.Format_ARGB32_Premultiplied)
     image.fill(Qt.GlobalColor.red)
+
     def provider(*args):
         return image
-    character = MapToken("Person", None, 0, 0)
+
+    card = Card("Person", card_type="character")
+    character = TokenInstance(card.id, 0, 0)
     for kind in ("character", "item"):
-        token = replace(character, kind=kind)
-        item = TokenItem(token, view, None, "test.png", provider, False)
+        token = replace(character, kind_override=kind)
+        item = TokenItem(token, resolve_token(token, card), view, None, "test.png", provider)
         canvas = QImage(100, 100, QImage.Format.Format_ARGB32_Premultiplied)
         canvas.fill(Qt.GlobalColor.transparent)
         painter = QPainter(canvas)
@@ -292,7 +283,8 @@ def test_character_circle_item_aspect_alpha_and_cell_footprint(qapp):
             assert canvas.pixelColor(50, 18).green() > 200  # White circular border.
         else:
             assert canvas.pixelColor(50, 25).alpha() == 0  # Aspect fit, no frame.
-        item.set_value(replace(token, cells_w=2, cells_h=3), None, None, provider, False)
+        resized = replace(token, cells_w=2, cells_h=3)
+        item.set_value(resized, resolve_token(resized, card), None, None, provider)
         assert (item.boundingRect().width(), item.boundingRect().height()) == (128, 192)
     assert MapGrid(True, 50, 10, 15, snap=True).snap_point(120, 140, 2, 2) == (110, 165)
 
@@ -311,3 +303,51 @@ def test_far_grid_lod_stays_visible_without_mutating_world(project, qtbot, tmp_p
     painter.end()
     assert view._grid.detail_factor >= 2 and view._grid.last_line_count > 0
     assert app.modules.session.get_map(document.id) == document
+
+
+def test_tree_card_drop_creates_placement_without_reparent_and_rejects_other_kinds(
+    project, qtbot, tmp_path
+):
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QDragEnterEvent, QDropEvent
+
+    app, project = project
+    document, widget = open_map(app, project, tmp_path, qtbot)
+    card = app.create_card("Drag Card")
+    model = app.window.tree_panel.tree_model
+    view = widget.view
+    position = view.mapFromScene(200, 200)
+    mime = model.mimeData([model.index_for_node("card:" + card.id)])
+    event = QDragEnterEvent(
+        position,
+        Qt.DropAction.MoveAction | Qt.DropAction.CopyAction,
+        mime,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    view.dragEnterEvent(event)
+    assert event.isAccepted() and event.dropAction() == Qt.DropAction.CopyAction
+    dropped = QDropEvent(
+        QPointF(position),
+        Qt.DropAction.MoveAction | Qt.DropAction.CopyAction,
+        mime,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    before = app.session.entities.get(card.id)
+    view.dropEvent(dropped)
+    assert dropped.isAccepted() and app.session.entities.get(card.id) == before
+    assert app.modules.session.get_map(document.id).tokens[0].card_id == card.id
+    for kind, key in [("map", document.id), ("card", card.id)]:
+        view.edit_mode = kind == "card"
+        mime = model.mimeData([model.index_for_node(kind + ":" + key)])
+        event = QDragEnterEvent(
+            position,
+            Qt.DropAction.CopyAction,
+            mime,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        view.dragEnterEvent(event)
+        assert not event.isAccepted()
+    assert len(app.modules.session.get_map(document.id).tokens) == 1

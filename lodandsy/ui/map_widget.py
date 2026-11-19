@@ -3,18 +3,22 @@ import math
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QPainter
 from PySide6.QtWidgets import (
+    QComboBox,
     QGraphicsItem,
     QGraphicsScene,
     QGraphicsView,
     QLabel,
     QMenu,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
+from lodandsy.domain.map_document import resolve_token
 from lodandsy.ui.icons import icon
-from lodandsy.ui.map_annotations import GridLayer, TokenItem
+from lodandsy.ui.map_annotations import GridLayer, RasterObjectItem, TokenItem
+from lodandsy.ui.project_tree_model import ENTITY_MIME_TYPE
 
 
 class TileLayer(QGraphicsItem):
@@ -25,7 +29,7 @@ class TileLayer(QGraphicsItem):
         self.last_tile_count = 0
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption)
         self.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
-        self.setZValue(-1)
+        self.setZValue(-1000000)
 
     def boundingRect(self):
         return QRectF(0, 0, self.pyramid.width, self.pyramid.height)
@@ -68,6 +72,9 @@ class TileLayer(QGraphicsItem):
 
 
 class MapView(QGraphicsView):
+    object_moved = Signal(str, float, float)
+    object_action = Signal(str, str)
+    card_dropped = Signal(str, float, float)
     token_moved = Signal(str, float, float)
     token_action = Signal(str, str)
     token_add_requested = Signal(float, float)
@@ -75,13 +82,18 @@ class MapView(QGraphicsView):
     def __init__(self):
         super().__init__()
         self.setScene(QGraphicsScene(self))
+        self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
         self.map_width, self.map_height = 1000, 700
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setAccessibleName("Карта: колесо — масштаб, перетаскивание — перемещение")
+        self.setAcceptDrops(True)
+        self.card_exists = lambda key: False
         self._background = None
         self._tokens = []
+        self._objects = {}
+        self.edit_mode = False
         self._grid = None
 
     def set_pyramid(self, pyramid, tiles):
@@ -94,7 +106,7 @@ class MapView(QGraphicsView):
         self.scene().setSceneRect(QRectF(0, 0, self.map_width, self.map_height))
         self.fitInView(self.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
 
-    def set_annotations(self, document, existing_entities, root, assets, provider):
+    def set_annotations(self, document, card_resolver, root, assets, provider):
         self.grid = document.grid
         previous = {item.token.id: item for item in self._tokens}
         current_ids = {token.id for token in document.tokens}
@@ -108,31 +120,91 @@ class MapView(QGraphicsView):
             self.scene().addItem(self._grid)
         items = []
         for token in document.tokens:
-            asset = assets.get(token.asset_id)
+            try:
+                card = card_resolver(token.card_id)
+            except ValueError:
+                card = None
+            presentation = resolve_token(token, card)
+            asset = assets.get(presentation.asset_id)
             path = asset.path if asset else None
-            broken = token.entity_id is not None and token.entity_id not in existing_entities
+
             item = previous.get(token.id)
             if item is None:
-                item = TokenItem(token, self, root, path, provider, broken)
+                item = TokenItem(token, presentation, self, root, path, provider)
                 self.scene().addItem(item)
             elif (
                 item.token != token
                 or item.root != root
                 or item.asset_path != path
-                or item.broken != broken
+                or item.presentation != presentation
                 or item.cell_size != document.grid.cell_size
                 or bool(item.flags() & QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
-                != (self._background is not None)
+                != (self._background is not None and not self.edit_mode)
             ):
-                item.set_value(token, root, path, provider, broken)
+                item.set_value(token, presentation, root, path, provider)
             items.append(item)
         self._tokens = items
+        layers = {layer.id: layer for layer in document.layers}
+        for item in items:
+            item.setVisible(item.token.layer_id is None or layers[item.token.layer_id].visible)
+            item.setAcceptedMouseButtons(
+                Qt.MouseButton.NoButton
+                if self.edit_mode
+                else Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton
+            )
+        ids = {o.id for o in document.objects}
+        for key in self._objects.keys() - ids:
+            self.scene().removeItem(self._objects.pop(key))
+        for value in document.objects:
+            layer = layers[value.layer_id]
+            asset = assets.get(value.asset_id)
+            path = asset.path if asset else None
+            if value.id in self._objects:
+                self._objects[value.id].set_value(value, layer, path, root, provider)
+            else:
+                item = RasterObjectItem(value, layer, self, path, root, provider)
+                self.scene().addItem(item)
+                self._objects[value.id] = item
+
         if self._background is None:
             self.scene().setSceneRect(
                 self.scene()
                 .itemsBoundingRect()
                 .united(QRectF(0, 0, self.map_width, self.map_height))
             )
+
+    def _drag_card(self, event):
+        if (
+            self.edit_mode
+            or self._background is None
+            or not event.mimeData().hasFormat(ENTITY_MIME_TYPE)
+        ):
+            return None
+        try:
+            key = bytes(event.mimeData().data(ENTITY_MIME_TYPE)).decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+        return key if self.card_exists(key) else None
+
+    def dragEnterEvent(self, event):
+        if self._drag_card(event):
+            event.setDropAction(Qt.DropAction.CopyAction)
+            event.accept()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        self.dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        key = self._drag_card(event)
+        point = self.mapToScene(event.position().toPoint())
+        if key and 0 <= point.x() <= self.map_width and 0 <= point.y() <= self.map_height:
+            self.card_dropped.emit(key, point.x(), point.y())
+            event.setDropAction(Qt.DropAction.CopyAction)
+            event.accept()
+        else:
+            event.ignore()
 
     def wheelEvent(self, event):
         scale = self.transform().m11()
@@ -144,10 +216,12 @@ class MapView(QGraphicsView):
 
     def contextMenuEvent(self, event):
         item = self.itemAt(event.pos())
-        while item is not None and not isinstance(item, TokenItem):
+        while item is not None and not isinstance(item, (TokenItem, RasterObjectItem)):
             item = item.parentItem()
         if item is not None:
             super().contextMenuEvent(event)
+            return
+        if self.edit_mode:
             return
         point = self.mapToScene(event.pos())
         if 0 <= point.x() <= self.map_width and 0 <= point.y() <= self.map_height:
@@ -186,6 +260,8 @@ class MapView(QGraphicsView):
 
 
 class MapWidget(QWidget):
+    layer_action = Signal(str)
+    mode_changed = Signal()
     grid_requested = Signal()
     rename_requested = Signal()
     delete_requested = Signal()
@@ -205,6 +281,34 @@ class MapWidget(QWidget):
         rename = QAction(icon("rename"), "Название", self)
         delete = QAction(icon("delete"), "Удалить карту", self)
         buttons.addActions([self.token_add, grid, fit, rename, delete])
+        self.edit_mode = QAction("Редактировать карту", self)
+        self.edit_mode.setCheckable(True)
+        buttons.addAction(self.edit_mode)
+        self.layers = QComboBox(self)
+        self.layers.setAccessibleName("Активный слой")
+        self.layers.setMaximumWidth(180)
+        self.layer_menu = QToolButton(self)
+        self.layer_menu.setText("Объекты и слои")
+        self.layer_menu.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu = QMenu(self)
+        for title, name in [
+            ("Разместить asset…", "place"),
+            ("Импортировать и разместить…", "import"),
+            ("Новый слой…", "add"),
+            ("Переименовать слой…", "rename"),
+            ("Показать / скрыть слой", "visible"),
+            ("Слой выше", "up"),
+            ("Слой ниже", "down"),
+            ("Удалить слой…", "delete"),
+        ]:
+            action = menu.addAction(title)
+            action.triggered.connect(lambda checked=False, n=name: self.layer_action.emit(n))
+        self.layer_menu.setMenu(menu)
+        buttons.addWidget(self.layers)
+        buttons.addWidget(self.layer_menu)
+        self.layers.hide()
+        self.layer_menu.hide()
+        self.edit_mode.toggled.connect(self._mode)
         layout.addWidget(buttons)
         undo = undo_stack.createUndoAction(self, "Отменить")
         redo = undo_stack.createRedoAction(self, "Повторить")
@@ -225,6 +329,22 @@ class MapWidget(QWidget):
         )
         rename.triggered.connect(self.rename_requested)
         delete.triggered.connect(self.delete_requested)
+
+    def _mode(self, enabled):
+        self.view.edit_mode = enabled
+        self.token_add.setEnabled(not enabled and self.view._background is not None)
+        self.layers.setVisible(enabled)
+        self.layer_menu.setVisible(enabled)
+        self.view.scene().clearSelection()
+        self.mode_changed.emit()
+
+    def set_layers(self, layers):
+        current = self.layers.currentData()
+        self.layers.clear()
+        for layer in sorted(layers, key=lambda layer: layer.position):
+            self.layers.addItem(layer.title + (" · скрыт" if not layer.visible else ""), layer.id)
+        index = self.layers.findData(current)
+        self.layers.setCurrentIndex(max(0, index))
 
     def image_ready(self, root, _name):
         if root == self.project_root:

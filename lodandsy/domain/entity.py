@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from uuid import uuid4
 
@@ -67,6 +68,20 @@ class EntityCollection:
         except KeyError:
             raise ValueError(f"Unknown entity id: {key}") from None
 
+    @contextmanager
+    def atomic(self):
+        before = (
+            self._entities.copy(),
+            self._payloads.copy(),
+            {k: dict(v) for k, v in self._children.items()},
+            self._projections.copy(),
+        )
+        try:
+            yield self
+        except Exception:
+            self._entities, self._payloads, self._children, self._projections = before
+            raise
+
     def payload(self, key):
         self.get(key)
         return self._payloads[key]
@@ -104,8 +119,7 @@ class EntityCollection:
     def create(self, kind, title, payload, parent_id=None, *, id=None):
         if parent_id is not None:
             self.get(parent_id)
-        entity = Entity(id or str(uuid4()), kind, title, parent_id,
-                        len(self._children[parent_id]))
+        entity = Entity(id or str(uuid4()), kind, title, parent_id, len(self._children[parent_id]))
         if entity.id in self._entities:
             raise ValueError("Duplicate entity ID; ids must be unique")
         self._entities[entity.id], self._payloads[entity.id] = entity, payload

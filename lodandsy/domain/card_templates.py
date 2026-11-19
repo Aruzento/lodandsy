@@ -1,40 +1,42 @@
-"""Built-in visual document templates; copied once on creation."""
+"""Templates define layout, never store a second edition of field values."""
+
 from dataclasses import dataclass
-from html import escape
 
-from lodandsy.domain.card import DOCUMENT_HEADER, EMPTY_DOCUMENT, Portrait
+from lodandsy.domain.card_schema import CARD_TYPES, SECTIONS
 
 
-@dataclass(frozen=True)
-class CardTemplate:
+@dataclass(frozen=True, slots=True)
+class TemplateDefinition:
     id: str
     title: str
-    version: int
-    content: str
-    portrait: Portrait | None = None
+    sections: tuple[str, ...]
+    default_type: str = "note"
+    portrait: bool = False
+    version: int = 3
 
-
-def _sections(*titles):
-    return ("<html>" + DOCUMENT_HEADER + "<body>"
-            + "".join(f"<h2>{escape(title)}</h2>" for title in titles) + "</body></html>")
+    def __post_init__(self):
+        if self.default_type not in CARD_TYPES or any(k not in SECTIONS for k in self.sections):
+            raise ValueError("Invalid built-in template")
 
 
 CARD_TEMPLATES = (
-    CardTemplate("empty", "Пустая карточка", 2, EMPTY_DOCUMENT),
-    CardTemplate("article", "Статья", 2,
-                 _sections("Краткое описание", "Содержание", "Связи", "Заметки")),
-    CardTemplate("character", "Персонаж", 2,
-                 _sections("Имя", "Описание", "Параметры", "История", "Связи",
-                           "Инвентарь", "Заметки"), Portrait()),
-    CardTemplate("location", "Локация", 2,
-                 _sections("Описание", "Окружение", "Обитатели", "Важные места",
-                           "Связи", "Заметки")),
-    CardTemplate("item", "Предмет", 2,
-                 _sections("Описание", "Свойства", "История", "Владелец", "Связи", "Заметки")),
+    TemplateDefinition("empty", "Пустая карточка", ("description",)),
+    TemplateDefinition("article", "Статья", ("description", "connections", "notes"), "article"),
+    TemplateDefinition(
+        "character",
+        "Персонаж",
+        ("description", "details", "history", "connections", "inventory", "notes"),
+        "character",
+        True,
+    ),
+    TemplateDefinition(
+        "location", "Локация", ("description", "details", "connections", "notes"), "location"
+    ),
+    TemplateDefinition("item", "Предмет", ("description", "details", "history", "notes"), "item"),
 )
 
 
-def card_template(template_id="empty") -> CardTemplate:
+def card_template(template_id="empty"):
     for template in CARD_TEMPLATES:
         if template.id == template_id:
             return template

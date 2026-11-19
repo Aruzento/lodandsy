@@ -28,6 +28,8 @@ class RowRecord:
     cells: tuple = ()  # Immutable (column_id, scalar) pairs; absence differs from empty text.
     id: str = field(default_factory=lambda: str(uuid4()))
 
+    _validated_columns: tuple | None = field(default=None, init=False, compare=False, repr=False)
+
     def __post_init__(self):
         validate_id(self.id)
         if type(self.position) is not int or self.position < 0 or not isinstance(self.cells, tuple):
@@ -115,11 +117,16 @@ class RandomTable:
             if tuple(v.position for v in values) != tuple(range(len(values))):
                 raise ValueError("Invalid table order")
         columns = {c.id: c for c in self.columns}
+        signature = tuple((c.id, c.data_type) for c in self.columns)
         for row in self.rows:
+            if row._validated_columns == signature:
+                continue
             for key, value in row.cells:
                 if key not in columns:
                     raise ValueError("Cell refers to unknown column")
                 validate_value(value, columns[key].data_type)
+            # Derived proof cache: cells and column definitions are immutable validated scalars.
+            object.__setattr__(row, "_validated_columns", signature)
 
     def with_cell(self, row_id, column_id, value):
         column = next((c for c in self.columns if c.id == column_id), None)

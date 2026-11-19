@@ -9,7 +9,16 @@ from PySide6.QtGui import (
     QTextCursor,
     QTextListFormat,
 )
-from PySide6.QtWidgets import QComboBox, QSpinBox, QToolBar
+from PySide6.QtWidgets import (
+    QComboBox,
+    QFormLayout,
+    QMenu,
+    QSpinBox,
+    QToolBar,
+    QToolButton,
+    QWidget,
+    QWidgetAction,
+)
 
 from lodandsy.application.rich_html import COLORS, FONT_SIZES, FONTS
 
@@ -23,18 +32,17 @@ class RichToolbar(QToolBar):
         for name in ("Обычный", "Заголовок 1", "Заголовок 2", "Заголовок 3"):
             self.paragraph.addItem(name)
         self.paragraph.setAccessibleName("Стиль абзаца")
+        self.paragraph.setMaximumWidth(148)
         self.addWidget(self.paragraph)
         self.paragraph.activated.connect(self.heading)
         self.family = QComboBox()
         for family, key in zip(FONTS, ("sans", "serif", "mono")):
             self.family.addItem(family, key)
         self.family.setAccessibleName("Шрифт текста")
-        self.addWidget(self.family)
         self.family.activated.connect(lambda i: self.character(fontFamilies=[FONTS[i]]))
         self.size = QComboBox()
         self.size.addItems(list(map(str, FONT_SIZES)))
         self.size.setAccessibleName("Размер текста")
-        self.addWidget(self.size)
         self.size.activated.connect(lambda i: self.character(fontPointSize=FONT_SIZES[i]))
         self.color = QComboBox()
         for name, value in zip(
@@ -42,7 +50,6 @@ class RichToolbar(QToolBar):
         ):
             self.color.addItem(name, value)
         self.color.setAccessibleName("Цвет текста")
-        self.addWidget(self.color)
         self.color.activated.connect(lambda i: self.character(foreground=QColor(COLORS[i])))
         for name, label, tip, key in (
             ("bold", "B", "Жирный", "Ctrl+B"),
@@ -69,12 +76,12 @@ class RichToolbar(QToolBar):
                 action.setCheckable(True)
             action.triggered.connect(lambda _checked=False, n=name: self.apply(n))
             self.actions_by_name[name] = action
-            self.addAction(action)
+            if name in {"bold", "italic", "underline", "link", "image", "undo", "redo"}:
+                self.addAction(action)
             editor.addAction(action)
         self.alignment = QComboBox()
         self.alignment.addItems(["Слева", "По центру", "Справа", "По ширине"])
         self.alignment.setAccessibleName("Выравнивание абзаца")
-        self.addWidget(self.alignment)
         self.alignment.activated.connect(self.align)
         self.scale = QSpinBox()
         self.scale.setRange(75, 200)
@@ -82,11 +89,33 @@ class RichToolbar(QToolBar):
         self.scale.setSuffix("%")
         self.scale.setValue(100)
         self.scale.setAccessibleName("Масштаб просмотра")
-        self.addWidget(self.scale)
         self.scale.valueChanged.connect(editor.set_view_scale)
         editor.text_edit.cursorPositionChanged.connect(self.sync_paragraph)
         editor.text_edit.selectionChanged.connect(self.sync_paragraph)
         editor.text_edit.textChanged.connect(self.sync_paragraph)
+        self.format_menu = QMenu(self)
+        settings = QWidget()
+        form = QFormLayout(settings)
+        for label, widget in [
+            ("Шрифт", self.family),
+            ("Размер", self.size),
+            ("Цвет", self.color),
+            ("Выравнивание", self.alignment),
+            ("Масштаб", self.scale),
+        ]:
+            form.addRow(label, widget)
+        setting_action = QWidgetAction(self.format_menu)
+        setting_action.setDefaultWidget(settings)
+        self.format_menu.addAction(setting_action)
+        self.format_menu.addSeparator()
+        for name in ("strike", "bullet", "numbered", "quote", "code", "rule", "open-link"):
+            self.format_menu.addAction(self.actions_by_name[name])
+        more = QToolButton()
+        more.setText("Формат")
+        more.setToolTip("Шрифт, цвет, списки и дополнительные команды")
+        more.setMenu(self.format_menu)
+        more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.addWidget(more)
 
     def character(self, **values):
         if self.editor.text_edit.isReadOnly():

@@ -9,7 +9,7 @@ from lodandsy.application.map_pyramid import MAX_SOURCE_BYTES, ensure_pyramid
 from lodandsy.application.map_tiles import MapTiles
 from lodandsy.application.module_session import ModuleSession
 from lodandsy.ui.dice_widget import DiceWidget
-from lodandsy.ui.map_settings_dialogs import MapGridDialog, TokenPropertiesDialog
+from lodandsy.ui.map_settings_dialogs import MapGridDialog, MapObjectDialog, TokenPropertiesDialog
 from lodandsy.ui.map_widget import MapWidget
 from lodandsy.ui.table_widget import RandomTableWidget
 
@@ -35,6 +35,9 @@ class ModuleController(QObject):
         self._decode_cancels = set()
         self.progress = None
         self._map_ui = {}
+        self._card_maps = {}
+        app.session.deletion_planners.append(self.session.plan_delete)
+        app.window.tree_panel.deletion_reference_count = self.session.placement_count
         self._table_drafts = {}
         self._table_ui = {}
         self._dice_runtime = {}
@@ -55,8 +58,8 @@ class ModuleController(QObject):
         self.session.table_deleted.connect(lambda key: self._table_ui.pop(key, None))
         self.session.dice_deleted.connect(lambda key: self._dice_runtime.pop(key, None))
         app.session.entity_changed.connect(self._entity_changed)
-        app.session.cards_deleted.connect(self._refresh_links)
-        app.session.card_created.connect(self._refresh_links)
+        app.session.card_created.connect(self._card_created)
+        app.session.card_changed.connect(lambda key, fields: self._card_created(key))
 
     def request_create(self, kind, parent_id=None):
         if kind == "map":
@@ -107,6 +110,7 @@ class ModuleController(QObject):
         self._generation += 1
         self.tiles.reset()
         self._map_ui.clear()
+        self._card_maps.clear()
         self._table_drafts.clear()
         self._table_ui.clear()
         self._dice_runtime.clear()
@@ -249,11 +253,7 @@ class ModuleController(QObject):
 
         def factory():
             widget = RandomTableWidget(table, self._table_drafts.setdefault(table_id, {}))
-            widget.document_changed.connect(
-                lambda value: self.session.edit_table(
-                    table_id, columns=value.columns, rows=value.rows
-                )
-            )
+            widget.document_changed.connect(self.session.update_table)
             widget.draft_changed.connect(self.app.project_controller.saver.mark_dirty)
             widget.rename_requested.connect(lambda: self._rename("table", table_id))
             widget.delete_requested.connect(lambda: self._delete("table", table_id))
@@ -299,6 +299,14 @@ class ModuleController(QObject):
             widget = MapWidget(self.session.undo_stack(map_id))
             widget.project_root = self.app.project_root
             self.app.card_images.ready.connect(widget.image_ready)
+            widget.layer_action.connect(lambda action: self._layer_action(map_id, action))
+            widget.mode_changed.connect(lambda: self._refresh_map(map_id))
+            widget.view.object_moved.connect(
+                lambda key, x, y: self.session.edit_object(map_id, key, x=x, y=y)
+            )
+            widget.view.object_action.connect(
+                lambda key, action: self._object_action(map_id, key, action)
+            )
             widget.grid_requested.connect(lambda: self._grid_settings(map_id))
             widget.view.token_moved.connect(
                 lambda token, x, y: self._move_token(map_id, token, x, y, widget.view)
@@ -307,6 +315,10 @@ class ModuleController(QObject):
                 lambda token, action: self._token_action(map_id, token, action)
             )
             widget.view.token_add_requested.connect(lambda x, y: self._add_token(map_id, x, y))
+            widget.view.card_exists = self._is_card
+            widget.view.card_dropped.connect(
+                lambda card, x, y: self.session.add_token(map_id, card, x, y)
+            )
 
             def add_token():
                 center = widget.view.mapToScene(widget.view.viewport().rect().center())
@@ -365,15 +377,99 @@ class ModuleController(QObject):
         window = self.app.window_manager.find_window(f"map:{key}")
         if window:
             document = self.session.get_map(key)
+            for ids in self._card_maps.values():
+                ids.discard(key)
+            for token in document.tokens:
+                self._card_maps.setdefault(token.card_id, set()).add(key)
             window.setWindowTitle(document.title)
+            window.widget().set_layers(document.layers)
             project = getattr(self.app, "project_controller", None)
             window.widget().view.set_annotations(
                 document,
-                {e.id for e in self.app.session.entities.summaries()},
+                self.app.cards.get,
                 self.app.project_root,
                 project.assets if project else {},
                 self.app.card_images.cached_preview,
             )
+
+    def _layer_action(self, map_id, action):
+        document = self.session.get_map(map_id)
+        widget = self.app.window_manager.find_window(f"map:{map_id}").widget()
+        key = widget.layers.currentData()
+        layer = next((layer for layer in document.layers if layer.id == key), None)
+        if action == "add":
+            title, ok = QInputDialog.getText(widget, "Новый слой", "Название:")
+            if ok and title.strip():
+                layer = self.session.add_layer(map_id, title)
+                widget.layers.setCurrentIndex(widget.layers.findData(layer.id))
+            return
+        if layer is None:
+            self.app.window.show_notice("Сначала создайте слой")
+            return
+        if action == "rename":
+            title, ok = QInputDialog.getText(widget, "Название слоя", "Название:", text=layer.title)
+            if ok and title.strip():
+                self.session.edit_layer(map_id, key, title=title)
+        elif action == "visible":
+            self.session.edit_layer(map_id, key, visible=not layer.visible)
+        elif action in {"up", "down"}:
+            position = max(
+                0, min(len(document.layers) - 1, layer.position + (1 if action == "up" else -1))
+            )
+            self.session.move_layer(map_id, key, position)
+        elif action == "delete":
+            count = sum(o.layer_id == key for o in (*document.objects, *document.tokens))
+            if (
+                QMessageBox.question(
+                    widget,
+                    "Удалить слой",
+                    f"Удалить слой «{layer.title}» и его объекты ({count})?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                == QMessageBox.StandardButton.Yes
+            ):
+                self.session.delete_layer(map_id, key, delete_contents=True)
+        elif action in {"place", "import"}:
+            center = widget.view.mapToScene(widget.view.viewport().rect().center())
+            x, y = max(0, center.x()), max(0, center.y())
+
+            def place(asset, error):
+                if error:
+                    self._error(error)
+                    return False
+                current = self.session.maps.get(map_id)
+                if current is None or not any(layer.id == key for layer in current.layers):
+                    return False
+                self.session.add_object(map_id, key, asset.id, x, y)
+                return True
+
+            if action == "import":
+                source = self._image_filename()
+                if source:
+                    self.app.card_images.import_image(Path(source), place)
+            else:
+                assets = list(self.app.project_controller.assets.values())
+                labels = [a.path for a in assets]
+                if not labels:
+                    self.app.window.show_notice("В проекте пока нет изображений")
+                    return
+                choice, ok = QInputDialog.getItem(
+                    widget, "Разместить asset", "Изображение:", labels, 0, False
+                )
+                if ok:
+                    place(assets[labels.index(choice)], None)
+
+    def _object_action(self, map_id, key, action):
+        item = next((o for o in self.session.get_map(map_id).objects if o.id == key), None)
+        if item is None:
+            return
+        if action == "delete":
+            self.session.delete_object(map_id, key)
+        else:
+            dialog = MapObjectDialog(item, self.app.window)
+            if dialog.exec():
+                self.session.edit_object(map_id, key, **dialog.changes())
 
     def _grid_settings(self, map_id):
         dialog = MapGridDialog(self.session.get_map(map_id).grid, self.app.window)
@@ -405,38 +501,46 @@ class ModuleController(QObject):
         )
         return filename
 
+    def _is_card(self, key):
+        try:
+            return self.app.session.entities.get(key).kind == "card"
+        except ValueError:
+            return False
+
+    def _card_created(self, key):
+        for map_id in tuple(self._card_maps.get(key, ())):
+            if map_id in self.session.maps:
+                self._refresh_map(map_id)
+
     def _add_token(self, map_id, x, y):
-        if self.app.card_images.importing:
-            self.app.window.show_notice("Дождитесь завершения импорта изображения")
-            return
-        title, ok = QInputDialog.getText(self.app.window, "Новый токен", "Название:")
-        if not ok or not title.strip():
-            return
-        kinds = ["Персонаж (круг)", "Предмет (исходная форма)"]
-        choice, ok = QInputDialog.getItem(self.app.window, "Тип токена", "Тип:", kinds, 0, False)
+        from lodandsy.ui.card_creation_dialog import CardCreationDialog
+
+        choices = ["Новая карточка…"]
+        cards = self.app.cards.all()
+        choices += [f"{c.title} · {c.id[:8]}" for c in cards]
+        choice, ok = QInputDialog.getItem(
+            self.app.window, "Разместить карточку", "Карточка:", choices, 0, False
+        )
         if not ok:
             return
-        kind = "character" if choice == kinds[0] else "item"
-        filename = self._image_filename()
-        if filename:
-            self.import_token(map_id, Path(filename), title, x, y, kind=kind)
+        if choices.index(choice):
+            self.session.add_token(
+                map_id, cards[choices.index(choice) - 1].id, max(0, x), max(0, y)
+            )
         else:
-            grid = self.session.get_map(map_id).grid
-            if grid.snap:
-                x, y = grid.snap_point(x, y)
-            self.session.add_token(map_id, title, None, max(0, x), max(0, y), kind=kind)
+            title, template, kind, ok = CardCreationDialog.get_card(self.app.window)
+            if ok:
+                self.create_card_token(
+                    map_id, None, title, max(0, x), max(0, y), card_type=kind, template_id=template
+                )
 
-    def import_token(self, map_id, source, title, x, y, *, kind="character"):
-        from lodandsy.domain.module_values import validate_title
+    def create_card_token(
+        self, map_id, source, title, x, y, *, card_type="character", template_id="empty"
+    ):
+        from lodandsy.domain.card import Card, Portrait
 
-        title = validate_title(title)
-        document = self.session.get_map(map_id)
-        window = self.app.window_manager.find_window(f"map:{map_id}")
-        view = window.widget().view if window else None
-        if document.grid.snap:
-            x, y = document.grid.snap_point(x, y)
-        if view:
-            x, y = max(0, min(view.map_width, x)), max(0, min(view.map_height, y))
+        candidate = Card(title, card_type=card_type, template_id=template_id)
+        self.session.get_map(map_id)
 
         def publish(asset, error):
             if error:
@@ -444,63 +548,63 @@ class ModuleController(QObject):
                 return False
             if map_id not in self.session.maps:
                 return False
-            token = self.session.add_token(map_id, title, asset.id, x, y, kind=kind)
-            if view and self.app.window_manager.find_window(f"map:{map_id}") is window:
-                for item in view._tokens:
+            from dataclasses import replace
+
+            card = replace(candidate, portrait=Portrait(asset.id)) if asset else candidate
+            token = self.session.add_card_placement(card, map_id, x, y)
+            self.app.session.card_created.emit(card.id)
+            window = self.app.window_manager.find_window(f"map:{map_id}")
+            if window:
+                for item in window.widget().view._tokens:
                     item.setSelected(item.token.id == token.id)
             return True
 
-        self.app.card_images.import_image(source, publish)
+        if source is None:
+            publish(None, None)
+        else:
+            self.app.card_images.import_image(source, publish)
 
     def _token_action(self, map_id, token_id, action):
+        from lodandsy.domain.map_document import resolve_token
+
         token = next((t for t in self.session.get_map(map_id).tokens if t.id == token_id), None)
         if token is None:
             return
         if action == "delete":
             self.session.delete_token(map_id, token_id)
-        elif action == "unlink":
-            self.session.edit_token(map_id, token_id, entity_id=None)
-        elif action == "open":
-            try:
-                entity = self.app.session.entities.get(token.entity_id)
-                self.app.open_entity(entity.kind, entity.id)
-            except ValueError:
-                self._error("Документ не связан, удалён или отсутствует. Токен сохранён.")
+            return
+        if action == "reset":
+            self.session.edit_token(
+                map_id,
+                token_id,
+                label_override=None,
+                image_override=None,
+                kind_override=None,
+                cells_w=None,
+                cells_h=None,
+            )
+            return
+        try:
+            card = self.app.cards.get(token.card_id)
+        except ValueError:
+            self._error("Карточка размещения отсутствует. Удалите повреждённое размещение.")
+            return
+        if action == "open":
+            self.app.open_card_editor(card.id)
         elif action == "rename":
             title, ok = QInputDialog.getText(
-                self.app.window, "Токен", "Название:", text=token.title
+                self.app.window, "Карточка", "Название:", text=card.title
             )
             if ok and title.strip():
-                self.session.edit_token(map_id, token_id, title=title)
-        elif action == "link":
-            entities = self.app.session.entities.summaries()
-            labels = [f"{e.title} · {e.kind} · {e.id}" for e in entities]
-            if labels:
-                choice, ok = QInputDialog.getItem(
-                    self.app.window, "Связь", "Документ:", labels, 0, False
-                )
-                if ok:
-                    self.session.edit_token(
-                        map_id, token_id, entity_id=entities[labels.index(choice)].id
-                    )
+                self.app.session.update_card_fields(card.id, {"title": title})
         elif action == "properties":
-            dialog = TokenPropertiesDialog(
-                token, self.app.session.entities.summaries(), self.app.window
-            )
+            dialog = TokenPropertiesDialog(token, resolve_token(token, card), self.app.window)
             if dialog.exec():
                 self.session.edit_token(map_id, token_id, **dialog.changes())
-        elif action == "create":
-            title, ok = QInputDialog.getText(
-                self.app.window, "Новая карточка", "Название:", text=token.title
-            )
-            if ok and title.strip():
-                card = self.app.create_card(title)
-                self.session.edit_token(map_id, token_id, entity_id=card.id)
-                self.app.open_card_editor(card.id)
         elif action == "image":
-            if self.app.card_images.importing:
-                self.app.window.show_notice("Дождитесь завершения импорта изображения")
-                return
+            window = self.app.open_card_editor(card.id)
+            self.app.card_images.portrait(window.widget())
+        elif action == "override-image":
             filename = self._image_filename()
             if not filename:
                 return
@@ -512,14 +616,10 @@ class ModuleController(QObject):
                 current = self.session.maps.get(map_id)
                 if current is None or not any(t.id == token_id for t in current.tokens):
                     return False
-                self.session.edit_token(map_id, token_id, asset_id=asset.id)
+                self.session.edit_token(map_id, token_id, image_override=asset.id)
                 return True
 
             self.app.card_images.import_image(Path(filename), publish)
-
-    def _refresh_links(self, *_args):
-        for key in self.session.maps:
-            self._refresh_map(key)
 
     def _rename(self, kind, key):
         item = self.app.session.entities.get(key)

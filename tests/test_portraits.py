@@ -55,7 +55,7 @@ def test_portrait_inline_replace_remove_reopen_backup(project, qtbot, tmp_path):
     project.open_project(tmp_path / "restored")
     editor = app.open_card_editor(card.id).widget()
     assert editor.portrait_panel.portrait == updated
-    editor.portrait_panel.remove.click()
+    editor.portrait_panel.remove.trigger()
     assert app.cards.get(card.id).portrait is None
     assert app.cards.get(card.id).content == content and len(project.assets) == 2
 
@@ -70,7 +70,7 @@ def test_missing_portrait_never_changes_body_or_revision(project, qtbot, tmp_pat
     editor.resize(720, 600)
     editor.show()
     editor.portrait_panel.refresh_image()
-    assert "недоступно" in editor.portrait_panel.image.text()
+    assert "недоступен" in editor.portrait_panel.image.text()
     assert app.cards.get(card.id) == before
     assert project.save_current()
     assert project.store.load().cards[0] == before

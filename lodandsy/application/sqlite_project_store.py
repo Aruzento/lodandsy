@@ -19,11 +19,17 @@ from lodandsy.domain.card_collection import CardCollection
 from lodandsy.domain.dice_document import DiceDocument
 from lodandsy.domain.document_payloads import project_entities
 from lodandsy.domain.entity import Entity
-from lodandsy.domain.map_document import MapDocument, MapGrid, MapToken
+from lodandsy.domain.map_document import (
+    MapDocument,
+    MapGrid,
+    MapLayer,
+    PlacedAssetObject,
+    TokenInstance,
+)
 from lodandsy.domain.table_document import ColumnDefinition, RandomTable, RowRecord
 
 DATABASE_NAME = "project.sqlite3"
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 MAX_BACKUP_BYTES = 4 * 1024**3
 
 
@@ -175,7 +181,8 @@ class SQLiteProjectStore:
                     "REFERENCES entity(id) ON DELETE CASCADE, asset_id TEXT NOT NULL "
                     "REFERENCES asset(id) DEFERRABLE INITIALLY DEFERRED, "
                     "payload_version INTEGER NOT NULL, "
-                    "tokens TEXT NOT NULL, grid TEXT NOT NULL)"
+                    "tokens TEXT NOT NULL, grid TEXT NOT NULL, "
+                    "layers TEXT NOT NULL, objects TEXT NOT NULL)"
                 )
                 connection.execute(
                     "CREATE TABLE table_document(id TEXT PRIMARY KEY "
@@ -313,11 +320,12 @@ class SQLiteProjectStore:
     def _load_modules(connection):
         maps, tables = [], []
         try:
-            for key, title, asset, version, tokens, grid in connection.execute(
-                "SELECT m.id,e.title,m.asset_id,m.payload_version,m.tokens,m.grid "
+            for key, title, asset, version, tokens, grid, layers, objects in connection.execute(
+                "SELECT m.id,e.title,m.asset_id,m.payload_version,"
+                "m.tokens,m.grid,m.layers,m.objects "
                 "FROM map_document m JOIN entity e ON e.id=m.id ORDER BY e.position,e.id"
             ):
-                SQLiteProjectStore._require_version(version, 3, "Map")
+                SQLiteProjectStore._require_version(version, 4, "Map")
                 tokens, grid = json.loads(tokens), json.loads(grid)
                 if not isinstance(tokens, list) or not isinstance(grid, dict):
                     raise ValueError("Invalid map payload")
@@ -326,8 +334,10 @@ class SQLiteProjectStore:
                         title,
                         asset,
                         key,
-                        tuple(MapToken(**token) for token in tokens),
+                        tuple(TokenInstance(**token) for token in tokens),
                         MapGrid(**grid),
+                        tuple(MapLayer(**layer) for layer in json.loads(layers)),
+                        tuple(PlacedAssetObject(**o) for o in json.loads(objects)),
                     )
                 )
             columns, rows, cells = {}, {}, {}
@@ -421,14 +431,16 @@ class SQLiteProjectStore:
             )
             connection.executemany("INSERT INTO card_content VALUES(?,?,?)", encoded_cards)
             connection.executemany(
-                "INSERT INTO map_document VALUES(?,?,?,?,?)",
+                "INSERT INTO map_document VALUES(?,?,?,?,?,?,?)",
                 [
                     (
                         m.id,
                         m.asset_id,
-                        3,
+                        4,
                         json.dumps([asdict(token) for token in m.tokens], ensure_ascii=False),
                         json.dumps(asdict(m.grid)),
+                        json.dumps([asdict(layer) for layer in m.layers], ensure_ascii=False),
+                        json.dumps([asdict(o) for o in m.objects], ensure_ascii=False),
                     )
                     for m in snapshot.maps
                 ],

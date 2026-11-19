@@ -4,8 +4,8 @@
 инструменты. Python 3.14 / PySide6 6.11.2 / Qt ADS 5.1.1. Tree/Inspector фиксированы;
 ADS размещает окна, WindowManager управляет жизнью.
 
-Итерация 3: [контракт MVP](docs/MVP.md), [требования A–G](docs/iterations/2026-11-19-iteration-3/REQUIREMENTS.md),
-[проверки](docs/validation/2026-11-19-iteration-3.md). План и статусы — Linear.
+Итерация 4: [контракт MVP](docs/MVP.md), [требования A–G](docs/iterations/2026-11-19-iteration-4/CODEX-ITERATION-4.md),
+[проверки](docs/validation/2026-11-19-iteration-4.md). План и статусы — Linear.
 
 Одно смешанное дерево Card/Map/Table/DiceDocument без разделов. «+» раскрывает создание,
 поиск скрыт под кнопкой (Ctrl+F); дочерние документы — через контекстное меню.
@@ -25,6 +25,16 @@ SQLite S3 — единственный источник данных, assets о�
 Большие PNG/JPEG/WebP: ограниченный libvips worker и перестраиваемые тайлы (ADR-011).
 Source2GiB; cache4GiB/32768tiles; worker512MiB/900s; GUI LRU64MiB. BMP/GIF bounded16MP.
 Отмена/ошибка не публикует частичную пирамиду. Не заменять renderer полным QPixmap.
+
+Карточка: канонические typed поля, независимые тип и компоновка, общие с Inspector
+данные, встроенный портрет, rich sections с отдельным Undo. TokenInstance — размещение Card:
+одна Card на нескольких картах, явные presentation overrides; удаление Card предупреждает
+числом размещений и удаляет их атомарно. Режим «Редактировать карту» управляет слоями и
+независимыми raster assets, движением/размером/порядком/видимостью/Undo.
+
+Импорт MOW: «Проект → Импорт карточки/каталога MOW», preview → явный skip/remap → apply.
+Поддержан bounded v1 YAML + HTML card shell; runtime не исполняется, data-asset без manifest
+диагностируется. Source read-only, текущий Card формат единственный (SQLite11/Cardv3/Mapv4).
 
 ## Подготовка и запуск
 

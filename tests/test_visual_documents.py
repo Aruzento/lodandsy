@@ -24,7 +24,8 @@ def test_new_card_visual_edit_format_undo_reopen_and_restart(project, tmp_path):
     editor = app.open_card_editor(card.id).widget()
     assert isinstance(editor, CardEditorWidget)
     assert not editor.text_edit.isReadOnly()
-    assert "Краткое описание" in editor.text_edit.toPlainText()
+    assert editor.section_bar.tabText(0) == "Описание"
+    assert editor.text_edit.toPlainText() == ""
     assert "##" not in editor.text_edit.toPlainText()
     editor.text_edit.setPlainText("Текст 😀")
     editor.text_edit.selectAll()

@@ -38,9 +38,12 @@ class ProjectTreeModel(QStandardItemModel):
         if any(e.parent_id is not None and e.parent_id not in ids for e in entities):
             raise ValueError("Unknown parent in entity summaries")
         if ids == set(self._items) and all(
-            (self._items[e.id].data(NODE_KIND_ROLE) == e.kind
-             and self._items[e.id].index().parent().data(NODE_ID_ROLE) == e.parent_id
-             and self._items[e.id].row() == e.position) for e in entities
+            (
+                self._items[e.id].data(NODE_KIND_ROLE) == e.kind
+                and self._items[e.id].index().parent().data(NODE_ID_ROLE) == e.parent_id
+                and self._items[e.id].row() == e.position
+            )
+            for e in entities
         ):
             for entity in entities:
                 if self._items[entity.id].text() != entity.title:
@@ -63,8 +66,12 @@ class ProjectTreeModel(QStandardItemModel):
     def flags(self, index):
         if not index.isValid():
             return Qt.ItemFlag.ItemIsDropEnabled
-        return (Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable |
-                Qt.ItemFlag.ItemIsDragEnabled | Qt.ItemFlag.ItemIsDropEnabled)
+        return (
+            Qt.ItemFlag.ItemIsEnabled
+            | Qt.ItemFlag.ItemIsSelectable
+            | Qt.ItemFlag.ItemIsDragEnabled
+            | Qt.ItemFlag.ItemIsDropEnabled
+        )
 
     def mimeTypes(self):
         return [ENTITY_MIME_TYPE]
@@ -81,7 +88,7 @@ class ProjectTreeModel(QStandardItemModel):
         return Qt.DropAction.MoveAction
 
     def supportedDragActions(self):
-        return Qt.DropAction.MoveAction
+        return Qt.DropAction.MoveAction | Qt.DropAction.CopyAction
 
     @staticmethod
     def _id_from_mime(data):
@@ -93,8 +100,12 @@ class ProjectTreeModel(QStandardItemModel):
         return None
 
     def canDropMimeData(self, data, action, row, column, parent):
-        if (action != Qt.DropAction.MoveAction or column not in {-1, 0}
-                or row < -1 or row > self.rowCount(parent)):
+        if (
+            action != Qt.DropAction.MoveAction
+            or column not in {-1, 0}
+            or row < -1
+            or row > self.rowCount(parent)
+        ):
             return False
         key = self._id_from_mime(data)
         if key not in self._items:

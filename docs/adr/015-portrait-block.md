@@ -1,5 +1,6 @@
 # ADR-015 — структурированный портрет Card
 
+Итерация4: актуальные payload/поля/шаблоны/размещения/кеши — ADR-019…022. Противоречащие части этой записи являются историей; безопасный Qt HTML, S3 и текущий стек сохраняются.
 Принято в рамках ARU-76/утверждённого ADR-014. Портрет — optional typed Portrait
 {asset_id, alt, caption} в Card payload v2, не HTML-разметка и не первая inline-картинка.
 Отдельный QWidget отображает aspect-fit bounded thumbnail общего CardImages; ни текст,

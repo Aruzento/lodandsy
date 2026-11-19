@@ -17,8 +17,9 @@ from lodandsy.application.sqlite_project_store import (
     SQLiteProjectStore,
     connect_database,
 )
+from lodandsy.domain.card import Card
 from lodandsy.domain.dice_document import roll_dice
-from lodandsy.domain.map_document import MapDocument, MapToken
+from lodandsy.domain.map_document import MapDocument, TokenInstance
 from tests.project_fixture import record_rows, text_table, text_values
 
 pytest_plugins = ["tests.project_fixture"]
@@ -26,8 +27,9 @@ pytest_plugins = ["tests.project_fixture"]
 
 def test_dice_details_total_and_repeatable_randomness():
     from lodandsy.domain.dice_document import DiceConfig
-    result = roll_dice(DiceConfig((0,3,0,0,0,0,0), -2), random.Random(4))
-    assert result.groups == ((6,(2,3,1)),)
+
+    result = roll_dice(DiceConfig((0, 3, 0, 0, 0, 0, 0), -2), random.Random(4))
+    assert result.groups == ((6, (2, 3, 1)),)
     assert result.total == 4 and result.modifier == -2
     assert "Итог = 4" in result.text()
 
@@ -35,8 +37,8 @@ def test_dice_details_total_and_repeatable_randomness():
 def test_map_validation_undo_noops_and_immutable_state(qapp):
     session = ModuleSession()
     document = session.create_map("Map", str(uuid4()))
-    pin = session.add_token(document.id, "Point", None, 0.2, 0.3)
-    session.edit_token(document.id, pin.id, x=0.7, entity_id=str(uuid4()))
+    pin = session.add_card_placement(Card("Point"), document.id, 0.2, 0.3)
+    session.edit_token(document.id, pin.id, x=0.7, label_override="Local")
     session.undo_stack(document.id).undo()
     assert session.get_map(document.id).tokens == (pin,)
     session.undo_stack(document.id).redo()
@@ -48,7 +50,7 @@ def test_map_validation_undo_noops_and_immutable_state(qapp):
     with pytest.raises(TypeError):
         session.maps[document.id] = document
     with pytest.raises(ValueError):
-        MapToken("x", None, -1, 0)
+        TokenInstance(str(uuid4()), -1, 0)
 
 
 def test_random_table_choice_and_empty_behavior():
@@ -76,8 +78,8 @@ def test_real_map_table_card_workflow_and_project_roundtrip(project, tmp_path, q
     second_editor = app.open_card_editor(second.id).widget()
     first_editor.text_edit.insertPlainText("First content")
     second_editor.text_edit.insertPlainText("Second content")
-    one = app.modules.session.add_token(document.id, "One", None, 0.1, 0.2, entity_id=first.id)
-    app.modules.session.add_token(document.id, "Two", None, 0.8, 0.5, entity_id=first.id)
+    one = app.modules.session.add_token(document.id, first.id, 0.1, 0.2)
+    app.modules.session.add_token(document.id, first.id, 0.8, 0.5)
     app.modules._token_action(document.id, one.id, "open")
     assert app.open_card_editor(first.id).widget() is first_editor
     table = app.modules.session.create_table("Encounters")
@@ -99,8 +101,8 @@ def test_real_map_table_card_workflow_and_project_roundtrip(project, tmp_path, q
     revision = project.store.load().revision
     project._save_ui_state()
     app.delete_card(first.id)
-    assert len(app.modules.session.get_map(document.id).tokens) == 2
-    assert "Разорванная" in map_window.widget().view._tokens[0].toolTip()
+    assert not app.modules.session.get_map(document.id).tokens
+    assert not map_window.widget().view._tokens
     assert project.save_current()
     assert project.store.load().revision > revision
     before = project.store.load()
@@ -155,7 +157,7 @@ def test_missing_map_image_remains_editable_and_keeps_links(project, tmp_path, q
     asset = project.store.import_asset(source)
     project.assets[asset.id] = asset
     document = app.modules.session.create_map("Map", asset.id)
-    app.modules.session.add_token(document.id, "Broken", None, 0.5, 0.5, entity_id=str(uuid4()))
+    app.modules.session.edit_map(document.id, tokens=(TokenInstance(str(uuid4()), 0.5, 0.5),))
     (project.store.root / asset.path).unlink()
     widget = app.modules.open_map(document.id).widget()
     qtbot.waitUntil(lambda: "недоступно" in widget.message.text())
@@ -176,36 +178,32 @@ def test_map_image_policy_rejects_svg_in_production_decoder(tmp_path):
         store.close()
 
 
-def test_token_commands_link_new_card_rename_move_unlink_and_undo(project, tmp_path, monkeypatch):
+def test_card_placement_rename_move_delete_undo_and_cascade(project, tmp_path, monkeypatch):
     app, project = project
     session = app.modules.session
     document = session.create_map("Map", str(uuid4()))
-    pin = session.add_token(document.id, "Point", None, 0.2, 0.3)
-    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("New Card", True))
-    app.modules._token_action(document.id, pin.id, "create")
-    card = app.cards.all()[0]
-    assert session.get_map(document.id).tokens[0].entity_id == card.id
-    app.modules._token_action(document.id, pin.id, "rename")
-    assert session.get_map(document.id).tokens[0].title == "New Card"
-    app.modules._token_action(document.id, pin.id, "unlink")
-    assert session.get_map(document.id).tokens[0].entity_id is None
-    monkeypatch.setattr(
-        QInputDialog,
-        "getItem",
-        lambda *a, **k: (next(label for label in a[3] if card.id in label), True),
-    )
-    app.modules._token_action(document.id, pin.id, "link")
-    assert session.get_map(document.id).tokens[0].entity_id == card.id
+    card = app.create_card("Canonical")
+    pin = session.add_token(document.id, card.id, 0.2, 0.3)
     other = session.create_map("Other", document.asset_id)
-    session.add_token(other.id, "Second placement", None, 0.7, 0.8, entity_id=card.id)
-    session.edit_token(document.id, pin.id, x=0.6, y=0.5)
+    second = session.add_token(other.id, card.id, 0.7, 0.8)
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("Renamed", True))
+    app.modules._token_action(document.id, pin.id, "rename")
+    assert app.cards.get(card.id).title == "Renamed"
+    assert session.get_map(other.id).tokens == (second,)
+    session.edit_token(document.id, pin.id, label_override="Local", x=0.6)
     session.undo_stack(document.id).undo()
-    assert session.get_map(document.id).tokens[0].x == 0.2
+    assert session.get_map(document.id).tokens == (pin,)
     app.modules._token_action(document.id, pin.id, "delete")
-    assert not session.get_map(document.id).tokens
+    assert app.cards.get(card.id) and not session.get_map(document.id).tokens
     session.undo_stack(document.id).undo()
-    assert session.get_map(document.id).tokens[0].entity_id == card.id
-    assert session.get_map(other.id).tokens[0].entity_id == card.id
+    assert session.placement_count({card.id}) == 2
+    app.delete_card(card.id)
+    assert not session.get_map(document.id).tokens and not session.get_map(other.id).tokens
+    session.undo_stack(document.id).redo()
+    session.undo_stack(document.id).undo()
+    assert not session.get_map(document.id).tokens
+    with pytest.raises(ValueError):
+        session.add_token(other.id, card.id, 0, 0)
 
 
 def test_failed_image_import_does_not_publish_map_or_asset(project, tmp_path, qtbot, monkeypatch):
@@ -226,9 +224,7 @@ def test_all_modules_backup_restore_and_future_payload_is_preserved(tmp_path):
     source.write_bytes(b"image bytes")
     store = SQLiteProjectStore.create(tmp_path / "world")
     asset = store.import_asset(source)
-    document = MapDocument(
-        "Map", asset.id, tokens=(MapToken("Gone", None, 0.1, 0.2, entity_id=str(uuid4())),)
-    )
+    document = MapDocument("Map", asset.id, tokens=(TokenInstance(str(uuid4()), 0.1, 0.2),))
     table = text_table("Table", rows=("One", "Two"))
     snapshot = ProjectSnapshot((), 1, (asset,), (document,), (table,))
     store.save(snapshot)

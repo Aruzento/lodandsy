@@ -3,7 +3,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from PySide6.QtCore import QUrl
-from PySide6.QtGui import QAction, QDesktopServices, QKeySequence
+from PySide6.QtGui import QAction, QDesktopServices, QImage, QKeySequence
 from PySide6.QtWidgets import QInputDialog
 
 from lodandsy.application.application_session import (
@@ -46,20 +46,14 @@ class AppController:
         self.project_root: Path | None = None
         self.navigator_selection: str | None = None
 
-        self.cards = (
-            cards
-            if cards is not None
-            else CardCollection()
-        )
+        self.cards = cards if cards is not None else CardCollection()
 
         self.session = ApplicationSession(
             cards=self.cards,
             parent=self.window,
         )
 
-        self.window_manager = WindowManager(
-            self.window
-        )
+        self.window_manager = WindowManager(self.window)
 
         self.card_editors: dict[str, CardEditorWidget] = {}
         self.card_editor_bindings: dict[str, CardEditorBinding] = {}
@@ -71,31 +65,20 @@ class AppController:
             session=self.session,
             inspector=self.window.inspector_panel,
         )
+        self.window.inspector_panel.open_field_requested.connect(self.open_card_field)
 
-        self.window.tree_panel.entity_selected.connect(
-            self._on_navigator_selected
-        )
+        self.window.tree_panel.entity_selected.connect(self._on_navigator_selected)
 
-        self.window.tree_panel.entity_open_requested.connect(
-            self.open_entity
-        )
+        self.window.tree_panel.entity_open_requested.connect(self.open_entity)
 
-        self.window.tree_panel.create_requested.connect(
-            self._on_create_requested
-        )
+        self.window.tree_panel.create_requested.connect(self._on_create_requested)
         self.window.tree_panel.template_create_requested.connect(self._on_create_requested)
 
-        self.window.tree_panel.rename_requested.connect(
-            self.rename_card
-        )
+        self.window.tree_panel.rename_requested.connect(self.rename_card)
 
-        self.window.tree_panel.delete_requested.connect(
-            self.delete_card
-        )
+        self.window.tree_panel.delete_requested.connect(self.delete_card)
 
-        self.window.tree_panel.reparent_requested.connect(
-            self._on_reparent_requested
-        )
+        self.window.tree_panel.reparent_requested.connect(self._on_reparent_requested)
         self.window.tree_panel.move_requested.connect(self._on_move_requested)
         self.window.tree_panel.copy_link_requested.connect(self.copy_card_link)
         self.window.tree_panel.move_parent_requested.connect(self.request_move_card)
@@ -105,7 +88,11 @@ class AppController:
         self.session.card_changed.connect(self._on_card_changed)
         self.session.cards_replaced.connect(self.refresh_tree)
         self.session.current_entity_changed.connect(self._on_selected_entity_changed)
-        self.session.entity_changed.connect(lambda *_: self.refresh_tree())
+        self.session.entity_changed.connect(
+            lambda key, fields: (
+                self.refresh_tree() if fields & {"title", "parent_id", "position"} else None
+            )
+        )
         self._search_dialog: CardSearchDialog | None = None
         search_action = QAction("Найти документ…", self.window)
         search_action.setShortcut(QKeySequence.StandardKey.Find)
@@ -117,12 +104,18 @@ class AppController:
         self.window.tree_panel.module_create_requested.connect(self.modules.request_create)
         self.window.tree_panel.module_rename_requested.connect(self.modules.request_rename)
         self.window.tree_panel.module_delete_requested.connect(self.modules.request_delete)
-        self.modules.busy_changed.connect(lambda: self.window.tree_panel.set_map_creation_enabled(
-            not self.modules.importing))
-        for signal in [self.modules.session.map_changed, self.modules.session.table_changed,
-                       self.modules.session.map_deleted, self.modules.session.table_deleted,
-                       self.modules.session.dice_changed, self.modules.session.dice_deleted,
-                       self.modules.session.replaced]:
+        self.modules.busy_changed.connect(
+            lambda: self.window.tree_panel.set_map_creation_enabled(not self.modules.importing)
+        )
+        for signal in [
+            self.modules.session.map_changed,
+            self.modules.session.table_changed,
+            self.modules.session.map_deleted,
+            self.modules.session.table_deleted,
+            self.modules.session.dice_changed,
+            self.modules.session.dice_deleted,
+            self.modules.session.replaced,
+        ]:
             signal.connect(self._refresh_navigator_modules)
 
     def open_entity(self, kind, entity_id):
@@ -137,12 +130,19 @@ class AppController:
     def request_move_card(self, card_id):
         card = self.session.entities.get(card_id)
         excluded = {card_id, *self.session.entities.descendant_ids(card_id)}
-        choices = [(None, "Корень проекта"), *((item.id, f"{item.title} · {item.kind}")
-                    for item in self.session.entities.summaries() if item.id not in excluded)]
+        choices = [
+            (None, "Корень проекта"),
+            *(
+                (item.id, f"{item.title} · {item.kind}")
+                for item in self.session.entities.summaries()
+                if item.id not in excluded
+            ),
+        ]
         labels = [label for _key, label in choices]
         selected = next((i for i, (key, _label) in enumerate(choices) if key == card.parent_id), 0)
-        label, accepted = QInputDialog.getItem(self.window, "Переместить документ", "Родитель:",
-                                              labels, selected, False)
+        label, accepted = QInputDialog.getItem(
+            self.window, "Переместить документ", "Родитель:", labels, selected, False
+        )
         if accepted:
             self.reparent_card(card_id, choices[labels.index(label)][0])
 
@@ -175,7 +175,7 @@ class AppController:
     def open_document(self, key: str):
         prefix = "card-editor:"
         if key.startswith(prefix):
-            return self.open_card_editor(key[len(prefix):])
+            return self.open_card_editor(key[len(prefix) :])
         if key.startswith("map:"):
             return self.modules.open_map(key[4:])
         if key.startswith("table:"):
@@ -190,9 +190,14 @@ class AppController:
         clipboard_writer().copy(uri, html=f'<a href="{uri}">{escape(entity.title)}</a>')
 
     def set_project_root(self, root):
+        if self.project_root != root:
+            self.card_images.invalidate()
         self.project_root = root
         for state in self.card_document_states.values():
-            state.document.configure_resources(root, self.card_images.preview)
+            for document in state.documents():
+                document.configure_resources(
+                    root, self.card_images.preview, self.card_images.image_size
+                )
         for editor in self.card_editors.values():
             editor.refresh_links()
 
@@ -206,7 +211,8 @@ class AppController:
                     entity = self.session.entities.get(entity_id)
                 except ValueError:
                     raise ValueError(
-                        "Разорванная ссылка: документ удалён или отсутствует") from None
+                        "Разорванная ссылка: документ удалён или отсутствует"
+                    ) from None
                 self.open_entity(entity.kind, entity.id)
             elif parsed.scheme.lower() in {"http", "https"} and parsed.hostname and url.isValid():
                 if not QDesktopServices.openUrl(url):
@@ -249,17 +255,24 @@ class AppController:
             self.window_manager.close_window(self.card_editor_window_key(card_id))
             state = self.card_document_states.pop(card_id, None)
             if state is not None:
-                state.document.deleteLater()
+                state.delete()
         self.refresh_tree()
         for editor in self.card_editors.values():
             if getattr(editor, "_internal_targets", set()).intersection(card_ids):
                 editor.refresh_links()
 
     def _on_card_changed(self, card_id: str, fields: frozenset[str]) -> None:
-        if "content" in fields and card_id not in self.card_editors:
+        if card_id not in self.card_editors:
             state = self.card_document_states.get(card_id)
             if state is not None:
-                state.sync_content(self.cards.get(card_id).content)
+                card = self.cards.get(card_id)
+                if "description" in fields:
+                    state.sync_content(card.content)
+                for key in fields:
+                    if key in state.sections:
+                        from lodandsy.domain.card import EMPTY_DOCUMENT
+
+                        state.sections[key].sync_content(card.value(key) or EMPTY_DOCUMENT)
         dock = self.window_manager.find_window(self.card_editor_window_key(card_id))
         if dock is not None and "title" in fields:
             dock.setWindowTitle(self.cards.get(card_id).title)
@@ -275,7 +288,7 @@ class AppController:
         for key in self.window_manager.window_keys():
             self.window_manager.close_window(key)
         for state in self.card_document_states.values():
-            state.document.deleteLater()
+            state.delete()
         self.card_document_states.clear()
         self.saved_card_preferences.clear()
         self.cards = cards
@@ -314,9 +327,17 @@ class AppController:
         self,
         title: str,
         parent_id: str | None = None,
-        *, template_id: str = "empty",
+        *,
+        template_id: str = "empty",
+        card_type=None,
     ) -> Card:
-        return self.session.create_card(title, parent_id, template_id=template_id)
+        return self.session.create_card(
+            title, parent_id, template_id=template_id, card_type=card_type
+        )
+
+    def open_card_field(self, key, field):
+        editor = self.open_card_editor(key).widget()
+        editor.select_section(field)
 
     def rename_card(self, card_id: str, title: str) -> None:
         self.session.update_entity(card_id, title=title)
@@ -335,14 +356,26 @@ class AppController:
             if values is not None:
                 state.load_ui_values(values)
             self.card_document_states[card_id] = state
-        state.document.configure_resources(self.project_root, self.card_images.preview)
-        if not state.images_connected:
-            self.card_images.ready.connect(state.document.image_ready)
-            state.images_connected = True
         editor = CardEditorWidget()
-        editor.portrait_panel.image_provider = lambda key: self.card_images.cached_preview(
-            self.project_root, self.project_controller.assets[key].path
-        ) if key in self.project_controller.assets else None
+        editor.document_state = state
+
+        def configure(document):
+            document.configure_resources(
+                self.project_root, self.card_images.preview, self.card_images.image_size
+            )
+            if not getattr(document, "images_connected", False):
+                self.card_images.ready.connect(document.image_ready)
+                document.images_connected = True
+
+        editor.configure_document = configure
+        configure(state.document)
+        editor.portrait_panel.image_provider = lambda key: (
+            self.card_images.cached_preview(
+                self.project_root, self.project_controller.assets[key].path
+            )
+            if key in self.project_controller.assets
+            else QImage()
+        )
         self.card_images.ready.connect(editor.portrait_panel.refresh_image)
         editor.portrait_panel.image_requested.connect(lambda: self.card_images.portrait(editor))
         editor.entity_options = self.session.entities.summaries
@@ -373,17 +406,15 @@ class AppController:
         title: str,
         parent_id: object,
         template_id: str = "empty",
+        card_type=None,
     ) -> None:
-        resolved_parent_id = (
-            self._optional_card_id(
-                parent_id
-            )
-        )
+        resolved_parent_id = self._optional_card_id(parent_id)
 
         self.create_card(
             title,
             resolved_parent_id,
             template_id=template_id,
+            card_type=card_type,
         )
 
     def _on_move_requested(self, card_id: str, parent_id: object, position: int) -> None:
@@ -396,11 +427,7 @@ class AppController:
         card_id: str,
         parent_id: object,
     ) -> None:
-        resolved_parent_id = (
-            self._optional_card_id(
-                parent_id
-            )
-        )
+        resolved_parent_id = self._optional_card_id(parent_id)
 
         self.reparent_card(
             card_id,
@@ -420,6 +447,4 @@ class AppController:
         ):
             return value
 
-        raise TypeError(
-            "Card id must be str or None"
-        )
+        raise TypeError("Card id must be str or None")

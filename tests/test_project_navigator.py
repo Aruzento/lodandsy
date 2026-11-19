@@ -153,7 +153,7 @@ def test_selected_row_buttons_open_and_child_creation_is_contextual(project, qtb
     assert first is not None
     qtbot.mouseClick(panel.inline_actions.open_button, Qt.MouseButton.LeftButton)
     assert app.window_manager.find_window(f"card-editor:{card.id}") is first
-    monkeypatch.setattr(CardCreationDialog, "get_card", lambda *a: ("Child", "empty", True))
+    monkeypatch.setattr(CardCreationDialog, "get_card", lambda *a: ("Child", "empty", "note", True))
     menu = panel.context_menu(index)
     action(action(menu, "child").menu(), "create-card").trigger()
     assert app.cards.child_ids(card.id)

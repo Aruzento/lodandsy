@@ -27,20 +27,23 @@ def sample_store(root):
     from lodandsy.application.rich_html import text_document
     from lodandsy.application.sqlite_project_store import ProjectSnapshot, SQLiteProjectStore
     from lodandsy.domain.card_collection import CardCollection
-    from lodandsy.domain.map_document import MapDocument, MapGrid, MapToken
+    from lodandsy.domain.map_document import MapDocument, MapGrid, TokenInstance
 
     store = SQLiteProjectStore.create(root)
     image = QImage(24, 16, QImage.Format.Format_RGB32)
-    image.fill(0xff334455)
+    image.fill(0xFF334455)
     source = root.parent / "sample.png"
     image.save(str(source))
     asset = store.import_asset(source)
     cards = CardCollection()
     first = cards.create("World", content=text_document("Original document"))
     second = cards.create("Child", first.id, content=text_document("Second document"))
-    document = MapDocument("Map", asset.id,
-        tokens=(MapToken("Image", asset.id, 11, 9, cells_w=2, cells_h=1, entity_id=second.id),),
-        grid=MapGrid(True, 80, -2, 3, .6, True))
+    document = MapDocument(
+        "Map",
+        asset.id,
+        tokens=(TokenInstance(second.id, 11, 9, cells_w=2, cells_h=1, image_override=asset.id),),
+        grid=MapGrid(True, 80, -2, 3, 0.6, True),
+    )
     table = text_table("Table", rows=("Forest", "", "0", "<text>"))
     store.save(ProjectSnapshot(cards.all(), 7, (asset,), (document,), (table,)))
     return store
@@ -48,15 +51,17 @@ def sample_store(root):
 
 def record_rows(table, values):
     from lodandsy.domain.table_document import RowRecord
-    return tuple(RowRecord(i, ((table.columns[0].id, value),)) for i,value in enumerate(values))
+
+    return tuple(RowRecord(i, ((table.columns[0].id, value),)) for i, value in enumerate(values))
 
 
 def text_table(title, *, rows=(), id=None):
     from dataclasses import replace
 
     from lodandsy.domain.table_document import RandomTable
-    table = RandomTable(title) if id is None else RandomTable(title,id)
-    return replace(table, rows=record_rows(table,rows))
+
+    table = RandomTable(title) if id is None else RandomTable(title, id)
+    return replace(table, rows=record_rows(table, rows))
 
 
 def text_values(table):

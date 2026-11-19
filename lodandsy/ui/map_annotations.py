@@ -13,7 +13,7 @@ class GridLayer(QGraphicsItem):
         self.rect = QRectF(0, 0, view.map_width, view.map_height)
         self.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemUsesExtendedStyleOption)
-        self.setZValue(0)
+        self.setZValue(9999)
         self.last_line_count = 0
 
     def boundingRect(self):
@@ -50,61 +50,84 @@ class GridLayer(QGraphicsItem):
                 else:
                     lines.append(QLineF(rect.left(), point, rect.right(), point))
                 self.last_line_count += 1
-        shadow = QColor("#000000")
-        shadow.setAlphaF(grid.opacity)
-        pen = QPen(shadow, 3)
-        pen.setCosmetic(True)
+        # Align in physical device pixels; one pass avoids accumulated translucent halos.
+        transform = painter.deviceTransform()
+        dpr = painter.device().devicePixelRatioF()
+        painter.save()
+        painter.resetTransform()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        pen = QPen(color, 1 / dpr)
         painter.setPen(pen)
-        painter.drawLines(lines)
-        pen = QPen(color, 1)
-        pen.setCosmetic(True)
-        painter.setPen(pen)
-        painter.drawLines(lines)
+        aligned = []
+        for line in lines:
+            a, b = transform.map(line.p1()), transform.map(line.p2())
+            aligned.append(
+                QLineF(
+                    (math.floor(a.x()) + 0.5) / dpr,
+                    (math.floor(a.y()) + 0.5) / dpr,
+                    (math.floor(b.x()) + 0.5) / dpr,
+                    (math.floor(b.y()) + 0.5) / dpr,
+                )
+            )
+        painter.drawLines(aligned)
+        painter.restore()
 
 
 class TokenItem(QGraphicsItem):
-    def __init__(self, token, view, root, asset_path, provider, broken):
+    def __init__(self, token, presentation, view, root, asset_path, provider):
         super().__init__()
-        self.token, self.view = token, view
+        self.token, self.presentation, self.view = token, presentation, view
         self.cell_size = view.grid.cell_size
         self.root, self.asset_path, self.provider = root, asset_path, provider
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, view._background is not None)
-        self.setPos(token.x, token.y)
-        self.setZValue(10 + token.z)
-        self.base_tip = token.title + (" · Разорванная ссылка на документ" if broken else "")
-        self.broken = broken
-        self.setToolTip("<qt>" + escape(self.base_tip) + "</qt>")
+        self.set_value(token, presentation, root, asset_path, provider)
 
-    def set_value(self, token, root, asset_path, provider, broken):
-        if (token.cells_w, token.cells_h, self.view.grid.cell_size) != (
-            self.token.cells_w,
-            self.token.cells_h,
+    def set_value(self, token, presentation, root, asset_path, provider):
+        if (presentation.cells_w, presentation.cells_h, self.view.grid.cell_size) != (
+            self.presentation.cells_w,
+            self.presentation.cells_h,
             self.cell_size,
         ):
             self.prepareGeometryChange()
         self.cell_size = self.view.grid.cell_size
-        if (token.x, token.y) != (self.token.x, self.token.y):
-            self.setPos(token.x, token.y)
-        self.token = token
+        self.token, self.presentation = token, presentation
+        self.setPos(token.x, token.y)
         self.root, self.asset_path, self.provider = root, asset_path, provider
-        self.broken = broken
-        self.base_tip = token.title + (" · Разорванная ссылка на документ" if broken else "")
+        self.broken = presentation.missing
+        overrides = [
+            name
+            for name, value in [
+                ("подпись", token.label_override),
+                ("изображение", token.image_override),
+                ("вид", token.kind_override),
+                ("размер", token.cells_w or token.cells_h),
+            ]
+            if value is not None
+        ]
+        self.base_tip = (
+            presentation.label
+            + (" · Разорванная ссылка на Card" if self.broken else "")
+            + (" · " + presentation.summary if presentation.summary else "")
+            + (" · Свои: " + ", ".join(overrides) if overrides else "")
+        )
         self.setToolTip("<qt>" + escape(self.base_tip) + "</qt>")
-        self.setZValue(10 + token.z)
+        self.setZValue(10000 + token.z)
         self.setFlag(
-            QGraphicsItem.GraphicsItemFlag.ItemIsMovable, self.view._background is not None
+            QGraphicsItem.GraphicsItemFlag.ItemIsMovable,
+            self.view._background is not None and not self.view.edit_mode,
         )
         self.update()
 
     def boundingRect(self):
-        token = self.token
-        width, height = token.cells_w * self.cell_size, token.cells_h * self.cell_size
+        width, height = (
+            self.presentation.cells_w * self.cell_size,
+            self.presentation.cells_h * self.cell_size,
+        )
         return QRectF(-width / 2, -height / 2, width, height)
 
     def shape(self):
         path = QPainterPath()
-        if self.token.kind == "character":
+        if self.presentation.kind == "character":
             path.addEllipse(self._circle())
         else:
             path.addRect(self.boundingRect())
@@ -117,7 +140,7 @@ class TokenItem(QGraphicsItem):
 
     def paint(self, painter, option, widget=None):
         rect = self.boundingRect()
-        character = self.token.kind == "character"
+        character = self.presentation.kind == "character"
         if character:
             rect = self._circle()
         painter.save()
@@ -172,23 +195,109 @@ class TokenItem(QGraphicsItem):
         QTimer.singleShot(0, view, lambda: view.token_moved.emit(key, x, y))
 
     def mouseDoubleClickEvent(self, event):
+        if self.view.edit_mode:
+            event.ignore()
+            return
         self.view.token_action.emit(self.token.id, "open")
         event.accept()
 
     def contextMenuEvent(self, event):
+        if self.view.edit_mode:
+            event.ignore()
+            return
         menu = QMenu()
         for label, name in [
-            ("Открыть документ", "open"),
-            ("Связать с документом…", "link"),
-            ("Свойства: название, размер, связь…", "properties"),
-            ("Заменить изображение…", "image"),
-            ("Создать связанную карточку…", "create"),
-            ("Убрать связь", "unlink"),
-            ("Удалить токен", "delete"),
+            ("Открыть карточку", "open"),
+            ("Свойства размещения…", "properties"),
+            ("Переименовать карточку…", "rename"),
+            ("Портрет карточки…", "image"),
+            ("Своё изображение размещения…", "override-image"),
+            ("Сбросить переопределения", "reset"),
+            ("Удалить размещение", "delete"),
         ]:
             action = menu.addAction(label)
             action.setData(name)
         chosen = menu.exec(event.screenPos())
         if chosen:
             self.view.token_action.emit(self.token.id, chosen.data())
+        event.accept()
+
+
+class RasterObjectItem(QGraphicsItem):
+    def __init__(self, value, layer, view, path, root, provider):
+        super().__init__()
+        self.view = view
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
+        self.set_value(value, layer, path, root, provider)
+
+    def set_value(self, value, layer, path, root, provider):
+        self.prepareGeometryChange()
+        self.value, self.layer, self.path, self.root, self.provider = (
+            value,
+            layer,
+            path,
+            root,
+            provider,
+        )
+        self.setPos(value.x, value.y)
+        self.setRotation(value.rotation)
+        self.setZValue(layer.position * 10 + value.z / 10000)
+        self.setVisible(layer.visible)
+        self.setFlag(
+            QGraphicsItem.GraphicsItemFlag.ItemIsMovable,
+            self.view.edit_mode and self.view._background is not None,
+        )
+        self.setAcceptedMouseButtons(
+            Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton
+            if self.view.edit_mode
+            else Qt.MouseButton.NoButton
+        )
+        self.update()
+
+    def boundingRect(self):
+        return QRectF(0, 0, self.value.width, self.value.height)
+
+    def paint(self, painter, option, widget=None):
+        image = self.provider(self.root, self.path) if self.path else None
+        rect = self.boundingRect()
+        if image is not None and not image.isNull():
+            painter.drawImage(rect, image)
+            self.setToolTip("Изображение · " + self.layer.title)
+        else:
+            painter.fillRect(rect, QColor("#713d49"))
+            painter.setPen(QColor("#f5d7dc"))
+            painter.drawLine(rect.topLeft(), rect.bottomRight())
+            self.setToolTip(
+                "Изображение загружается"
+                if image is None and self.path
+                else "Ресурс отсутствует или повреждён"
+            )
+        if self.isSelected():
+            pen = QPen(QColor("#ffe0a0"), 1)
+            pen.setCosmetic(True)
+            painter.setPen(pen)
+            painter.drawRect(rect)
+
+    def mousePressEvent(self, event):
+        self._origin = self.pos()
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        if self.pos() != getattr(self, "_origin", self.pos()):
+            key, x, y = self.value.id, max(0, self.x()), max(0, self.y())
+            QTimer.singleShot(0, self.view, lambda: self.view.object_moved.emit(key, x, y))
+
+    def contextMenuEvent(self, event):
+        if not self.view.edit_mode:
+            event.ignore()
+            return
+        menu = QMenu()
+        menu.addAction("Размер, поворот и порядок…")
+        delete = menu.addAction("Удалить объект")
+        chosen = menu.exec(event.screenPos())
+        if chosen:
+            self.view.object_action.emit(
+                self.value.id, "delete" if chosen == delete else "properties"
+            )
         event.accept()

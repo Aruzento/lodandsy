@@ -85,16 +85,25 @@ def main():
             wait(app, lambda: map_widget.view._background is not None, timeout=120)
             grid = MapGrid(True, 50, 10, 10, 0.5, True)
             controller.modules.session.edit_map(document.id, grid=grid)
-            controller.modules.import_token(document.id, source, "Город", 120, 130)
-            wait(app, lambda: not controller.card_images.importing)
-            token = controller.modules.session.get_map(document.id).tokens[0]
-            controller.modules.session.edit_token(document.id, token.id, entity_id=a.id)
-            controller.modules.import_token(document.id, source, "Второй", 220, 230)
-            wait(app, lambda: not controller.card_images.importing)
-            item_token = controller.modules.session.get_map(document.id).tokens[1]
-            controller.modules.session.edit_token(
-                document.id, item_token.id, kind="item", cells_w=2, cells_h=2, entity_id=a.id
+            token = controller.modules.session.add_token(document.id, a.id, 120, 130)
+            item_token = controller.modules.session.add_token(
+                document.id, b.id, 220, 230, kind_override="item", cells_w=2, cells_h=2
             )
+            assert item_token.card_id == b.id
+            controller.session.update_card_fields(a.id, {"hp": 0, "summary": "Canonical summary"})
+            assert map_widget.view._tokens[0].presentation.summary == "Canonical summary · HP: 0"
+            layer = controller.modules.session.add_layer(document.id, "Decor")
+            other_layer = controller.modules.session.add_layer(document.id, "Upper")
+            controller.modules.session.add_object(
+                document.id, layer.id, document.asset_id, 10, 20, 100, 80
+            )
+            controller.modules.session.add_object(
+                document.id, other_layer.id, document.asset_id, 110, 120, 100, 80
+            )
+            map_widget.edit_mode.setChecked(True)
+            assert map_widget.view.edit_mode and len(map_widget.view._objects) == 2
+            controller.modules.session.edit_layer(document.id, other_layer.id, visible=False)
+            map_widget.edit_mode.setChecked(False)
             controller.modules.session.move_token(document.id, token.id, 190, 190)
             assert controller.modules.session.get_map(document.id).tokens[0].x == 185
             controller.modules.session.undo_stack(document.id).undo()
@@ -136,6 +145,33 @@ def main():
             second.dock.setFloating()
             app.processEvents()
             assert second.dock.floatingDockContainer().isWindow()
+            # Explicit synthetic MOW fixture; the real supplied sample is covered by pytest.
+            from uuid import uuid4
+
+            from lodandsy.application.mow_import import (
+                apply_import,
+                inspect_source,
+                prepare_import,
+            )
+
+            mow_source = root / "MOW-synthetic.md"
+            mow_source.write_text(
+                f"---\nid: {uuid4()}\nschemaVersion: 1\ntype: folder\n"
+                "tags: [card, folder]\naliases: []\n---\n"
+                '<h1>Импорт MOW</h1><div class="entity-main">'
+                '<div class="rich-text-field"><b>Содержимое</b>'
+                "<select><option>runtime</option></select></div></div>",
+                encoding="utf-8",
+            )
+            imported = prepare_import(
+                inspect_source(mow_source),
+                project.store,
+                controller.cards.all(),
+                tuple(project.assets.values()),
+            )
+            apply_import(controller.session, imported)
+            assert imported.cards[0].card_type == "folder"
+            assert "runtime" not in imported.cards[0].content
             assert project.save_current()
             expected = project.store.load()
             project._save_ui_state()
@@ -154,8 +190,8 @@ def main():
             wait(app, lambda: len(controller.window_manager.window_keys()) == 5)
             assert project.store.load() == expected
             controller.delete_card(a.id)
-            assert len(controller.modules.session.get_map(document.id).tokens) == 2
-            assert len(controller.modules.session.get_map(document.id).tokens) == 2
+            assert len(controller.modules.session.get_map(document.id).tokens) == 1
+            assert controller.cards.get(b.id)
             assert project.save_current()
             result = {
                 "passed": True,
@@ -167,7 +203,10 @@ def main():
                 "backup_restore": True,
                 "independent_windows": True,
                 "layout_reopen": True,
-                "broken_token_links_survive": True,
+                "card_placements_cascade_atomically": True,
+                "layers_raster_objects": True,
+                "canonical_card_fields": True,
+                "mow_synthetic_import": True,
                 "unicode_paths": True,
                 "templates_card_images_tokens_grid": True,
                 "rich_only_portrait_typed_table_mixed_dice": True,

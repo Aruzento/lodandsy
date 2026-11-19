@@ -5,28 +5,35 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDockWidget,
     QFormLayout,
+    QFrame,
     QLineEdit,
+    QPushButton,
+    QScrollArea,
     QWidget,
 )
+
+from lodandsy.domain.card_schema import CARD_TYPES
+from lodandsy.ui.card_fields import CardFieldsForm
 
 
 class InspectorPanel(QDockWidget):
     title_changed = Signal(str, str)
     parent_changed = Signal(str, object)
+    fields_changed = Signal(str, object)
+    field_draft_changed = Signal(str, str, object)
+    open_field_requested = Signal(str, str)
+    add_field_requested = Signal()
+    discard_drafts_requested = Signal()
 
     def __init__(
         self,
         parent: QWidget | None = None,
     ) -> None:
-        super().__init__("Inspector", parent)
+        super().__init__("Свойства", parent)
 
         self.setObjectName("inspectorPanel")
-        self.setAllowedAreas(
-            Qt.DockWidgetArea.RightDockWidgetArea
-        )
-        self.setFeatures(
-            QDockWidget.DockWidgetFeature.NoDockWidgetFeatures
-        )
+        self.setAllowedAreas(Qt.DockWidgetArea.RightDockWidgetArea)
+        self.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
 
         self._card_id: str | None = None
         self._title = ""
@@ -45,28 +52,70 @@ class InspectorPanel(QDockWidget):
 
         form = QFormLayout(content)
         form.addRow("ID", self.id_edit)
-        form.addRow("Title", self.title_edit)
-        form.addRow("Parent", self.parent_combo)
-
-        self.setWidget(content)
-
-        self.title_edit.editingFinished.connect(
-            self._on_title_editing_finished
+        form.addRow("Название", self.title_edit)
+        form.addRow("Родитель", self.parent_combo)
+        self.field_form = CardFieldsForm()
+        self.field_form.edited.connect(
+            lambda changes: (
+                self.fields_changed.emit(self._card_id, changes) if self._card_id else None
+            )
         )
-        self.parent_combo.currentIndexChanged.connect(
-            self._on_parent_index_changed
+        self.field_form.draft_changed.connect(
+            lambda key, raw: (
+                self.field_draft_changed.emit(self._card_id, key, raw) if self._card_id else None
+            )
         )
+        self.field_form.open_rich_requested.connect(
+            lambda key: (
+                self.open_field_requested.emit(self._card_id, key) if self._card_id else None
+            )
+        )
+        form.addRow(self.field_form)
+        self.add_field = QPushButton("Добавить поле…")
+        self.add_field.clicked.connect(self.add_field_requested)
+        self.discard = QPushButton("Отменить ошибочный ввод")
+        self.discard.clicked.connect(self.discard_drafts_requested)
+        form.addRow(self.add_field)
+        form.addRow(self.discard)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidget(content)
+
+        self.setWidget(scroll)
+
+        self.title_edit.editingFinished.connect(self._on_title_editing_finished)
+        self.parent_combo.currentIndexChanged.connect(self._on_parent_index_changed)
 
         self.clear_card()
+
+    def set_metadata(self, card, drafts):
+        from lodandsy.domain.card_schema import field_definition
+
+        keys = ["summary", "tags", "aliases", *CARD_TYPES[card.card_type].fields]
+        keys += [key for key, value in card.values if field_definition(key).group != "source"]
+        keys += ["description", "notes"]
+        self.field_form.set_card(card, tuple(dict.fromkeys(keys)), drafts)
+        self.field_form.show()
+        self.add_field.show()
+        self.discard.setVisible(any(key[0] == card.id for key in drafts))
+        raw = drafts.get((card.id, "title"))
+        if raw is not None and self.title_edit.text() != raw:
+            blocker = QSignalBlocker(self.title_edit)
+            self.title_edit.setText(raw)
+            del blocker
+
+    def clear_metadata(self):
+        self.field_form.hide()
+        self.add_field.hide()
+        self.discard.hide()
 
     def set_card(
         self,
         card_id: str,
         title: str,
         parent_id: str | None,
-        parent_options: Iterable[
-            tuple[str | None, str]
-        ],
+        parent_options: Iterable[tuple[str | None, str]],
     ) -> None:
         self._card_id = card_id
         self.title_edit.setReadOnly(False)
@@ -74,12 +123,11 @@ class InspectorPanel(QDockWidget):
 
         id_blocker = QSignalBlocker(self.id_edit)
         title_blocker = QSignalBlocker(self.title_edit)
-        parent_blocker = QSignalBlocker(
-            self.parent_combo
-        )
+        parent_blocker = QSignalBlocker(self.parent_combo)
 
         self.id_edit.setText(card_id)
-        self.title_edit.setText(title)
+        if self.title_edit.text() != title:
+            self.title_edit.setText(title)
 
         self.parent_combo.clear()
 
@@ -92,14 +140,10 @@ class InspectorPanel(QDockWidget):
             )
 
             if option_id == parent_id:
-                selected_index = (
-                    self.parent_combo.count() - 1
-                )
+                selected_index = self.parent_combo.count() - 1
 
         if selected_index >= 0:
-            self.parent_combo.setCurrentIndex(
-                selected_index
-            )
+            self.parent_combo.setCurrentIndex(selected_index)
 
         self.id_edit.setEnabled(True)
         self.title_edit.setEnabled(True)
@@ -118,14 +162,13 @@ class InspectorPanel(QDockWidget):
         self.title_edit.setReadOnly(True)
 
     def clear_card(self) -> None:
+        self.clear_metadata()
         self._card_id = None
         self._title = ""
 
         id_blocker = QSignalBlocker(self.id_edit)
         title_blocker = QSignalBlocker(self.title_edit)
-        parent_blocker = QSignalBlocker(
-            self.parent_combo
-        )
+        parent_blocker = QSignalBlocker(self.parent_combo)
 
         self.id_edit.clear()
         self.title_edit.clear()
@@ -146,12 +189,8 @@ class InspectorPanel(QDockWidget):
         new_title = self.title_edit.text().strip()
 
         if not new_title:
-            blocker = QSignalBlocker(
-                self.title_edit
-            )
-            self.title_edit.setText(
-                self._title
-            )
+            blocker = QSignalBlocker(self.title_edit)
+            self.title_edit.setText(self._title)
             del blocker
             return
 
@@ -175,14 +214,9 @@ class InspectorPanel(QDockWidget):
         if index < 0:
             return
 
-        parent_id = self.parent_combo.itemData(
-            index
-        )
+        parent_id = self.parent_combo.itemData(index)
 
-        if (
-            parent_id is not None
-            and not isinstance(parent_id, str)
-        ):
+        if parent_id is not None and not isinstance(parent_id, str):
             return
 
         self.parent_changed.emit(

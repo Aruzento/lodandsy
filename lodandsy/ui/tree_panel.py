@@ -1,4 +1,3 @@
-
 from PySide6.QtCore import QItemSelectionModel, QModelIndex, QPoint, QSignalBlocker, Qt, Signal
 from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
@@ -36,7 +35,7 @@ class TreePanel(QDockWidget):
     move_parent_requested = Signal(str)
 
     create_requested = Signal(str, object)
-    template_create_requested = Signal(str, object, str)
+    template_create_requested = Signal(str, object, str, str)
     rename_requested = Signal(str, str)
     delete_requested = Signal(str)
     reparent_requested = Signal(str, object)
@@ -49,56 +48,37 @@ class TreePanel(QDockWidget):
     ) -> None:
         super().__init__("Проект", parent)
 
+        self.deletion_reference_count = lambda ids: 0
         self.setObjectName("treePanel")
         self.map_creation_enabled = True
-        self.setAllowedAreas(
-            Qt.DockWidgetArea.LeftDockWidgetArea
-        )
-        self.setFeatures(
-            QDockWidget.DockWidgetFeature.NoDockWidgetFeatures
-        )
+        self.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea)
+        self.setFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
 
         self.tree_view = CardTreeView(self)
         self.tree_view.setObjectName("cardTreeView")
         self.tree_view.setHeaderHidden(True)
 
-        self.tree_view.setEditTriggers(
-            QAbstractItemView.EditTrigger.NoEditTriggers
-        )
-        self.tree_view.setSelectionMode(
-            QAbstractItemView.SelectionMode.SingleSelection
-        )
+        self.tree_view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.tree_view.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.tree_view.setExpandsOnDoubleClick(False)
 
         self.tree_view.setDragEnabled(True)
         self.tree_view.setAcceptDrops(True)
         self.tree_view.setDropIndicatorShown(True)
-        self.tree_view.setDragDropMode(
-            QAbstractItemView.DragDropMode.DragDrop
-        )
-        self.tree_view.setDefaultDropAction(
-            Qt.DropAction.MoveAction
-        )
+        self.tree_view.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+        self.tree_view.setDefaultDropAction(Qt.DropAction.MoveAction)
 
         self.tree_model = ProjectTreeModel(self)
         self.tree_view.setModel(self.tree_model)
 
-        self.tree_view.selectionModel().currentChanged.connect(
-            self._on_current_changed
-        )
-        self.tree_view.doubleClicked.connect(
-            self._on_double_clicked
-        )
+        self.tree_view.selectionModel().currentChanged.connect(self._on_current_changed)
+        self.tree_view.doubleClicked.connect(self._on_double_clicked)
         self.tree_view.open_requested.connect(self._on_double_clicked)
 
-        self.tree_model.reparent_requested.connect(
-            self.reparent_requested.emit
-        )
+        self.tree_model.reparent_requested.connect(self.reparent_requested.emit)
         self.tree_model.move_requested.connect(self.move_requested.emit)
 
-        self.tree_view.context_menu_requested.connect(
-            self._show_context_menu
-        )
+        self.tree_view.context_menu_requested.connect(self._show_context_menu)
 
         content = QWidget(self)
         layout = QVBoxLayout(content)
@@ -126,17 +106,24 @@ class TreePanel(QDockWidget):
         QWidget.setTabOrder(self.search_button, self.tree_view)
         QWidget.setTabOrder(self.tree_view, self.inline_actions.open_button)
         QWidget.setTabOrder(self.inline_actions.open_button, self.inline_actions.menu_button)
-        for shortcut, callback in [("F2", self.request_rename), ("Delete", self.request_delete),
-                                   ("Insert", self.show_creation_menu),
-                                   ("Shift+F10", self.show_selected_menu)]:
+        for shortcut, callback in [
+            ("F2", self.request_rename),
+            ("Delete", self.request_delete),
+            ("Insert", self.show_creation_menu),
+            ("Shift+F10", self.show_selected_menu),
+        ]:
             key = QShortcut(QKeySequence(shortcut), self)
             key.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             key.activated.connect(callback)
 
     def _creation_menu(self, parent_id=None):
         menu = QMenu(self)
-        for kind, title in [("card", "Карточка…"), ("map", "Карта из изображения…"),
-                            ("table", "Случайная таблица…"), ("dice", "Кубики…")]:
+        for kind, title in [
+            ("card", "Карточка…"),
+            ("map", "Карта из изображения…"),
+            ("table", "Случайная таблица…"),
+            ("dice", "Кубики…"),
+        ]:
             action = menu.addAction(title)
             action.setObjectName(f"create-{kind}")
             action.triggered.connect(lambda _checked=False, k=kind: self._create_kind(k, parent_id))
@@ -151,7 +138,9 @@ class TreePanel(QDockWidget):
             self.module_create_requested.emit(kind, parent_id)
 
     def show_creation_menu(self):
-        self.create_menu.exec(self.create_button.mapToGlobal(self.create_button.rect().bottomLeft()))
+        self.create_menu.exec(
+            self.create_button.mapToGlobal(self.create_button.rect().bottomLeft())
+        )
 
     def show_selected_menu(self):
         index = self.tree_view.currentIndex()
@@ -175,8 +164,11 @@ class TreePanel(QDockWidget):
         return self.tree_view.currentIndex().data(NODE_KEY_ROLE)
 
     def expanded_keys(self):
-        return [key for key in self.tree_model.node_keys()
-                if self.tree_view.isExpanded(self.tree_model.index_for_node(key))]
+        return [
+            key
+            for key in self.tree_model.node_keys()
+            if self.tree_view.isExpanded(self.tree_model.index_for_node(key))
+        ]
 
     def _preserve_tree_state(self, update):
         selected = self.current_node_key()
@@ -200,7 +192,8 @@ class TreePanel(QDockWidget):
         blocker = QSignalBlocker(self.tree_view.selectionModel())
         index = self.tree_model.index_for_node(key)
         self.tree_view.selectionModel().setCurrentIndex(
-            index, QItemSelectionModel.SelectionFlag.ClearAndSelect)
+            index, QItemSelectionModel.SelectionFlag.ClearAndSelect
+        )
         del blocker
         if hasattr(self, "inline_actions"):
             self.inline_actions.select_current()
@@ -222,9 +215,7 @@ class TreePanel(QDockWidget):
         if parent_id is None:
             return
 
-        self._request_create(
-            parent_id=parent_id
-        )
+        self._request_create(parent_id=parent_id)
 
     def request_rename(
         self,
@@ -274,28 +265,38 @@ class TreePanel(QDockWidget):
         if card_id is None:
             return
         counts, pending = {}, [target_index]
+        deleting_ids = set()
         while pending:
             current = pending.pop()
+            deleting_ids.add(current.data(NODE_ID_ROLE))
             kind = current.data(NODE_KIND_ROLE)
             counts[kind] = counts.get(kind, 0) + 1
-            pending.extend(self.tree_model.index(row, 0, current)
-                           for row in range(self.tree_model.rowCount(current)))
+            pending.extend(
+                self.tree_model.index(row, 0, current)
+                for row in range(self.tree_model.rowCount(current))
+            )
         labels = {"card": "карточек", "map": "карт", "table": "таблиц", "dice": "кубиков"}
         details = ", ".join(f"{labels[kind]}: {count}" for kind, count in counts.items())
         title = target_index.data()
-        message = (f'Удалить «{title}» и вложенные документы?\n\n'
-                   f"Всего: {sum(counts.values())} ({details}).\n"
-                   "Окна удаляемых документов будут закрыты. "
-                   "Ссылки из других документов останутся.")
+        message = (
+            f"Удалить «{title}» и вложенные документы?\n\n"
+            f"Всего: {sum(counts.values())} ({details}).\n"
+            "Окна удаляемых документов будут закрыты. "
+            "Ссылки из других документов останутся."
+        )
+
+        placements = self.deletion_reference_count(deleting_ids)
+        if placements:
+            message += (
+                f"\n\nРазмещений токенов: {placements}. Они будут удалены вместе "
+                "с карточками. Остальные карточки сохранятся."
+            )
 
         answer = QMessageBox.question(
             self,
             "Удаление документов",
             message,
-            (
-                QMessageBox.StandardButton.Yes
-                | QMessageBox.StandardButton.No
-            ),
+            (QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No),
             QMessageBox.StandardButton.No,
         )
 
@@ -308,7 +309,7 @@ class TreePanel(QDockWidget):
         self,
         parent_id: str | None,
     ) -> None:
-        title, template_id, accepted = CardCreationDialog.get_card(self)
+        title, template_id, card_type, accepted = CardCreationDialog.get_card(self)
 
         if not accepted:
             return
@@ -322,6 +323,7 @@ class TreePanel(QDockWidget):
             title,
             parent_id,
             template_id,
+            card_type,
         )
 
     def _show_context_menu(
@@ -343,19 +345,27 @@ class TreePanel(QDockWidget):
         key = index.data(NODE_KEY_ROLE)
         entity_id = index.data(NODE_ID_ROLE)
         menu = QMenu(self)
+
         def command(name, title, callback):
             action = QAction(title, menu)
             action.setObjectName(name)
             action.triggered.connect(callback)
             menu.addAction(action)
             return action
+
         def current():
             return self.tree_model.index_for_node(key)
+
         if not index.isValid():
-            for k, title in [("card", "Создать карточку…"), ("map", "Создать карту…"),
-                             ("table", "Создать таблицу…"), ("dice", "Создать кубики…")]:
-                action = command(f"create-{k}", title,
-                                 lambda _checked=False, k=k: self._create_kind(k))
+            for k, title in [
+                ("card", "Создать карточку…"),
+                ("map", "Создать карту…"),
+                ("table", "Создать таблицу…"),
+                ("dice", "Создать кубики…"),
+            ]:
+                action = command(
+                    f"create-{k}", title, lambda _checked=False, k=k: self._create_kind(k)
+                )
                 action.setEnabled(k != "map" or self.map_creation_enabled)
         else:
             command("open", "Открыть · Enter", lambda: self.request_open(current()))
@@ -363,19 +373,27 @@ class TreePanel(QDockWidget):
             child_menu.setParent(menu)
             child_menu.setTitle("Создать дочерний документ")
             menu.addMenu(child_menu).setObjectName("child")
-            command("move-parent", "Переместить в…",
-                    lambda: self.move_parent_requested.emit(entity_id))
+            command(
+                "move-parent", "Переместить в…", lambda: self.move_parent_requested.emit(entity_id)
+            )
             for direction, label in [(-1, "Выше"), (1, "Ниже")]:
+
                 def move(_checked=False, d=direction):
                     target = current()
                     if target.isValid():
-                        self.move_requested.emit(entity_id, target.parent().data(NODE_ID_ROLE),
-                                                 target.row() + d)
+                        self.move_requested.emit(
+                            entity_id, target.parent().data(NODE_ID_ROLE), target.row() + d
+                        )
+
                 action = command(f"move-{direction}", label, move)
-                action.setEnabled(0 <= index.row() + direction
-                                  < self.tree_model.rowCount(index.parent()))
-            command("copy-link", "Копировать ссылку на документ",
-                    lambda: self.copy_link_requested.emit(entity_id))
+                action.setEnabled(
+                    0 <= index.row() + direction < self.tree_model.rowCount(index.parent())
+                )
+            command(
+                "copy-link",
+                "Копировать ссылку на документ",
+                lambda: self.copy_link_requested.emit(entity_id),
+            )
             menu.addSeparator()
             command("rename", "Переименовать · F2", lambda: self.request_rename(current()))
             command("delete", "Удалить… · Delete", lambda: self.request_delete(current()))

@@ -1,3 +1,6 @@
+import time
+from collections import OrderedDict
+
 from PySide6.QtCore import QSignalBlocker, QSizeF, Qt
 from PySide6.QtGui import QColor, QImage, QPyTextObject, QTextFormat
 
@@ -13,12 +16,12 @@ class AssetImageObject(QPyTextObject):
 
     def intrinsicSize(self, document, position, format):
         image_format = format.toImageFormat()
-        image = self.document.image(image_format.name())
-        if image is None or image.isNull():
+        size = self.document.image_size(image_format.name())
+        if size is None:
             return QSizeF(min(240, max(40, document.textWidth() - 24)), 48)
-        requested = image_format.width() or min(600, image.width())
+        requested = image_format.width() or min(600, size.width())
         width = min(requested, max(40, document.textWidth() - 24))
-        return QSizeF(width, width * image.height() / image.width())
+        return QSizeF(width, width * size.height() / size.width())
 
     def drawObject(self, painter, rect, document, position, format):
         image = self.document.image(format.toImageFormat().name())
@@ -40,7 +43,9 @@ class RichDocument(OfflineDocument):
     def __init__(self, content, parent=None):
         super().__init__(parent)
         self.project_root, self.image_provider = None, None
-        self.images, self.image_budget = {}, 0
+        self.images, self.image_budget = OrderedDict(), 0
+        self._image_times = {}
+        self.size_provider = None
         self._metrics = None
         self._image_handler = AssetImageObject(self)
         self.documentLayout().registerHandler(
@@ -50,29 +55,50 @@ class RichDocument(OfflineDocument):
         self.setHtml(content)
         self.canonical_content = content
 
-    def configure_resources(self, root, provider):
+    def configure_resources(self, root, provider, size_provider=None):
         if self.project_root != root:
-            self.images.clear()
-            self.image_budget = 0
-        self.project_root, self.image_provider = root, provider
+            self.release_images()
+        self.project_root, self.image_provider, self.size_provider = root, provider, size_provider
+
+    def release_images(self):
+        self.images.clear()
+        self._image_times.clear()
+        self.image_budget = 0
+
+    def image_size(self, name):
+        if self.size_provider:
+            return self.size_provider(self.project_root, name)
+        image = self.image(name)
+        return image.size() if image is not None and not image.isNull() else None
+
+    def _evict(self):
+        self.image_budget = sum(i.sizeInBytes() for i in self.images.values() if i is not None)
+        while self.image_budget > 8 * 1024**2 or len(self.images) > 16:
+            name, image = self.images.popitem(last=False)
+            self._image_times.pop(name, None)
+            if image is not None:
+                self.image_budget -= image.sizeInBytes()
 
     def image(self, name):
-        if name in self.images:
+        # Called by drawObject for the visible working set, never to decode every layout image.
+        now = time.monotonic()
+        if name in self.images and now - self._image_times.get(name, 0) < 0.25:
+            self.images.move_to_end(name)
             return self.images[name]
         if resolve_asset_image(self.project_root, name) is None or self.image_provider is None:
-            return QImage()
-        if self.image_budget + 4 * 1024**2 > 8 * 1024**2:
-            return QImage()
-        image = self.image_provider(self.project_root, name)
+            image = QImage()
+        else:
+            image = self.image_provider(self.project_root, name)
         self.images[name] = image
-        self.image_budget += 4 * 1024**2 if image is None else image.sizeInBytes()
+        self._image_times[name] = now
+        self.images.move_to_end(name)
+        self._evict()
         return image
 
     def image_ready(self, root, name):
         if root != self.project_root or name not in self.images or self.images[name] is not None:
             return
-        self.image_budget -= 4 * 1024**2
-        self.images.pop(name)
+        self._image_times.pop(name, None)
         self.image(name)
         blocker = QSignalBlocker(self)
         self.markContentsDirty(0, self.characterCount())

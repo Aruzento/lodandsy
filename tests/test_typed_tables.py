@@ -149,3 +149,33 @@ def test_normalized_storage_backup_ids_and_cell_fk(tmp_path):
     assert restored.load().tables == (table,)
     restored.close()
     store.close()
+
+
+def test_validation_memo_only_reuses_immutable_rows_and_schema(monkeypatch):
+    import lodandsy.domain.table_document as domain
+
+    table = typed_table()
+    calls = []
+    validate = domain.validate_value
+
+    def checked(value, kind):
+        calls.append((value, kind))
+        validate(value, kind)
+
+    monkeypatch.setattr(domain, "validate_value", checked)
+    changed = table.with_cell(table.rows[0].id, table.columns[0].id, "New")
+    assert len(calls) <= 3
+    assert changed.rows[1] is table.rows[1]
+    with pytest.raises(ValueError):
+        replace(
+            changed,
+            columns=tuple(
+                replace(c, data_type="bool") if i == 0 else c for i, c in enumerate(changed.columns)
+            ),
+        )
+    with pytest.raises(ValueError, match="unknown column"):
+        domain.RandomTable(
+            "No columns",
+            columns=(),
+            rows=(domain.RowRecord(0, ((table.columns[0].id, "illegal"),)),),
+        )

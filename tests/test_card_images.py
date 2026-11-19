@@ -127,25 +127,60 @@ def test_paste_and_drop_image_share_import_signal_plain_text_stays_plain(qtbot, 
     assert edit.toPlainText() == "**source**"
 
 
-def test_pending_preview_requests_respect_document_memory_budget(project, qtbot, tmp_path):
+def test_twenty_distinct_images_scroll_return_close_reopen_and_bounded_memory(
+    project, qtbot, tmp_path
+):
+    from PySide6.QtGui import QTextCursor
+
     app, project = project
+    app.window.show()
     project.create_project(tmp_path / "world")
-    source = image_file(tmp_path / "square.jpg", 1800, 1800)
-    assets = [project.store.import_asset(source) for _ in range(8)]
-    project.assets.update((asset.id, asset) for asset in assets)
-    card = app.create_card("Many pictures")
-    app.session.update_card(card.id, content=sanitize_html("".join(
-        f'<p><img src="{asset.path}"></p>' for asset in assets))[0])
+    assets = []
+    for i in range(20):
+        image = QImage(1024, 1024, QImage.Format.Format_RGB32)
+        image.fill(0xFF000000 | ((i + 1) * 7919))
+        source = tmp_path / f"image{i}.png"
+        assert image.save(str(source))
+        assets.append(project.store.import_asset(source, known_assets=tuple(assets)))
+    project.assets.update((a.id, a) for a in assets)
+    card = app.create_card("Twenty distinct images")
+    canonical = sanitize_html(
+        "".join(f'<p>Image {i}</p><p><img src="{a.path}"></p>' for i, a in enumerate(assets))
+    )[0]
+    app.session.update_card(card.id, content=canonical)
     editor = app.open_card_editor(card.id).widget()
     document = editor.text_edit.document()
-    for asset in assets:
-        document.image(asset.path)
-    assert len(app.card_images._pending) <= 2
-    qtbot.waitUntil(lambda: not app.card_images._pending)
-    qtbot.wait(250)
-    assert len(app.card_images._cache) == 2
-    assert sum(image.sizeInBytes() for image in document.images.values()
-               if image is not None) <= 8 * 1024**2
+    positions = {}
+    block = document.begin()
+    while block.isValid():
+        it = block.begin()
+        while not it.atEnd():
+            fragment = it.fragment()
+            if fragment.charFormat().isImageFormat():
+                positions[fragment.charFormat().toImageFormat().name()] = fragment.position()
+            it += 1
+        block = block.next()
+    assert len(positions) == 20
+    for asset in [*assets, assets[0], assets[10]]:
+        cursor = QTextCursor(document)
+        cursor.setPosition(positions[asset.path])
+        editor.text_edit.setTextCursor(cursor)
+        editor.text_edit.ensureCursorVisible()
+        editor.text_edit.viewport().update()
+        qtbot.waitUntil(
+            lambda: (image := document.image(asset.path)) is not None and not image.isNull(),
+            timeout=10000,
+        )
+        assert document.image_budget <= 8 * 1024**2
+        assert len(app.card_images._pending) <= 32
+        assert sum(i.sizeInBytes() for i in app.card_images._cache.values()) <= 16 * 1024**2
+    assert app.cards.get(card.id).content == canonical
+    app.window_manager.close_window(app.card_editor_window_key(card.id))
+    assert not document.images and document.image_budget == 0
+    reopened = app.open_card_editor(card.id).widget().text_edit.document()
+    assert reopened is document
+    qtbot.waitUntil(lambda: (i := document.image(assets[0].path)) is not None and not i.isNull())
+    assert project.save_current()
 
 
 def test_symlink_image_cannot_escape_assets(qtbot, tmp_path):
@@ -159,8 +194,7 @@ def test_symlink_image_cannot_escape_assets(qtbot, tmp_path):
     document = RichDocument(EMPTY_DOCUMENT)
     document.configure_resources(tmp_path, lambda *a: pytest.fail("Escaped resource read"))
     assert document.image("assets/link.png").isNull()
-    image = document.resource(QTextDocument.ResourceType.ImageResource,
-                                       QUrl("assets/link.png"))
+    image = document.resource(QTextDocument.ResourceType.ImageResource, QUrl("assets/link.png"))
     assert image.width() == 1
 
 
@@ -177,8 +211,9 @@ def test_windows_junction_cannot_escape_assets_or_cache(qtbot, tmp_path):
     document = RichDocument(EMPTY_DOCUMENT)
     document.configure_resources(root, lambda *a: pytest.fail("Escaped resource read"))
     assert document.image("assets/link/secret.png").isNull()
-    image = document.resource(QTextDocument.ResourceType.ImageResource,
-                                       QUrl("assets/link/secret.png"))
+    image = document.resource(
+        QTextDocument.ResourceType.ImageResource, QUrl("assets/link/secret.png")
+    )
     assert image.width() == 1
     native.CreateJunction(str(outside), str(root / ".lodandsy-cache"))
     with pytest.raises(ValueError, match="вне проекта"):

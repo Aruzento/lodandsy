@@ -1,5 +1,6 @@
 param([string]$Python = '.venv/Scripts/python.exe',
-      [string]$Archive = 'LODANDSY-MVP-Candidate.zip')
+      [string]$Archive = 'LODANDSY-MVP-Candidate.zip',
+      [switch]$SkipPackage)
 $ErrorActionPreference = 'Stop'
 $buildRoot = Split-Path -Parent $PSScriptRoot
 Push-Location -LiteralPath $buildRoot
@@ -11,10 +12,12 @@ try {
     & $Python -m PyInstaller --clean --noconfirm --distpath .prototype-deps/mvp-dist `
         --workpath .prototype-deps/mvp-build build_support/windows.spec
     if ($LASTEXITCODE -ne 0) { throw 'Windows build failed.' }
-    & $Python -m build_support.verify_frozen --report .prototype-deps/iteration3-frozen-source.json
+    & $Python -m build_support.verify_frozen --report .prototype-deps/iteration4-frozen-source.json
     if ($LASTEXITCODE -ne 0) { throw 'Frozen source verification failed.' }
-    & $Python -m build_support.package_windows --archive $Archive
-    if ($LASTEXITCODE -ne 0) { throw 'Packaging failed.' }
+    if (-not $SkipPackage) {
+        & $Python -m build_support.package_windows --archive $Archive
+        if ($LASTEXITCODE -ne 0) { throw 'Packaging failed.' }
+    }
 } finally {
     Pop-Location
 }

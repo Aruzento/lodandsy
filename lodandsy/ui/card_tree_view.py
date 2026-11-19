@@ -20,11 +20,7 @@ class CardTreeView(QTreeView):
     ) -> None:
         del supported_actions
 
-        indexes = [
-            index
-            for index in self.selectedIndexes()
-            if index.column() == 0
-        ]
+        indexes = [index for index in self.selectedIndexes() if index.column() == 0]
 
         if not indexes:
             return
@@ -42,9 +38,9 @@ class CardTreeView(QTreeView):
         drag = QDrag(self)
         drag.setMimeData(mime_data)
 
-        # Источник истины — CardCollection.
+        # Источник истины — EntityCollection; drop на карту создаёт размещение.
         # Сам Tree после drag строку не удаляет.
-        drag.exec(Qt.DropAction.MoveAction)
+        drag.exec(Qt.DropAction.MoveAction | Qt.DropAction.CopyAction, Qt.DropAction.MoveAction)
 
     def contextMenuEvent(
         self,

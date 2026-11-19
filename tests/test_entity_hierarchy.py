@@ -164,8 +164,8 @@ def test_current_map_mixed_dnd_keeps_objects_and_broken_links(project, tmp_path)
     app.session.delete_entity(linked_card.id)
     assert app.window_manager.find_window(f"card-editor:{linked_card.id}") is None
     assert app.window_manager.find_window(f"map:{document.id}") is not None
-    assert entities.payload(document.id) is original_payload
-    assert app.modules.session.get_map(document.id).tokens[0].entity_id == linked_card.id
+    assert entities.payload(document.id) != original_payload
+    assert not app.modules.session.get_map(document.id).tokens
     assert not model.canDropMimeData(
         model.mimeData([model.index_for_node("card:" + root.id)]),
         Qt.DropAction.MoveAction,
@@ -190,7 +190,7 @@ def test_current_map_mixed_dnd_keeps_objects_and_broken_links(project, tmp_path)
     assert entities.get(document.id).parent_id == dice.id
     assert controller.save_current()
     snapshot = controller.store.load()
-    assert snapshot.maps == (document,)
+    assert snapshot.maps == (replace(document, tokens=()),)
     assert snapshot.entity_collection().get(table.id).parent_id == document.id
     archive = tmp_path / "mixed.lodbackup"
     controller.store.backup(archive)
