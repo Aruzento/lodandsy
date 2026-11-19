@@ -6,9 +6,11 @@ from PySide6.QtWidgets import (
     QDockWidget,
     QFormLayout,
     QFrame,
+    QLabel,
     QLineEdit,
     QPushButton,
     QScrollArea,
+    QStackedWidget,
     QWidget,
 )
 
@@ -21,7 +23,6 @@ class InspectorPanel(QDockWidget):
     parent_changed = Signal(str, object)
     fields_changed = Signal(str, object)
     field_draft_changed = Signal(str, str, object)
-    open_field_requested = Signal(str, str)
     add_field_requested = Signal()
     discard_drafts_requested = Signal()
 
@@ -65,11 +66,6 @@ class InspectorPanel(QDockWidget):
                 self.field_draft_changed.emit(self._card_id, key, raw) if self._card_id else None
             )
         )
-        self.field_form.open_rich_requested.connect(
-            lambda key: (
-                self.open_field_requested.emit(self._card_id, key) if self._card_id else None
-            )
-        )
         form.addRow(self.field_form)
         self.add_field = QPushButton("Добавить поле…")
         self.add_field.clicked.connect(self.add_field_requested)
@@ -82,7 +78,13 @@ class InspectorPanel(QDockWidget):
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setWidget(content)
 
-        self.setWidget(scroll)
+        self.pages = QStackedWidget()
+        self.pages.addWidget(scroll)
+        empty = QLabel("Выберите объект\nв дереве проекта")
+        empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty.setObjectName("emptyInspector")
+        self.pages.addWidget(empty)
+        self.setWidget(self.pages)
 
         self.title_edit.editingFinished.connect(self._on_title_editing_finished)
         self.parent_combo.currentIndexChanged.connect(self._on_parent_index_changed)
@@ -92,9 +94,13 @@ class InspectorPanel(QDockWidget):
     def set_metadata(self, card, drafts):
         from lodandsy.domain.card_schema import field_definition
 
-        keys = ["summary", "tags", "aliases", *CARD_TYPES[card.card_type].fields]
-        keys += [key for key, value in card.values if field_definition(key).group != "source"]
-        keys += ["description", "notes"]
+        keys = [*CARD_TYPES[card.card_type].fields]
+        keys += [
+            key
+            for key, value in card.values
+            if field_definition(key).group in {"general", "links", "presentation"}
+            and key not in {"summary", "aliases"}
+        ]
         self.field_form.set_card(card, tuple(dict.fromkeys(keys)), drafts)
         self.field_form.show()
         self.add_field.show()
@@ -117,6 +123,7 @@ class InspectorPanel(QDockWidget):
         parent_id: str | None,
         parent_options: Iterable[tuple[str | None, str]],
     ) -> None:
+        self.pages.setCurrentIndex(0)
         self._card_id = card_id
         self.title_edit.setReadOnly(False)
         self._title = title
@@ -162,6 +169,7 @@ class InspectorPanel(QDockWidget):
         self.title_edit.setReadOnly(True)
 
     def clear_card(self) -> None:
+        self.pages.setCurrentIndex(1)
         self.clear_metadata()
         self._card_id = None
         self._title = ""

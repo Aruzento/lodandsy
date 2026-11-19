@@ -1,7 +1,7 @@
 """Shared typed field controls; emits edits, never owns canonical world values."""
 
 from PySide6.QtCore import QSignalBlocker, Qt, Signal
-from PySide6.QtWidgets import QCheckBox, QFormLayout, QLineEdit, QToolButton, QWidget
+from PySide6.QtWidgets import QCheckBox, QFormLayout, QLineEdit, QWidget
 
 from lodandsy.domain.card_schema import field_definition, parse_field
 
@@ -13,7 +13,6 @@ def field_text(value):
 class CardFieldsForm(QWidget):
     edited = Signal(object)
     draft_changed = Signal(str, object)
-    open_rich_requested = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -37,10 +36,6 @@ class CardFieldsForm(QWidget):
                     widget = QCheckBox()
                     widget.setTristate(True)
                     widget.checkStateChanged.connect(lambda state, k=key: self._boolean(k, state))
-                elif definition.data_type == "richtext":
-                    widget = QToolButton()
-                    widget.setText("Открыть раздел →")
-                    widget.clicked.connect(lambda _=False, k=key: self.open_rich_requested.emit(k))
                 else:
                     widget = QLineEdit()
                     widget.setMaxLength(
@@ -87,7 +82,6 @@ class CardFieldsForm(QWidget):
     def _edit(self, key, text):
         try:
             value = parse_field(key, text)
-            self.draft_changed.emit(key, None)
             self.edited.emit({key: value})
         except ValueError:
             self.draft_changed.emit(key, text)

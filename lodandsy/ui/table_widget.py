@@ -5,22 +5,22 @@ from dataclasses import replace
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QKeySequence
 from PySide6.QtWidgets import (
+    QAbstractItemDelegate,
     QApplication,
-    QHBoxLayout,
     QInputDialog,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPushButton,
     QStyledItemDelegate,
-    QTableView,
-    QToolBar,
     QVBoxLayout,
     QWidget,
 )
 
 from lodandsy.application.clipboard import copy_text
 from lodandsy.domain.table_document import ColumnDefinition, RowRecord, display_value, parse_cell
+from lodandsy.ui.table_headers import TableView
 
 
 class TableModel(QAbstractTableModel):
@@ -62,7 +62,7 @@ class TableModel(QAbstractTableModel):
             return QColor("#713d49")
         if role == Qt.ItemDataRole.ToolTipRole:
             return (
-                "Некорректный ввод; исправьте или отмените перед сохранением"
+                "Ошибочный ввод не сохранён; исправьте или отмените. Другие данные сохраняются."
                 if draft
                 else col.data_type
             )
@@ -195,11 +195,9 @@ class LiveCellDelegate(QStyledItemDelegate):
         return editor
 
 
-class RandomTableWidget(QWidget):
+class TableWidget(QWidget):
     document_changed = Signal(object)
     draft_changed = Signal()
-    rename_requested = Signal()
-    delete_requested = Signal()
 
     def __init__(self, document, drafts=None):
         super().__init__()
@@ -207,26 +205,9 @@ class RandomTableWidget(QWidget):
         self.model.document_changed.connect(self.document_changed)
         self.model.draft_changed.connect(self.draft_changed)
         layout = QVBoxLayout(self)
-        bar = QToolBar()
-        commands = [
-            ("Строка +", self.add_row),
-            ("Строка −", self.remove_row),
-            ("Выше", lambda: self.move_row(-1)),
-            ("Ниже", lambda: self.move_row(1)),
-            ("Колонка +", self.add_column),
-            ("Колонка…", self.edit_column),
-            ("Колонка −", self.remove_column),
-            ("←", lambda: self.move_column(-1)),
-            ("→", lambda: self.move_column(1)),
-            ("Отменить ввод", self.discard_drafts),
-            ("Название", self.rename_requested.emit),
-            ("Удалить", self.delete_requested.emit),
-        ]
-        for label, callback in commands:
-            action = bar.addAction(label)
-            action.triggered.connect(callback)
-        layout.addWidget(bar)
-        self.table = QTableView()
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
+        self.table = TableView()
         self.table.setModel(self.model)
         self.table.setItemDelegate(LiveCellDelegate(self.table))
         self.table.setAccessibleName("Таблица документов")
@@ -235,23 +216,24 @@ class RandomTableWidget(QWidget):
         self.model.modelReset.connect(self._restore_ui)
         self._saved_ui = {}
         layout.addWidget(self.table, 1)
-        row = QHBoxLayout()
-        self.roll_requested = QPushButton("Выбрать случайную строку")
-        self.copy = QPushButton("Копировать результат")
-        self.copy.setEnabled(False)
-        row.addWidget(self.roll_requested)
-        row.addWidget(self.copy)
-        layout.addLayout(row)
-        self.result = QLabel()
-        self.result.setTextFormat(Qt.TextFormat.PlainText)
-        self.result.setWordWrap(True)
-        layout.addWidget(self.result)
+        self.discard = QPushButton("Отменить ошибочный ввод")
+        self.discard.clicked.connect(self.discard_drafts)
+        self.discard.hide()
+        layout.addWidget(self.discard)
         self.error = QLabel()
         self.error.setTextFormat(Qt.TextFormat.PlainText)
         self.error.setStyleSheet("color:#f19a9a")
         layout.addWidget(self.error)
         self.model.error.connect(self.error.setText)
-        self.copy.clicked.connect(lambda: copy_text(self.result.text()))
+        self.table.horizontalHeader().append_requested.connect(self.add_column)
+        self.table.verticalHeader().append_requested.connect(self.add_row)
+        self.table.horizontalHeader().customContextMenuRequested.connect(self._column_menu)
+        self.table.verticalHeader().customContextMenuRequested.connect(self._row_menu)
+        self.table.horizontalHeader().sectionMoved.connect(lambda *args: self._header_order(True))
+        self.table.verticalHeader().sectionMoved.connect(lambda *args: self._header_order(False))
+        self._reordering = False
+        self.model.draft_changed.connect(self.update_draft_notice)
+        self.update_draft_notice()
         for label, shortcut, callback in [
             ("Копировать ячейки", QKeySequence.StandardKey.Copy, self.copy_selection),
             ("Вставить TSV", QKeySequence.StandardKey.Paste, self.paste_selection),
@@ -299,9 +281,14 @@ class RandomTableWidget(QWidget):
 
     def discard_drafts(self):
         self.model.drafts.clear()
+        self.revert_active_editor()
         self.error.clear()
         self.model.layoutChanged.emit()
         self.draft_changed.emit()
+
+    def revert_active_editor(self):
+        for editor in self.table.findChildren(QLineEdit):
+            self.table.closeEditor(editor, QAbstractItemDelegate.EndEditHint.RevertModelCache)
 
     def _confirm(self, occupied):
         return (
@@ -315,9 +302,13 @@ class RandomTableWidget(QWidget):
     def add_row(self):
         doc = self.model.document
         self.model.apply(replace(doc, rows=(*doc.rows, RowRecord(len(doc.rows)))))
+        if doc.columns:
+            self.table.setCurrentIndex(self.model.index(len(doc.rows), 0))
+            self.table.scrollTo(self.table.currentIndex())
 
     def remove_row(self):
-        index = self.table.currentIndex().row()
+        index = getattr(self, "_context_row", None)
+        index = self.table.currentIndex().row() if index is None else index
         doc = self.model.document
         if index >= 0 and self._confirm(bool(doc.rows[index].cells)):
             self.model.apply(
@@ -329,17 +320,6 @@ class RandomTableWidget(QWidget):
                     ),
                 )
             )
-
-    def move_row(self, step):
-        doc, index = self.model.document, self.table.currentIndex().row()
-        target = index + step
-        if 0 <= index < len(doc.rows) and 0 <= target < len(doc.rows):
-            rows = list(doc.rows)
-            rows[index], rows[target] = rows[target], rows[index]
-            self.model.apply(
-                replace(doc, rows=tuple(replace(r, position=i) for i, r in enumerate(rows)))
-            )
-            self.table.setCurrentIndex(self.model.index(target, 0))
 
     def add_column(self):
         name, ok = QInputDialog.getText(self, "Колонка", "Название:")
@@ -353,9 +333,14 @@ class RandomTableWidget(QWidget):
                     doc, columns=(*doc.columns, ColumnDefinition(name, kind, len(doc.columns)))
                 )
             )
+            if doc.rows:
+                self.table.setCurrentIndex(self.model.index(0, len(doc.columns)))
+                self.table.scrollTo(self.table.currentIndex())
 
     def edit_column(self):
-        index, doc = self.table.currentIndex().column(), self.model.document
+        index = getattr(self, "_context_column", None)
+        index = self.table.currentIndex().column() if index is None else index
+        doc = self.model.document
         if index < 0:
             return
         column = doc.columns[index]
@@ -379,7 +364,9 @@ class RandomTableWidget(QWidget):
         self._apply(update)
 
     def remove_column(self):
-        index, doc = self.table.currentIndex().column(), self.model.document
+        index = getattr(self, "_context_column", None)
+        index = self.table.currentIndex().column() if index is None else index
+        doc = self.model.document
         if index < 0:
             return
         key = doc.columns[index].id
@@ -392,16 +379,53 @@ class RandomTableWidget(QWidget):
             )
             self.model.apply(replace(doc, columns=columns, rows=rows))
 
-    def move_column(self, step):
-        doc, index = self.model.document, self.table.currentIndex().column()
-        target = index + step
-        if 0 <= index < len(doc.columns) and 0 <= target < len(doc.columns):
-            columns = list(doc.columns)
-            columns[index], columns[target] = columns[target], columns[index]
-            self.model.apply(
-                replace(doc, columns=tuple(replace(c, position=i) for i, c in enumerate(columns)))
-            )
-            self.table.setCurrentIndex(self.model.index(0, target))
+    def _header_order(self, horizontal):
+        if self._reordering:
+            return
+        doc = self.model.document
+        header = self.table.horizontalHeader() if horizontal else self.table.verticalHeader()
+        current = doc.columns if horizontal else doc.rows
+        order = [header.logicalIndex(i) for i in range(header.count())]
+        if order == list(range(len(current))):
+            return
+        self._reordering = True
+        try:
+            values = tuple(replace(current[old], position=i) for i, old in enumerate(order))
+            self.model.apply(replace(doc, **{"columns" if horizontal else "rows": values}))
+            header.reset()
+        finally:
+            self._reordering = False
+
+    def _column_menu(self, point):
+        header = self.table.horizontalHeader()
+        index = header.logicalIndexAt(point)
+        menu = QMenu(self)
+        menu.addAction("Добавить столбец…", self.add_column)
+        if index >= 0:
+            self._context_column = index
+            menu.addAction("Название и тип…", self.edit_column)
+            menu.addAction("Удалить столбец…", self.remove_column)
+        menu.exec(header.mapToGlobal(point))
+        self._context_column = None
+
+    def _row_menu(self, point):
+        header = self.table.verticalHeader()
+        index = header.logicalIndexAt(point)
+        menu = QMenu(self)
+        menu.addAction("Добавить строку", self.add_row)
+        if index >= 0:
+            self._context_row = index
+            menu.addAction("Удалить строку…", self.remove_row)
+        menu.exec(header.mapToGlobal(point))
+        self._context_row = None
+
+    def update_draft_notice(self):
+        invalid = bool(self.model.drafts)
+        self.discard.setVisible(invalid)
+        if not invalid:
+            self.error.clear()
+        else:
+            self.error.setText("Ошибочный ввод не сохранён. Другие данные можно сохранять.")
 
     def copy_selection(self):
         indexes = self.table.selectionModel().selectedIndexes()

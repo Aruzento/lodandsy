@@ -53,16 +53,15 @@ def test_object_views_modes_shared_asset_and_backup(project, qtbot, tmp_path):
         not widget.view._objects[one.id].flags()
         & widget.view._objects[one.id].GraphicsItemFlag.ItemIsMovable
     )
-    widget.edit_mode.setChecked(True)
-    assert widget.view.edit_mode
+    editor = app.modules.open_map_editor(document.id).widget()
     assert (
-        widget.view._objects[one.id].flags()
-        & widget.view._objects[one.id].GraphicsItemFlag.ItemIsMovable
+        editor.view._objects[one.id].flags()
+        & editor.view._objects[one.id].GraphicsItemFlag.ItemIsMovable
     )
     assert (
-        not widget.view._tokens[0].flags() & widget.view._tokens[0].GraphicsItemFlag.ItemIsMovable
+        not editor.view._tokens[0].flags() & editor.view._tokens[0].GraphicsItemFlag.ItemIsMovable
     )
-    widget.view.object_moved.emit(one.id, 80, 90)
+    editor.view.object_moved.emit(one.id, 80, 90)
     assert session.get_map(document.id).objects[0].x == 80
     session.edit_layer(document.id, second.id, visible=False)
     assert not widget.view._objects[two.id].isVisible()
@@ -71,7 +70,6 @@ def test_object_views_modes_shared_asset_and_backup(project, qtbot, tmp_path):
     assert not widget.view._tokens[0].isVisible()
     session.edit_token(document.id, token.id, layer_id=None)
     assert widget.view._tokens[0].isVisible()
-    widget.edit_mode.setChecked(False)
     assert widget.token_add.isEnabled()
     assert project.save_current()
     backup = tmp_path / "world.lodbackup"

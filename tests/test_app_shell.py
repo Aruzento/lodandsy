@@ -11,11 +11,13 @@ def test_app_shell_has_expected_structure(qtbot):
     window.show()
     assert window.centralWidget() is window.workspace
     assert isinstance(window.workspace, WorkspaceHost)
-    for toolbar in [window.left_rail, window.right_rail, window.tree_host, window.inspector_host]:
+    for toolbar in [window.left_rail, window.right_rail]:
         assert not toolbar.isMovable()
         assert not toolbar.isFloatable()
-    assert window.toolBarArea(window.tree_host) == Qt.ToolBarArea.LeftToolBarArea
-    assert window.toolBarArea(window.inspector_host) == Qt.ToolBarArea.RightToolBarArea
+    for panel in [window.tree_host, window.inspector_host]:
+        assert panel.features() == QDockWidget.DockWidgetFeature.NoDockWidgetFeatures
+    assert window.dockWidgetArea(window.tree_host) == Qt.DockWidgetArea.LeftDockWidgetArea
+    assert window.dockWidgetArea(window.inspector_host) == Qt.DockWidgetArea.RightDockWidgetArea
     assert window.tree_panel.features() == QDockWidget.DockWidgetFeature.NoDockWidgetFeatures
     assert window.inspector_panel.features() == QDockWidget.DockWidgetFeature.NoDockWidgetFeatures
 

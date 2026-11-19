@@ -21,11 +21,10 @@ class MapGrid:
     offset_x: float = 0
     offset_y: float = 0
     opacity: float = 0.65
-    snap: bool = False
     color: str = "#ffffff"
 
     def __post_init__(self):
-        if type(self.enabled) is not bool or type(self.snap) is not bool:
+        if type(self.enabled) is not bool:
             raise ValueError("Некорректные настройки сетки")
         if (
             not isinstance(self.color, str)
@@ -38,15 +37,6 @@ class MapGrid:
         _number(self.offset_x, -1e9, 1e9, "смещение X")
         _number(self.offset_y, -1e9, 1e9, "смещение Y")
         _number(self.opacity, 0, 1, "прозрачность")
-
-    def snap_point(self, x, y, cells_w=1, cells_h=1):
-        # Center anchor; align the footprint's upper-left corner to cell boundaries.
-        return tuple(
-            offset
-            + (math.floor((point - offset) / self.cell_size - cells / 2 + 0.5) + cells / 2)
-            * self.cell_size
-            for point, offset, cells in [(x, self.offset_x, cells_w), (y, self.offset_y, cells_h)]
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +81,7 @@ class TokenPresentation:
     cells_h: int
     missing: bool = False
     summary: str = ""
+    crop: tuple = (0.0, 0.0, 1.0, 1.0)
 
 
 def resolve_token(token, card):
@@ -126,6 +117,9 @@ def resolve_token(token, card):
                 ],
             )
         ),
+        card.portrait.crop
+        if card.portrait and not token.image_override and not card.value("token_image")
+        else (0.0, 0.0, 1.0, 1.0),
     )
 
 
@@ -221,7 +215,7 @@ class MapPayload:
     grid: MapGrid = field(default_factory=MapGrid)
     layers: tuple = ()
     objects: tuple = ()
-    version: int = field(default=4, init=False)
+    version: int = field(default=5, init=False)
 
     def __post_init__(self):
         validate_id(self.asset_id)

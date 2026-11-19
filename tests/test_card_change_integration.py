@@ -59,7 +59,12 @@ def test_session_changes_update_views_once_and_skip_noops_and_failures(qtbot):
     changes = []
     session.card_changed.connect(lambda *args: changes.append(args))
     session.update_card(child.id, title="Renamed", parent_id=b.id, content=text_document("Text"))
-    assert changes == [(child.id, frozenset({"title", "parent_id", "position", "description"}))]
+    assert changes == [
+        (
+            child.id,
+            frozenset({"title", "parent_id", "position", "description", child.description_id}),
+        )
+    ]
     panel = controller.window.tree_panel
     assert panel.tree_model.index_for_node("card:" + child.id).data() == "Renamed"
     assert panel.tree_model.index_for_node("card:" + child.id).parent().data(NODE_ID_ROLE) == b.id

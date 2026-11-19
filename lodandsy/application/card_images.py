@@ -147,9 +147,14 @@ class CardImages(QObject):
                 return self._sizes[key]
             reader = QImageReader(str(path))
             size = reader.size()
+            supported = bytes(reader.format()).lower() in {b"png", b"jpeg", b"webp", b"bmp", b"gif"}
             if reader.device() is not None:
                 reader.device().close()
-            value = size if size.isValid() and size.width() * size.height() <= MAX_PIXELS else None
+            value = (
+                size
+                if supported and size.isValid() and size.width() * size.height() <= MAX_PIXELS
+                else None
+            )
             self._sizes[key] = value
             while len(self._sizes) > 256:
                 self._sizes.popitem(last=False)
@@ -217,14 +222,22 @@ class CardImages(QObject):
                 return False
             if not any(item.id == card_id for item in self.app.cards.all()):
                 return False
+            try:
+                self.app.cards.get(card_id).section(section_key)
+            except ValueError:
+                return False
             cursor.beginEditBlock()
             editor.insert_asset(cursor, asset.path, alt)
             cursor.endEditBlock()
             from lodandsy.application.rich_text_codec import serialize_document
 
-            self.app.session.update_card_fields(
-                card_id, {section_key: serialize_document(cursor.document())}
-            )
+            content = serialize_document(cursor.document())
+            cursor.document().pending_content = content
+            try:
+                self.app.session.update_section(card_id, section_key, content=content)
+            except ValueError as error:
+                self.app.session.set_field_draft(card_id, section_key, content)
+                self.app.window.show_notice(str(error))
             return True
 
         self.import_image(source, publish)
@@ -301,7 +314,9 @@ class CardImages(QObject):
             if not any(card.id == key for card in self.app.cards.all()):
                 return False
             previous = self.app.cards.get(key).portrait or Portrait()
-            self.app.session.update_card(key, portrait=replace(previous, asset_id=asset.id))
+            self.app.session.update_card(
+                key, portrait=replace(previous, asset_id=asset.id, crop=(0.0, 0.0, 1.0, 1.0))
+            )
             return True
 
         self.import_image(source, publish)

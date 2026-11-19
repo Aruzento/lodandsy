@@ -7,7 +7,6 @@ from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 from lodandsy.application.sqlite_project_store import SQLiteProjectStore
 from lodandsy.application.workspace_state import capture_workspace, restore_workspace
 from lodandsy.domain.card import Card
-from lodandsy.domain.dice_document import DiceDocument
 from lodandsy.domain.document_payloads import project_entities
 from lodandsy.domain.map_document import MapDocument
 from lodandsy.ui.card_creation_dialog import CardCreationDialog
@@ -22,18 +21,16 @@ def mixed_model():
     child = Card("Child", parent_id=parent.id)
     document = MapDocument("Map", str(uuid4()))
     table = text_table("Table")
-    dice = DiceDocument("Dice")
-    entities = project_entities((parent, child), (document,), (table,), (dice,))
+    entities = project_entities((parent, child), (document,), (table,))
     entities.update(document.id, parent_id=parent.id)
     entities.update(table.id, parent_id=document.id)
-    entities.update(dice.id, parent_id=table.id)
     model = ProjectTreeModel()
     model.set_entities(entities.summaries())
-    return model, entities, parent, child, document, table, dice
+    return model, entities, parent, child, document, table
 
 
 def test_project_tree_uses_one_canonical_mixed_hierarchy(qapp):
-    model, entities, parent, child, document, table, dice = mixed_model()
+    model, entities, parent, child, document, table = mixed_model()
     assert model.rowCount() == 1
     assert not model.index_for_node("card:" + parent.id).parent().isValid()
     assert model.index_for_node("card:" + child.id).parent() == model.index_for_node(
@@ -43,15 +40,14 @@ def test_project_tree_uses_one_canonical_mixed_hierarchy(qapp):
         "card:" + parent.id
     )
     assert model.index_for_node(f"table:{table.id}").parent().data() == "Map"
-    assert model.index_for_node(f"dice:{dice.id}").parent().data() == "Table"
     assert all(not key.startswith("section:") for key in model.node_keys())
     assert model.index_for_node(f"map:{document.id}").data(NODE_ID_ROLE) == document.id
     assert model.index_for_node(f"table:{table.id}").data(NODE_KIND_ROLE) == "table"
 
 
 def test_all_document_kinds_can_drag_root_drop_and_mixed_cycles_are_rejected(qtbot):
-    model, entities, parent, child, document, table, dice = mixed_model()
-    for kind, item in [("card", parent), ("map", document), ("table", table), ("dice", dice)]:
+    model, entities, parent, child, document, table = mixed_model()
+    for kind, item in [("card", parent), ("map", document), ("table", table)]:
         index = model.index_for_node(f"{kind}:{item.id}")
         assert model.flags(index) & Qt.ItemFlag.ItemIsDragEnabled
         data = model.mimeData([index])
@@ -59,7 +55,7 @@ def test_all_document_kinds_can_drag_root_drop_and_mixed_cycles_are_rejected(qtb
         assert model.canDropMimeData(data, Qt.DropAction.MoveAction, -1, 0, QModelIndex())
     data = model.mimeData([model.index_for_node("card:" + parent.id)])
     assert not model.canDropMimeData(
-        data, Qt.DropAction.MoveAction, -1, 0, model.index_for_node(f"dice:{dice.id}")
+        data, Qt.DropAction.MoveAction, -1, 0, model.index_for_node(f"table:{table.id}")
     )
     data = model.mimeData([model.index_for_node("card:" + child.id)])
     with qtbot.waitSignal(model.move_requested) as signal:
@@ -68,7 +64,7 @@ def test_all_document_kinds_can_drag_root_drop_and_mixed_cycles_are_rejected(qtb
 
 
 def test_title_update_preserves_indices_without_duplicate_payload_state(qapp):
-    model, entities, parent, child, document, table, dice = mixed_model()
+    model, entities, parent, child, document, table = mixed_model()
     first = model.itemFromIndex(model.index_for_node(f"map:{document.id}"))
     entities.update(document.id, title="Renamed")
     model.set_entities(entities.summaries())
@@ -77,7 +73,7 @@ def test_title_update_preserves_indices_without_duplicate_payload_state(qapp):
     entities.delete(document.id)
     model.set_entities(entities.summaries())
     assert not model.index_for_node(f"table:{table.id}").isValid()
-    assert not model.index_for_node(f"dice:{dice.id}").isValid()
+    assert not model.index_for_node(f"table:{table.id}").isValid()
     assert model.index_for_node("card:" + parent.id).isValid()
 
 
@@ -106,7 +102,7 @@ def test_create_map_and_table_from_plus_menu_without_top_navigation(
     table = next(iter(app.modules.session.tables.values()))
     assert panel.tree_model.index_for_node(f"table:{table.id}").data() == "From tree"
     assert not app.cards.all()
-    assert not {"Карточки", "Карты", "Инструменты"}.intersection(
+    assert not {"Карточки", "Карты"}.intersection(
         item.text() for item in app.window.menuBar().actions()
     )
     assert project.save_current()
@@ -153,7 +149,7 @@ def test_selected_row_buttons_open_and_child_creation_is_contextual(project, qtb
     assert first is not None
     qtbot.mouseClick(panel.inline_actions.open_button, Qt.MouseButton.LeftButton)
     assert app.window_manager.find_window(f"card-editor:{card.id}") is first
-    monkeypatch.setattr(CardCreationDialog, "get_card", lambda *a: ("Child", "empty", "note", True))
+    monkeypatch.setattr(CardCreationDialog, "get_card", lambda *a: ("Child", "note", True))
     menu = panel.context_menu(index)
     action(action(menu, "child").menu(), "create-card").trigger()
     assert app.cards.child_ids(card.id)
@@ -177,11 +173,9 @@ def test_enter_opens_dice_and_table_and_selection_does_not_retarget_cards(projec
     assert not app.window.inspector_panel.title_edit.isReadOnly()
     assert app.session.current_entity_id == table.id
     assert editor.card_id == card.id and editor.text_edit.toPlainText() == "Keep"
-    dice = app.modules.session.create_dice("Checks", table.id)
-    panel.tree_view.setCurrentIndex(panel.tree_model.index_for_node(f"dice:{dice.id}"))
-    qtbot.keyClick(panel.tree_view, Qt.Key.Key_Return)
-    assert app.window_manager.find_window(f"dice:{dice.id}") is not None
-    assert app.window.inspector_panel.id_edit.text() == dice.id
+    dice = app.modules.open_dice()
+    assert app.window_manager.find_window("tool:dice") is dice
+    assert app.window.inspector_panel.id_edit.text() == table.id
 
 
 def test_module_rename_delete_updates_summary_and_closes_only_its_document(project, monkeypatch):
@@ -238,7 +232,7 @@ def test_obsolete_workspace_state_is_rejected_without_creating_documents(project
     data["documents"].append("dice")
     with pytest.raises(ValueError, match="версия раскладки"):
         restore_workspace(app, data)
-    assert not app.modules.session.dice
+    assert not hasattr(app.modules.session, "dice")
     assert set(app.window_manager.window_keys()) == {f"card-editor:{card.id}"}
 
 

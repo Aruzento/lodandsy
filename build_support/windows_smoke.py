@@ -6,6 +6,7 @@ import sys
 import tempfile
 import time
 from contextlib import ExitStack
+from dataclasses import replace
 from pathlib import Path
 
 import PySide6
@@ -56,8 +57,8 @@ def main():
             cleanup.callback(setattr, window, "close_guard", None)
             root = Path(temporary).resolve()
             project.create_project(root / "Мир с кириллицей")
-            a = controller.create_card("Город", template_id="article")
-            b = controller.create_card("Таверна", template_id="character")
+            a = controller.create_card("Город", card_type="article")
+            b = controller.create_card("Таверна", card_type="character")
             first = controller.open_card_editor(a.id)
             second = controller.open_card_editor(b.id)
             first.widget().text_edit.insertPlainText("Город\n\n" + "История " * 10)
@@ -72,8 +73,19 @@ def main():
             controller.card_images.portrait(second.widget(), source)
             wait(app, lambda: not controller.card_images.importing)
             assert controller.cards.get(b.id).portrait.asset_id in project.assets
-            second.widget().portrait_panel.caption.setText("Портрет ведущего")
-            second.widget().portrait_panel.caption.editingFinished.emit()
+            portrait = controller.cards.get(b.id).portrait
+            second.widget().portrait_panel.changed.emit(
+                replace(portrait, crop=(0.2, 0.1, 0.4, 0.8))
+            )
+            notes = controller.session.add_section(a.id, "Путевые заметки")
+            first.widget().select_section(notes.id)
+            first.widget().text_edit.insertPlainText("Независимый раздел")
+            inventory = next(
+                s for s in controller.cards.get(b.id).sections if s.purpose == "inventory"
+            )
+            inventory_table = controller.session.section_table(b.id, inventory.id)
+            assert controller.session.section_table(b.id, inventory.id).id == inventory_table.id
+            second.widget().select_section(inventory.id)
             progress = []
             controller.modules.import_progress.connect(progress.append)
             controller.modules.import_map(args.large_map_image or source, "Область")
@@ -83,7 +95,7 @@ def main():
             controller.session.update_entity(document.id, parent_id=b.id)
             map_widget = controller.modules.open_map(document.id).widget()
             wait(app, lambda: map_widget.view._background is not None, timeout=120)
-            grid = MapGrid(True, 50, 10, 10, 0.5, True)
+            grid = MapGrid(True, 50, 10, 10, 0.5)
             controller.modules.session.edit_map(document.id, grid=grid)
             token = controller.modules.session.add_token(document.id, a.id, 120, 130)
             item_token = controller.modules.session.add_token(
@@ -100,12 +112,11 @@ def main():
             controller.modules.session.add_object(
                 document.id, other_layer.id, document.asset_id, 110, 120, 100, 80
             )
-            map_widget.edit_mode.setChecked(True)
-            assert map_widget.view.edit_mode and len(map_widget.view._objects) == 2
+            map_editor = controller.modules.open_map_editor(document.id).widget()
+            assert map_editor is not map_widget and len(map_editor.view._objects) == 2
             controller.modules.session.edit_layer(document.id, other_layer.id, visible=False)
-            map_widget.edit_mode.setChecked(False)
             controller.modules.session.move_token(document.id, token.id, 190, 190)
-            assert controller.modules.session.get_map(document.id).tokens[0].x == 185
+            assert controller.modules.session.get_map(document.id).tokens[0].x == 190
             controller.modules.session.undo_stack(document.id).undo()
             assert controller.modules.session.get_map(document.id).tokens[0].x == token.x
             table = controller.modules.session.create_table("Встречи")
@@ -127,21 +138,28 @@ def main():
             )
             table_widget = controller.modules.open_table(table.id).widget()
             assert table_widget.model.setData(table_widget.model.index(0, 0), "Дракон")
-            table_widget.roll_requested.click()
-            assert "Количество: 0" in table_widget.result.text()
-            assert "Есть: false" in table_widget.result.text()
+            table_widget.table.selectRow(0)
+            table_widget.copy_selection()
+            assert QApplication.clipboard().text() == "Дракон\t0\tfalse"
+            assert not table_widget.model.setData(table_widget.model.index(0, 1), "bad")
+            assert project.draft_count == 1
+            assert project.save_current()
+            assert (
+                next(t for t in project.store.load().tables if t.id == table.id)
+                .rows[0]
+                .value(columns[1].id)
+                == 0
+            )
+            project.discard_drafts()
             dice = controller.modules.open_dice().widget()
-            dice_document = dice.document
-            controller.session.update_entity(dice_document.id, parent_id=table.id)
             dice.counts[20].setValue(0)
             dice.counts[6].setValue(3)
             dice.counts[100].setValue(1)
             dice.modifier.setValue(-2)
-            dice.duplicate_preset()
             dice.throw()
             assert " = " in dice.result.toPlainText()
             assert "d100:" in dice.result.toPlainText()
-            assert len(controller.window_manager.window_keys()) == 5
+            assert len(controller.window_manager.window_keys()) == 6
             second.dock.setFloating()
             app.processEvents()
             assert second.dock.floatingDockContainer().isWindow()
@@ -187,7 +205,7 @@ def main():
             project.open_project(root / "Мир с кириллицей")
             reopened_map = controller.modules.open_map(document.id).widget()
             wait(app, lambda: reopened_map.view._background is not None, timeout=120)
-            wait(app, lambda: len(controller.window_manager.window_keys()) == 5)
+            wait(app, lambda: len(controller.window_manager.window_keys()) == 6)
             assert project.store.load() == expected
             controller.delete_card(a.id)
             assert len(controller.modules.session.get_map(document.id).tokens) == 1
@@ -208,8 +226,10 @@ def main():
                 "canonical_card_fields": True,
                 "mow_synthetic_import": True,
                 "unicode_paths": True,
-                "templates_card_images_tokens_grid": True,
-                "rich_only_portrait_typed_table_mixed_dice": True,
+                "uuid_sections_child_inventory_crop": True,
+                "independent_map_editor_free_tokens": True,
+                "typed_table_and_nonblocking_drafts": True,
+                "application_dice_tool": True,
                 "mixed_entity_hierarchy": True,
                 "large_map_supplied": bool(args.large_map_image),
                 "manual_acceptance": "not performed by this automated smoke",

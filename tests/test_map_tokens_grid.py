@@ -59,17 +59,17 @@ def test_token_invariants_reject_invalid_geometry_and_ids(field, value):
         replace(token, **{field: value})
 
 
-def test_grid_snap_undo_resize_does_not_move_tokens_and_other_token_is_independent(qapp):
+def test_grid_undo_resize_does_not_move_tokens_and_other_token_is_independent(qapp):
     session = ModuleSession()
     document = session.create_map("Map", str(uuid4()))
     pin = session.add_card_placement(Card("M1"), document.id, 0.2, 0.3)
     token = session.add_card_placement(Card("Token"), document.id, 105, 130)
-    grid = MapGrid(True, 50, 10, 15, 0.5, True)
+    grid = MapGrid(True, 50, 10, 15, 0.5)
     session.edit_map(document.id, grid=grid)
     assert session.get_map(document.id).tokens[1] == token
     session.move_token(document.id, token.id, 120, 140, bounds=(500, 400))
     moved = session.get_map(document.id).tokens[1]
-    assert (moved.x, moved.y) == (135, 140)
+    assert (moved.x, moved.y) == (120, 140)
     session.undo_stack(document.id).undo()
     assert session.get_map(document.id).tokens[1] == token
     session.undo_stack(document.id).redo()
@@ -161,7 +161,6 @@ def test_grid_dialog_render_and_selection_do_not_snap_existing_tokens(project, q
         dialog.enabled.setChecked(True)
         dialog.cell.setValue(50)
         dialog.x.setValue(10)
-        dialog.snap.setChecked(True)
         dialog.accept()
 
     QTimer.singleShot(0, configure)
@@ -188,18 +187,18 @@ def test_grid_dialog_render_and_selection_do_not_snap_existing_tokens(project, q
     assert not project.saver.dirty
 
 
-def test_annotation_updates_reuse_items_and_noop_snap_restores_view(project, qtbot, tmp_path):
+def test_annotation_updates_reuse_items_and_free_movement(project, qtbot, tmp_path):
     app, project = project
     document, widget = open_map(app, project, tmp_path, qtbot)
     token = app.modules.session.add_token(document.id, app.create_card("Token").id, 135, 135)
     item = widget.view._tokens[0]
-    app.modules.session.edit_map(document.id, grid=MapGrid(True, 50, 10, 10, 0.5, True))
+    app.modules.session.edit_map(document.id, grid=MapGrid(True, 50, 10, 10, 0.5))
     assert widget.view._tokens[0] is item
     count = app.modules.session.undo_stack(document.id).count()
     item.setPos(140, 141)
     widget.view.token_moved.emit(token.id, 140, 141)
-    assert app.modules.session.undo_stack(document.id).count() == count
-    assert item.pos().x() == item.pos().y() == 135
+    assert app.modules.session.undo_stack(document.id).count() == count + 1
+    assert (item.pos().x(), item.pos().y()) == (140, 141)
     app.modules.session.edit_token(document.id, token.id, label_override="Renamed", cells_w=2)
     assert widget.view._tokens[0] is item and item.boundingRect().width() == 100
 
@@ -217,12 +216,12 @@ def test_user_titles_stay_plain_in_graphics_tooltips(project, qtbot, tmp_path):
 
 
 @pytest.mark.parametrize("zoom", [0.5, 2])
-def test_drag_world_coordinates_and_snap_are_independent_of_zoom(project, qtbot, tmp_path, zoom):
+def test_drag_world_coordinates_are_independent_of_zoom(project, qtbot, tmp_path, zoom):
     app, project = project
     app.window.show()
     document, widget = open_map(app, project, tmp_path, qtbot)
     token = app.modules.session.add_token(document.id, app.create_card("Token").id, 120, 130)
-    app.modules.session.edit_map(document.id, grid=MapGrid(True, 50, 10, 10, 0.5, True))
+    app.modules.session.edit_map(document.id, grid=MapGrid(True, 50, 10, 10, 0.5))
     view = widget.view
     view.resetTransform()
     view.scale(zoom, zoom)
@@ -234,7 +233,8 @@ def test_drag_world_coordinates_and_snap_are_independent_of_zoom(project, qtbot,
     qtbot.mouseRelease(view.viewport(), Qt.MouseButton.LeftButton, pos=end)
     qtbot.waitUntil(lambda: app.modules.session.get_map(document.id).tokens[0].x != token.x)
     moved = app.modules.session.get_map(document.id).tokens[0]
-    assert (moved.x, moved.y) == (185, 185)
+    assert moved.x == pytest.approx(190, abs=2 / zoom)
+    assert moved.y == pytest.approx(190, abs=2 / zoom)
     app.modules.session.undo_stack(document.id).undo()
     assert app.modules.session.get_map(document.id).tokens[0] == token
 
@@ -286,7 +286,7 @@ def test_character_circle_item_aspect_alpha_and_cell_footprint(qapp):
         resized = replace(token, cells_w=2, cells_h=3)
         item.set_value(resized, resolve_token(resized, card), None, None, provider)
         assert (item.boundingRect().width(), item.boundingRect().height()) == (128, 192)
-    assert MapGrid(True, 50, 10, 15, snap=True).snap_point(120, 140, 2, 2) == (110, 165)
+    assert not hasattr(MapGrid(), "snap_point")
 
 
 def test_far_grid_lod_stays_visible_without_mutating_world(project, qtbot, tmp_path):
@@ -339,7 +339,9 @@ def test_tree_card_drop_creates_placement_without_reparent_and_rejects_other_kin
     assert dropped.isAccepted() and app.session.entities.get(card.id) == before
     assert app.modules.session.get_map(document.id).tokens[0].card_id == card.id
     for kind, key in [("map", document.id), ("card", card.id)]:
-        view.edit_mode = kind == "card"
+        view = (
+            widget.view if kind == "map" else app.modules.open_map_editor(document.id).widget().view
+        )
         mime = model.mimeData([model.index_for_node(kind + ":" + key)])
         event = QDragEnterEvent(
             position,

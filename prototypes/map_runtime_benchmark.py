@@ -99,7 +99,7 @@ def main():
                 project.assets[asset.id] = asset
                 columns = 40
                 rows = (args.tokens + columns - 1) // columns
-                card = controller.create_card("Shared Card", template_id="character")
+                card = controller.create_card("Shared Card", card_type="character")
                 controller.session.update_card(card.id, portrait=Portrait(asset.id))
                 tokens = tuple(
                     TokenInstance(

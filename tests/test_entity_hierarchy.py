@@ -25,7 +25,7 @@ pytest_plugins = ["tests.project_fixture"]
 
 def test_mixed_forest_validates_before_changes_and_preserves_payload_identity():
     entities = EntityCollection()
-    nodes = [entities.create(kind, kind, object()) for kind in ("card", "map", "table", "dice")]
+    nodes = [entities.create(kind, kind, object()) for kind in ("card", "map", "table", "card")]
     for parent, child in zip(nodes, nodes[1:]):
         entities.update(child.id, parent_id=parent.id)
     before = entities.summaries()
@@ -49,13 +49,13 @@ def test_mixed_forest_validates_before_changes_and_preserves_payload_identity():
     assert entities.get(nodes[0].id).position == 0
 
 
-def test_mixed_dnd_dice_save_restart_layout_and_subtree_delete(project, tmp_path, monkeypatch):
+def test_mixed_dnd_tool_save_restart_layout_and_subtree_delete(project, tmp_path, monkeypatch):
     app, controller = project
     controller.create_project(tmp_path / "world")
     card = app.create_card("Root")
     other = app.create_card("Keep")
     table = app.modules.session.create_table("Table")
-    dice = app.modules.session.create_dice("Checks")
+    child = app.create_card("Child", table.id)
     entities, panel = app.session.entities, app.window.tree_panel
     model = panel.tree_model
     assert model.dropMimeData(
@@ -66,7 +66,7 @@ def test_mixed_dnd_dice_save_restart_layout_and_subtree_delete(project, tmp_path
         model.index_for_node("card:" + card.id),
     )
     assert model.dropMimeData(
-        model.mimeData([model.index_for_node(f"dice:{dice.id}")]),
+        model.mimeData([model.index_for_node(f"card:{child.id}")]),
         Qt.DropAction.MoveAction,
         -1,
         0,
@@ -77,33 +77,33 @@ def test_mixed_dnd_dice_save_restart_layout_and_subtree_delete(project, tmp_path
         Qt.DropAction.MoveAction,
         -1,
         0,
-        model.index_for_node(f"dice:{dice.id}"),
+        model.index_for_node(f"card:{child.id}"),
     )
-    assert entities.get(dice.id).parent_id == table.id
+    assert entities.get(child.id).parent_id == table.id
     editor = app.open_card_editor(other.id).widget()
     editor.text_edit.setPlainText("unsaved text survives unrelated moves")
     app.modules.open_table(table.id)
-    dice_widget = app.modules.open_dice(dice.id).widget()
+    dice_widget = app.modules.open_dice().widget()
     dice_widget.counts[20].setValue(0)
     dice_widget.counts[8].setValue(3)
     dice_widget.modifier.setValue(-2)
-    assert app.modules.open_dice(dice.id).widget() is dice_widget
+    assert app.modules.open_dice().widget() is dice_widget
     panel.tree_view.setExpanded(model.index_for_node("card:" + card.id), True)
     panel.tree_view.setExpanded(model.index_for_node(f"table:{table.id}"), True)
-    panel.tree_view.setCurrentIndex(model.index_for_node(f"dice:{dice.id}"))
-    assert app.session.current_entity_id == dice.id
+    panel.tree_view.setCurrentIndex(model.index_for_node(f"card:{child.id}"))
+    assert app.session.current_entity_id == child.id
     assert controller.save_current()
     root = controller.store.root
     controller.create_project(tmp_path / "other", preserve_current=False)
     controller.open_project(root)
-    assert app.modules.session.get_dice(dice.id).presets[0].config.expression() == "3d8 -2"
-    assert app.session.current_entity_id == dice.id
-    assert panel.current_node_key() == f"dice:{dice.id}"
+    assert app.modules.open_dice().widget().runtime["config"].expression() == "3d8 -2"
+    assert app.session.current_entity_id == child.id
+    assert panel.current_node_key() == f"card:{child.id}"
     assert panel.tree_view.isExpanded(model.index_for_node("card:" + card.id))
     assert html_text(app.cards.get(other.id).content).strip() == (
         "unsaved text survives unrelated moves"
     )
-    assert app.window_manager.find_window(f"dice:{dice.id}") is not None
+    assert app.window_manager.find_window("tool:dice") is not None
     messages = []
 
     def accept(*args, **kwargs):
@@ -115,7 +115,7 @@ def test_mixed_dnd_dice_save_restart_layout_and_subtree_delete(project, tmp_path
     assert "Всего: 3" in messages[0] and "таблиц: 1" in messages[0]
     assert app.session.entities.child_ids() == (other.id,)
     assert app.window_manager.find_window(f"table:{table.id}") is None
-    assert app.window_manager.find_window(f"dice:{dice.id}") is None
+    assert app.window_manager.find_window("tool:dice") is not None
     assert app.window_manager.find_window(f"card-editor:{other.id}") is not None
     assert controller.save_current()
     assert controller.store.load().cards == (app.cards.get(other.id),)
@@ -146,7 +146,7 @@ def test_current_map_mixed_dnd_keeps_objects_and_broken_links(project, tmp_path)
     root, linked_card = app.cards.all()
     document = next(iter(app.modules.session.maps.values()))
     table = next(iter(app.modules.session.tables.values()))
-    dice = app.modules.session.create_dice("Checks", table.id)
+    branch = app.create_card("Branch", table.id)
     for source, parent in (
         (f"map:{document.id}", f"card:{root.id}"),
         (f"table:{table.id}", f"map:{document.id}"),
@@ -171,10 +171,10 @@ def test_current_map_mixed_dnd_keeps_objects_and_broken_links(project, tmp_path)
         Qt.DropAction.MoveAction,
         -1,
         0,
-        model.index_for_node(f"dice:{dice.id}"),
+        model.index_for_node(f"card:{branch.id}"),
     )
     assert model.dropMimeData(
-        model.mimeData([model.index_for_node(f"dice:{dice.id}")]),
+        model.mimeData([model.index_for_node(f"card:{branch.id}")]),
         Qt.DropAction.MoveAction,
         -1,
         0,
@@ -185,9 +185,9 @@ def test_current_map_mixed_dnd_keeps_objects_and_broken_links(project, tmp_path)
         Qt.DropAction.MoveAction,
         -1,
         0,
-        model.index_for_node(f"dice:{dice.id}"),
+        model.index_for_node(f"card:{branch.id}"),
     )
-    assert entities.get(document.id).parent_id == dice.id
+    assert entities.get(document.id).parent_id == branch.id
     assert controller.save_current()
     snapshot = controller.store.load()
     assert snapshot.maps == (replace(document, tokens=()),)
@@ -205,7 +205,7 @@ def test_search_dispatches_all_document_kinds_and_selection_is_independent(proje
     editor = app.open_card_editor(card.id).widget()
     table = app.modules.session.create_table("Encounter")
     app.modules.session.edit_table(table.id, rows=record_rows(table, ("a searchable wolf",)))
-    dice = app.modules.session.create_dice("Guards")
+    map_document = app.modules.session.create_map("Guards", str(uuid4()))
     app.open_search()
     dialog = app._search_dialog
     dialog.query.setText("wolf")
@@ -216,7 +216,7 @@ def test_search_dispatches_all_document_kinds_and_selection_is_independent(proje
     dialog.query.setText("guards")
     dialog.refresh()
     dialog._open(dialog.results.item(0))
-    assert app.window_manager.find_window(f"dice:{dice.id}") is not None
+    assert app.window_manager.find_window(f"map:{map_document.id}") is not None
     assert editor.card_id == card.id
     assert app.window_manager.find_window(f"card-editor:{card.id}").widget() is editor
 
@@ -224,9 +224,9 @@ def test_search_dispatches_all_document_kinds_and_selection_is_independent(proje
 def test_mixed_envelope_rejects_duplicate_order_unknown_kind_and_missing_parent():
     root, child = str(uuid4()), str(uuid4())
     with pytest.raises(ValueError, match="positions"):
-        EntityCollection([(Entity(root, "card", "A", position=1), CardPayload())])
+        EntityCollection([(Entity(root, "card", "A", position=1), CardPayload(()))])
     with pytest.raises(ValueError, match="parent"):
-        EntityCollection([(Entity(root, "card", "A", child), CardPayload())])
+        EntityCollection([(Entity(root, "card", "A", child), CardPayload(()))])
     with pytest.raises(ValueError, match="kind"):
         Entity(root, "future", "Future")
     with pytest.raises(ValueError, match="Duplicate"):

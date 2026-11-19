@@ -3,14 +3,12 @@ import math
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QPainter
 from PySide6.QtWidgets import (
-    QComboBox,
     QGraphicsItem,
     QGraphicsScene,
     QGraphicsView,
     QLabel,
     QMenu,
     QToolBar,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -72,15 +70,22 @@ class TileLayer(QGraphicsItem):
 
 
 class MapView(QGraphicsView):
+    world_clicked = Signal(float, float)
     object_moved = Signal(str, float, float)
     object_action = Signal(str, str)
     card_dropped = Signal(str, float, float)
     token_moved = Signal(str, float, float)
     token_action = Signal(str, str)
     token_add_requested = Signal(float, float)
+    tool_changed = Signal(str)
 
-    def __init__(self):
+    def __init__(self, role="viewer"):
         super().__init__()
+        if role not in {"viewer", "editor"}:
+            raise ValueError("Unsupported map view role")
+        self.role = role
+        self.tool = "select"
+        self._previous_tool = None
         self.setScene(QGraphicsScene(self))
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
         self.map_width, self.map_height = 1000, 700
@@ -93,7 +98,6 @@ class MapView(QGraphicsView):
         self._background = None
         self._tokens = []
         self._objects = {}
-        self.edit_mode = False
         self._grid = None
 
     def set_pyramid(self, pyramid, tiles):
@@ -139,7 +143,7 @@ class MapView(QGraphicsView):
                 or item.presentation != presentation
                 or item.cell_size != document.grid.cell_size
                 or bool(item.flags() & QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
-                != (self._background is not None and not self.edit_mode)
+                != (self._background is not None and self.role == "viewer")
             ):
                 item.set_value(token, presentation, root, path, provider)
             items.append(item)
@@ -149,7 +153,7 @@ class MapView(QGraphicsView):
             item.setVisible(item.token.layer_id is None or layers[item.token.layer_id].visible)
             item.setAcceptedMouseButtons(
                 Qt.MouseButton.NoButton
-                if self.edit_mode
+                if self.role == "editor"
                 else Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton
             )
         ids = {o.id for o in document.objects}
@@ -175,7 +179,7 @@ class MapView(QGraphicsView):
 
     def _drag_card(self, event):
         if (
-            self.edit_mode
+            self.role == "editor"
             or self._background is None
             or not event.mimeData().hasFormat(ENTITY_MIME_TYPE)
         ):
@@ -206,6 +210,79 @@ class MapView(QGraphicsView):
         else:
             event.ignore()
 
+    def set_tool(self, name):
+        if self.role != "editor" or name not in {"select", "pan", "place"}:
+            return
+        self.tool = name
+        self.setDragMode(
+            QGraphicsView.DragMode.ScrollHandDrag
+            if name == "pan"
+            else QGraphicsView.DragMode.RubberBandDrag
+        )
+        for item in self._objects.values():
+            item.setFlag(
+                QGraphicsItem.GraphicsItemFlag.ItemIsMovable,
+                name == "select" and self._background is not None,
+            )
+        self.viewport().setCursor(
+            Qt.CursorShape.OpenHandCursor
+            if name == "pan"
+            else Qt.CursorShape.CrossCursor
+            if name == "place"
+            else Qt.CursorShape.ArrowCursor
+        )
+        self.tool_changed.emit(name)
+
+    def mousePressEvent(self, event):
+        if (
+            self.role == "editor"
+            and self.tool == "place"
+            and event.button() == Qt.MouseButton.LeftButton
+        ):
+            point = self.mapToScene(event.position().toPoint())
+            if (
+                self._background is not None
+                and 0 <= point.x() <= self.map_width
+                and 0 <= point.y() <= self.map_height
+            ):
+                self.world_clicked.emit(point.x(), point.y())
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event):
+        if self.role == "editor" and event.key() == Qt.Key.Key_Space:
+            if not event.isAutoRepeat() and self._previous_tool is None:
+                self._previous_tool = self.tool
+                self.set_tool("pan")
+            event.accept()
+            return
+        if self.role == "editor" and event.key() == Qt.Key.Key_Escape:
+            for item in self._objects.values():
+                if getattr(item, "_dragging", False):
+                    item.setPos(item._origin)
+                    item._cancelled = True
+            self.scene().clearSelection()
+            self.set_tool("select")
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event):
+        if event.key() == Qt.Key.Key_Space and self._previous_tool is not None:
+            if not event.isAutoRepeat():
+                tool, self._previous_tool = self._previous_tool, None
+                self.set_tool(tool)
+            event.accept()
+            return
+        super().keyReleaseEvent(event)
+
+    def focusOutEvent(self, event):
+        if self._previous_tool is not None:
+            tool, self._previous_tool = self._previous_tool, None
+            self.set_tool(tool)
+        super().focusOutEvent(event)
+
     def wheelEvent(self, event):
         scale = self.transform().m11()
         target = max(
@@ -218,10 +295,10 @@ class MapView(QGraphicsView):
         item = self.itemAt(event.pos())
         while item is not None and not isinstance(item, (TokenItem, RasterObjectItem)):
             item = item.parentItem()
-        if item is not None:
+        if item is not None and (isinstance(item, TokenItem) or self.role == "editor"):
             super().contextMenuEvent(event)
             return
-        if self.edit_mode:
+        if self.role == "editor":
             return
         point = self.mapToScene(event.pos())
         if 0 <= point.x() <= self.map_width and 0 <= point.y() <= self.map_height:
@@ -260,65 +337,30 @@ class MapView(QGraphicsView):
 
 
 class MapWidget(QWidget):
-    layer_action = Signal(str)
-    mode_changed = Signal()
     grid_requested = Signal()
-    rename_requested = Signal()
-    delete_requested = Signal()
+    editor_requested = Signal()
 
     def __init__(self, undo_stack):
         super().__init__()
         layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(6)
         buttons = QToolBar(self)
         buttons.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self.token_add = QAction(icon("plus"), "Токен", self)
-        self.token_add.setToolTip("Добавить токен с изображением в центре видимой области")
         self.token_add.setEnabled(False)
-        grid = QAction("Сетка…", self)
-        grid.setToolTip("Квадратная сетка, размер, смещение, прозрачность и snap")
+        grid = QAction(icon("table"), "Сетка", self)
         grid.triggered.connect(self.grid_requested)
         fit = QAction(icon("fit"), "Вся карта", self)
-        rename = QAction(icon("rename"), "Название", self)
-        delete = QAction(icon("delete"), "Удалить карту", self)
-        buttons.addActions([self.token_add, grid, fit, rename, delete])
-        self.edit_mode = QAction("Редактировать карту", self)
-        self.edit_mode.setCheckable(True)
-        buttons.addAction(self.edit_mode)
-        self.layers = QComboBox(self)
-        self.layers.setAccessibleName("Активный слой")
-        self.layers.setMaximumWidth(180)
-        self.layer_menu = QToolButton(self)
-        self.layer_menu.setText("Объекты и слои")
-        self.layer_menu.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        menu = QMenu(self)
-        for title, name in [
-            ("Разместить asset…", "place"),
-            ("Импортировать и разместить…", "import"),
-            ("Новый слой…", "add"),
-            ("Переименовать слой…", "rename"),
-            ("Показать / скрыть слой", "visible"),
-            ("Слой выше", "up"),
-            ("Слой ниже", "down"),
-            ("Удалить слой…", "delete"),
-        ]:
-            action = menu.addAction(title)
-            action.triggered.connect(lambda checked=False, n=name: self.layer_action.emit(n))
-        self.layer_menu.setMenu(menu)
-        buttons.addWidget(self.layers)
-        buttons.addWidget(self.layer_menu)
-        self.layers.hide()
-        self.layer_menu.hide()
-        self.edit_mode.toggled.connect(self._mode)
+        editor = QAction(icon("rename"), "Редактор", self)
+        editor.triggered.connect(self.editor_requested)
+        buttons.addActions([self.token_add, grid, fit, editor])
+        buttons.addSeparator()
+        self.add_undo_actions(buttons, undo_stack)
         layout.addWidget(buttons)
-        undo = undo_stack.createUndoAction(self, "Отменить")
-        redo = undo_stack.createRedoAction(self, "Повторить")
-        for action, shortcut in [(undo, "Ctrl+Z"), (redo, "Ctrl+Y")]:
-            action.setShortcut(shortcut)
-            action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-            self.addAction(action)
-            buttons.addAction(action)
         self.message = QLabel("Загрузка изображения…")
         self.message.setWordWrap(True)
+        self.message.setObjectName("mapStatus")
         layout.addWidget(self.message)
         self.view = MapView()
         layout.addWidget(self.view, 1)
@@ -327,24 +369,18 @@ class MapWidget(QWidget):
         fit.triggered.connect(
             lambda: self.view.fitInView(self.view.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
         )
-        rename.triggered.connect(self.rename_requested)
-        delete.triggered.connect(self.delete_requested)
 
-    def _mode(self, enabled):
-        self.view.edit_mode = enabled
-        self.token_add.setEnabled(not enabled and self.view._background is not None)
-        self.layers.setVisible(enabled)
-        self.layer_menu.setVisible(enabled)
-        self.view.scene().clearSelection()
-        self.mode_changed.emit()
-
-    def set_layers(self, layers):
-        current = self.layers.currentData()
-        self.layers.clear()
-        for layer in sorted(layers, key=lambda layer: layer.position):
-            self.layers.addItem(layer.title + (" · скрыт" if not layer.visible else ""), layer.id)
-        index = self.layers.findData(current)
-        self.layers.setCurrentIndex(max(0, index))
+    def add_undo_actions(self, bar, stack):
+        for name, shortcut, action in [
+            ("undo", "Ctrl+Z", stack.createUndoAction(self, "Отменить")),
+            ("redo", "Ctrl+Y", stack.createRedoAction(self, "Повторить")),
+        ]:
+            action.setIcon(icon(name))
+            action.setShortcut(shortcut)
+            action.setToolTip(action.text() + " · " + shortcut)
+            action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            self.addAction(action)
+            bar.addAction(action)
 
     def image_ready(self, root, _name):
         if root == self.project_root:

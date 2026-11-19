@@ -55,36 +55,20 @@ class FieldDefinition:
 
 
 @dataclass(frozen=True, slots=True)
-class SectionDefinition:
-    key: str
-    title: str
-    fields: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
 class CardTypeDefinition:
     id: str
     title: str
     fields: tuple[str, ...] = ()
     token_kind: str = "item"
+    initial_sections: tuple = ()
 
 
 _FIELDS = (
     FieldDefinition("title", "Название", max_length=2000),
     FieldDefinition("summary", "Краткое описание", max_length=500),
     FieldDefinition("description", "Описание", "richtext", max_length=2**21),
-    FieldDefinition("notes", "Заметки", "richtext", max_length=2**21),
-    FieldDefinition("tags", "Теги", "text_list", default=()),
     FieldDefinition("aliases", "Также известен как", "text_list", default=()),
     FieldDefinition("featured", "Важная карточка", "bool"),
-    *(
-        FieldDefinition(key, label, "richtext", "sections", max_length=2**21)
-        for key, label in [
-            ("history", "История"),
-            ("connections", "Связи"),
-            ("inventory", "Инвентарь"),
-        ]
-    ),
     FieldDefinition("race", "Раса", "text", "character"),
     FieldDefinition("class_or_role", "Класс / роль", "text", "character"),
     *(
@@ -119,13 +103,33 @@ CARD_TYPES = {
         CardTypeDefinition("note", "Заметка"),
         CardTypeDefinition("article", "Статья"),
         CardTypeDefinition(
-            "character", "Персонаж", ("race", "class_or_role", "hp", "ac", "speed"), "character"
+            "character",
+            "Персонаж",
+            ("race", "class_or_role", "hp", "ac", "speed"),
+            "character",
+            (
+                ("Описание", "rich_text", "description"),
+                ("История", "rich_text", None),
+                ("Связи", "rich_text", None),
+                ("Инвентарь", "table_ref", "inventory"),
+                ("Заметки", "rich_text", None),
+            ),
         ),
         CardTypeDefinition("item", "Предмет", ("rarity", "weight", "cost")),
         CardTypeDefinition("location", "Локация", ("region", "climate", "danger_level")),
         CardTypeDefinition("folder", "Папка"),
         CardTypeDefinition(
-            "creature", "Существо", ("race", "class_or_role", "hp", "ac", "speed"), "character"
+            "creature",
+            "Существо",
+            ("race", "class_or_role", "hp", "ac", "speed"),
+            "character",
+            (
+                ("Описание", "rich_text", "description"),
+                ("История", "rich_text", None),
+                ("Связи", "rich_text", None),
+                ("Инвентарь", "table_ref", "inventory"),
+                ("Заметки", "rich_text", None),
+            ),
         ),
         CardTypeDefinition("region", "Регион", ("climate", "danger_level")),
         *(
@@ -136,17 +140,6 @@ CARD_TYPES = {
                 ("object", "Объект"),
                 ("lore", "Лор"),
             ]
-        ),
-    )
-}
-SECTIONS = {
-    s.key: s
-    for s in (
-        SectionDefinition("description", "Описание", ("description",)),
-        SectionDefinition("details", "Характеристики", ()),
-        *(
-            SectionDefinition(key, FIELD_DEFINITIONS[key].label, (key,))
-            for key in ("history", "connections", "inventory", "notes")
         ),
     )
 }
@@ -178,3 +171,19 @@ def parse_field(key, text):
         value = text
     definition.validate(value)
     return value
+
+
+def available_fields(card):
+    permitted = {
+        *CARD_TYPES[card.card_type].fields,
+        "featured",
+        "related_entity",
+        "token_image",
+        "token_kind",
+        "token_cells_w",
+        "token_cells_h",
+    }
+    present = dict(card.values)
+    return tuple(
+        f for f in FIELD_DEFINITIONS.values() if f.key in permitted and f.key not in present
+    )

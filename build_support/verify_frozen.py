@@ -51,6 +51,9 @@ def main():
             "lodandsy.ui.card_tree_model",
             "lodandsy.ui.tools_widgets",
             "lodandsy.domain.tools",
+            "lodandsy.domain.card_templates",
+            "lodandsy.domain.dice_document",
+            "lodandsy.application.dice_payload_codec",
         }
     ]
     result = {

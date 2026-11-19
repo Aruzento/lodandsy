@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from lodandsy.application.rich_html import COLORS, FONT_SIZES, FONTS
+from lodandsy.ui.icons import icon
 
 
 class RichToolbar(QToolBar):
@@ -28,6 +29,7 @@ class RichToolbar(QToolBar):
         super().__init__(editor)
         self.editor, self.actions_by_name = editor, {}
         self.setMovable(False)
+        self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         self.paragraph = QComboBox()
         for name in ("Обычный", "Заголовок 1", "Заголовок 2", "Заголовок 3"):
             self.paragraph.addItem(name)
@@ -69,6 +71,8 @@ class RichToolbar(QToolBar):
         ):
             action = QAction(label, editor)
             action.setToolTip(tip + (f" · {key}" if key else ""))
+            if name in {"undo", "redo", "link", "image"}:
+                action.setIcon(icon(name if name != "image" else "map"))
             if key:
                 action.setShortcut(QKeySequence(key))
                 action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
@@ -78,7 +82,7 @@ class RichToolbar(QToolBar):
             self.actions_by_name[name] = action
             if name in {"bold", "italic", "underline", "link", "image", "undo", "redo"}:
                 self.addAction(action)
-            editor.addAction(action)
+            editor.text_edit.addAction(action)
         self.alignment = QComboBox()
         self.alignment.addItems(["Слева", "По центру", "Справа", "По ширине"])
         self.alignment.setAccessibleName("Выравнивание абзаца")

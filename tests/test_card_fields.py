@@ -13,8 +13,8 @@ from lodandsy.ui.card_search_dialog import CardSearchDialog
 pytest_plugins = ["tests.project_fixture"]
 
 
-def test_fields_roundtrip_unset_false_zero_refs_and_template_independence():
-    card = Card("Canon", card_type="character", template_id="character", portrait=Portrait())
+def test_fields_roundtrip_unset_false_zero_refs_and_type_change():
+    card = Card("Canon", card_type="character", portrait=Portrait())
     card = card.with_fields(
         {
             "name": "Same title",
@@ -22,9 +22,7 @@ def test_fields_roundtrip_unset_false_zero_refs_and_template_independence():
             "hp": 0,
             "ac": None,
             "featured": False,
-            "tags": ("city", "npc"),
             "aliases": ("A",),
-            "notes": text_document("N"),
             "related_entity": str(uuid4()),
             "token_image": str(uuid4()),
         }
@@ -33,10 +31,10 @@ def test_fields_roundtrip_unset_false_zero_refs_and_template_independence():
     assert card.value("hp") == 0 and card.value("featured") is False
     assert card.value("ac") is None and card.value("speed") is None
     assert card.content == card.value("description") == EMPTY_DOCUMENT
-    changed = replace(card, template_id="article")
-    assert changed.card_type == "character" and changed.values == card.values
+    changed = replace(card, card_type="article")
+    assert changed.sections == card.sections and changed.values == card.values
     version, data = encode_card(changed)
-    assert version == 3 and decode_card(changed.title, card.id, None, version, data) == changed
+    assert version == 4 and decode_card(changed.title, card.id, None, version, data) == changed
 
 
 @pytest.mark.parametrize(
@@ -56,7 +54,7 @@ def test_fields_roundtrip_unset_false_zero_refs_and_template_independence():
 )
 def test_invalid_field_patch_cannot_publish_partial_change(project, key, value):
     app, _ = project
-    card = app.create_card("Before", template_id="character")
+    card = app.create_card("Before", card_type="character")
     changes = []
     app.session.card_changed.connect(lambda *args: changes.append(args))
     with pytest.raises(ValueError):
@@ -67,7 +65,7 @@ def test_invalid_field_patch_cannot_publish_partial_change(project, key, value):
 def test_session_addressed_events_search_and_backup(project, tmp_path, qtbot):
     app, project = project
     project.create_project(tmp_path / "world")
-    card = app.create_card("Character", template_id="character")
+    card = app.create_card("Character", card_type="character")
     events = []
     app.session.card_changed.connect(lambda *args: events.append(args))
     app.session.update_card_fields(
@@ -75,11 +73,12 @@ def test_session_addressed_events_search_and_backup(project, tmp_path, qtbot):
         {
             "summary": "River guardian",
             "hp": 0,
-            "tags": ("river",),
-            "notes": text_document("A quiet hero"),
         },
     )
-    assert events[-1] == (card.id, frozenset({"summary", "hp", "tags", "notes"}))
+    assert events[-1] == (card.id, frozenset({"summary", "hp"}))
+    notes = card.sections[-1]
+    app.session.update_section(card.id, notes.id, content=text_document("A quiet hero"))
+    assert notes.id in events[-1][1]
     search = CardSearchDialog(app.session)
     qtbot.addWidget(search)
     search.query.setText("guardian")
@@ -93,7 +92,7 @@ def test_session_addressed_events_search_and_backup(project, tmp_path, qtbot):
     restored = SQLiteProjectStore.restore(backup, tmp_path / "restored")
     assert restored.load() == snapshot
     restored.close()
-    app.session.update_card(card.id, template_id="empty")
+    app.session.update_card(card.id, card_type="note")
     assert app.cards.get(card.id).value("hp") == 0
 
 

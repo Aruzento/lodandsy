@@ -1,8 +1,5 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from random import SystemRandom
-from uuid import uuid4
-
-from lodandsy.domain.module_values import validate_id, validate_title
 
 FACES = (4, 6, 8, 10, 12, 20, 100)
 
@@ -26,38 +23,6 @@ class DiceConfig:
     def expression(self):
         terms = [f"{n}d{faces}" for n, faces in zip(self.counts, FACES) if n]
         return " + ".join(terms or ["0"]) + (f" {self.modifier:+d}" if self.modifier else "")
-
-
-@dataclass(frozen=True, slots=True)
-class DicePreset:
-    name: str = "d20"
-    config: DiceConfig = field(default_factory=DiceConfig)
-    id: str = field(default_factory=lambda: str(uuid4()))
-
-    def __post_init__(self):
-        validate_id(self.id)
-        object.__setattr__(self, "name", validate_title(self.name))
-        if not isinstance(self.config, DiceConfig) or len(self.name) > 200:
-            raise ValueError("Invalid dice preset")
-
-
-@dataclass(frozen=True, slots=True)
-class DiceDocument:
-    title: str
-    id: str = field(default_factory=lambda: str(uuid4()))
-    presets: tuple[DicePreset, ...] = field(default_factory=lambda: (DicePreset(),))
-
-    def __post_init__(self):
-        validate_id(self.id)
-        object.__setattr__(self, "title", validate_title(self.title))
-        if (
-            not isinstance(self.presets, tuple)
-            or len(self.presets) > 200
-            or not all(isinstance(p, DicePreset) for p in self.presets)
-        ):
-            raise ValueError("Invalid dice presets")
-        if len({p.id for p in self.presets}) != len(self.presets):
-            raise ValueError("Duplicate preset ID")
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,9 +54,3 @@ def roll_dice(config: DiceConfig, rng=None):
         if count
     )
     return DiceResult(groups, config.modifier)
-
-
-@dataclass(frozen=True, slots=True)
-class DicePayload:
-    presets: tuple
-    version: int = field(default=2, init=False)

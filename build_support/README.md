@@ -1,83 +1,91 @@
-# LODANDSY — Windows-кандидат итерации 4
+# LODANDSY — Windows-кандидат итерации 5
 
-Распакуйте всю папку LODANDSY на Windows10/11 x64 и запустите LODANDSY.exe.
-Python/Qt/ADS/libvips встроены в _internal; exe отдельно не переносится.
-Мир создавайте отдельно: project.sqlite3 + assets — данные, .lodandsy-ui.json — UI,
-.lodandsy-cache — перестраиваемые tiles. Публичного release нет.
+Распакуйте всю папку LODANDSY на Windows10/11 x64, запустите LODANDSY.exe.
+Python/Qt/ADS/libvips встроены в _internal; exe отдельно не переносится. Мир создавайте
+отдельно: project.sqlite3 + assets — канон; .lodandsy-ui.json — UI; .lodandsy-cache —
+перестраиваемые тайлы. Текущий формат SQLite12/Card4/Map5/Table2. Старые тестовые версии
+отклоняются без записи; обязательных миграций нет. URI только lodandsy://entity/UUID.
+Это новый кандидат, прежний W2 preflight не является его визуальной приёмкой.
 
-Текущий формат SQLite11/Cardv3/Mapv4/Tablev2/Dicev2. Старые тестовые проекты отклоняются
-без записи; миграции/legacy редакторы отменены владельцем. Единственный URI entity/UUID.
-Именно этот кандидат требует новой приёмки; прежний W2 preflight уже принят.
+## Ручная приёмка — 23 замечания
 
-## Чек-лист десяти сценариев
+1. Создать Card через «+»: отсутствует выбор самостоятельного шаблона.
+2. Создать базовые типы и сменить тип: введённые значения/разделы сохраняются.
+3. «+» вкладок: текст → rename через ПКМ → edit/Undo → close/reopen, UUID стабилен.
+4. HP/AC/скорость только Inspector,0/false/unset корректны; повтор «Добавить поле» не
+   сбрасывает HP15, в выборе только допустимые отсутствующие поля.
+5. В Card нет aliases/tags, tags нет в поиске/модели. Aliases импорта сохранены как данные.
+6. Hero: название/тип/краткое описание/портрет/вкладки; нет длинной панели служебных форм.
+7. Инвентарь создаёт одну дочернюю Table; правки/invalid draft общие с самостоятельным
+   окном. Rename вкладки/таблицы не меняет UUID. Удалить вкладку — Table остаётся;
+   move/delete Table даёт диагностику ссылки и явную замену, без дубля.
+8. Портрет заметный на широком окне, не поглощает узкий dock при плавном resize.
+9. Пустая область портрета сама открывает выбор картинки мышью/клавиатурой.
+10. У загруженного портрета replace/crop/remove видны при hover/focus, доступны с Tab,
+    имеют tooltip; снятие не удаляет общий asset.
+11. Crop: рамка/dim/drag/zoom/preview/Apply/Cancel/Reset; EXIF фото и размеры/DPI. Cancel
+    оставляет crop, Apply сохраняется после restart/backup. Все наследующие токены обновлены,
+    image override не получает чужой crop. Источник не изменён, копий assets не появляется.
+12. Нет полей/диалога подписи/описания портрета и кнопки «…» рядом с ним.
+13. Сетка: маленькая прямоугольная карта по центру большого viewport; fit/pan/resize/
+    fractional zoom/100–125–150%/перенос между мониторами. Grid совпадает с bounds и
+    offset фона, линии тонкие/без тени, drag не оставляет следов.
+14. Нет snap в UI; токены движутся свободно, footprint в клетках не меняется от zoom.
+15. Viewer: нет отдельной кнопки переименования карты, имя через Tree/Inspector.
+16. «Редактировать карту» открывает отдельное окно: tools/layers/assets слева, canvas,
+    inline transforms справа. Import/existing asset/place/move/resize/rotate/z/delete,
+    layer name/order/visibility/deleteconfirm. Escape отменяет drag, Space — pan.
+    Viewer и editor вместе: данные/Undo общие, камеры разные, закрываются независимо,
+    повторное открытие фокусирует окно; delete Map закрывает оба.
+17. Undo/Redo одинаковые curved arrows с tooltip; Ctrl+Z/Y меняют только активный редактор,
+    не скрытый rich-раздел/соседнюю Table/другую карту.
+18. Table универсальна, нет random chooser/result panel/кнопок создания копий документа.
+19. [+] после последнего заголовка столбца и номера строки; пустая Table работает. Плюсы
+    не попадают в TSV/SQLite/содержимое, доступны после прокрутки в конец.
+20. ПКМ заголовка: name/type/delete с подтверждением данных; drag заголовка меняет порядок
+    без потери UUID/значений/выделения; type отказ не уничтожает ячейки.
+21. «Инструменты → Кубики» рядом с «Проект», доступно без мира, один tool:dice. Нет Dice
+    в Tree/Create и preset CRUD; roll не dirty мир, layout не создаёт дубль, project switch
+    оставляет тот же инструмент.
+22. Кубики сеткой на узком/широком dock: d4…d100/modifier/formula/каждый результат/крупная
+    сумма/repeat/clear/copy/history50; нулевой/чрезмерный бросок безопасен.
+23. Tree/Inspector растягиваются native разделителями, скрытие/возврат и restart сохраняют
+    ширины. Inspector без выбора показывает подсказку. Dock/center/insert/float/redock,
+    maximize→drag, focus/Tab, два монитора/mixedDPI не конфликтуют с боковыми областями.
 
-1. Canon/Inspector: создать Card пяти компоновок, отдельно сменить тип/шаблон, title/summary/
-   tags/aliases/характеристики,0/false/unset. Изменять в Card и Inspector, сохранять/reopen.
-   Невалидное поле подсвечено и блокирует save до исправления/отмены, не теряется при close.
-2. Design: hero и портрет рядом на широком окне/один столбец на узком, контекстный alt/caption/
-   replace/remove; несколько секций description/history/notes/inventory с независимым Undo/
-   курсором/scroll. Compact toolbar, secondary «Формат», все клавиатурные действия работают.
-3. Mixed Tree/links: Card/Map/Table/Dice nesting/reorder/root, cycle refusal, скрытый поиск,
-   «+» меню, дочерние через context. Copy URI/HTML, Ctrl+click открывает/фокусирует цель;
-   source остаётся. HTTP(S) по клику, нет загрузки network images/file/javascript resources.
-4. Card→tokens: одну Card с портретом разместить drag из Tree дважды и на второй карте;
-   Tree не меняет parent. Title/portrait/HP менять без переименования: все экземпляры обновлены.
-   Label/image/kind override явен и сбрасывается. Double click фокусирует Card. Удалить размещение
-   — Card остаётся; удалить Card — warning с числом всех размещений, подтверждённый cascade;
-   Undo карты не воскрешает Card/удалённые размещения. Broken ref диагностируется.
-5. Geometry/grid: character круг+white frame, item alpha/aspect fit без рамки;1×1/2×2/3×3,
-   snap/offset/cell size. Drag/repaint/pan/fractional zoom не утолщает grid, far LOD тонкий;
-   светлый/тёмный фон, исходные центры/математический шаг сохраняются.
-6. Map editor: «Редактировать карту»,2слоя, импорт decor один раз/много placements, существующий
-   asset, move/resize/rotation/z/delete/Undo/Redo. Layer visibility/order/rename сохраняются;
-   nonempty delete подтверждается, hidden не уничтожает. Вернуться к tokens без чужих drag.
-7. MOW: Проект→Импорт файла/каталога, выбрать source и узел назначения; preview/report до apply,
-   skip повторных UUID либо явный remap. Реальный sample: folder «Существа.Тюрьма - подземка»,
-   пустые body/portrait, missing parent warning. Runtime controls отсутствуют. Поддержанный
-   local img src и .wiki-link[data-page-id] переносятся; data-asset без manifest диагностируется.
-   Cycles/duplicate/bad YAML не публикуются частично. Source не изменён.
-8. Media/large map:20разных inline images, прокрутить до каждого и обратно/close/reopen,
-   missing/corrupt placeholder, image delete/Undo. Карты PNG/JPEG/WebP большие,2окна/1000tokens,
-   layers/objects, cancel/error/rebuild cache. Ресурсы bounded, фон не декодируется целиком в GUI.
-9. Tools/save: typed Table text/number/bool, invalid draft/correction/copy/atomic TSV/random row;
-   0/false не пусты. Dice d4…d100, mixed throw/каждый результат/сумма/повтор/copy/пресеты.
-   Одновременно Cards/Map/Table/Dice, autosave/Ctrl+S→перезапуск: те жеUUID/поля/ссылки/layout.
-   Backup вне мира→restore в новую папку, ресурсы/слои/MOW сохраняются, tiles строятся заново.
-10. Native/frozen: dock all sides/center/insert/float/redock, maximize→drag без прыжка,
-    локальный focus/Ctrl+Z, узкие окна/клавиатура,2монитора/mixedDPI/отключение монитора.
-    Именно новый ZIP проверить на чистой Windows без Python и в кириллическом пути.
+## Сквозные проверки
 
-## Ограничения и воспроизведение
+- Cards A/B + viewer/editor + Table + tool:dice одновременно;20 inline images, scroll туда/
+  обратно, несколько окон/crop/close/reopen, bounded caches, missing/corrupt placeholder.
+- Invalid Card/number Table draft + валидная правка другой Card → Ctrl+S/autosave:
+  валидное сохранено, draft явно помечен; I/O error отличается. Close/switch: Исправить /
+  Отбросить ошибочный ввод / Отмена, без потери уже сохранённых данных.
+- Суммарный rich budget4MiB по нескольким UUID-вкладкам: отказ видим, исходный канон не
+  подтверждён преждевременно, Undo/смена вкладки/close/reopen корректны.
+- MOW реальный sample и каталог: preview/report, skip/remap; aliases/source metadata/links/
+  supported assets перенесены, tags/template/portrait caption исключены с отчётом, старый
+  текст не создаёт выдуманный инвентарь. Источник не меняется, network/JS не исполняются.
+- Save→restart сохраняет UUID/sections/crop/child Table/layers/objects/placements/layout.
+  Backup вне мира → restore в новую папку: данные/ресурсы совпадают, тайлы перестраиваются.
+- Большая карта PNG/JPEG/WebP, два окна/1000tokens, cancel/error/rebuild cache. Не объявлять
+  массу объектов SLA. Именно новый ZIP запустить на чистой Windows без Python и в
+  кириллическом пути. ARU-64 пока не закрывать запуском на машине с Python.
 
-Backup/restore пока синхронны,≤4GiB суммарно без tile cache (ARU-54); cancellation/progress
-для них только следующий контракт. Source map≤2GiB, cache≤4GiB/32768tiles, worker≤512MiB/900s,
-tileLRU64MiB, BMP/GIF≤16MP. Raster Card/decor≤64MiB/32MP, thumbnail≤1024, documentLRU8MiB,
-sharedmedia16MiB/32pending. MOW import≤500файлов/2MiBкаждый/64MiBсуммарно, v1 subset.
-Эти пределы не являются SLA. Полный snapshot writer остаётся; incremental SQL не реализован.
-
-Автоматический smoke во временном мире (не ручная приёмка):
+## Воспроизведение и ограничения
 
 ```powershell
 .\LODANDSY.exe --self-test --report "$env:TEMP\lodandsy-smoke.json"
+# опционально: --large-map-image "C:\Maps\large.jpg"
 ```
 
-Для реального большого фона: --large-map-image "C:\Maps\large.jpg".
-Source: source/MANIFEST.sha256, ZIP SHA256 — соседний .zip.sha256.
+Это автоматический smoke во временном мире, не ручная визуальная приёмка.
+Build из source: CPython3.14.8 x64 + requirements-build.lock,
+`build_support/build_windows.ps1 -Python .venv/Scripts/python.exe -Archive LODANDSY-Iteration5-2026-11-19.zip`.
+source/MANIFEST.sha256 и docs/validation/iteration5-frozen-source.json фиксируют
+исходники и проверку compiled code; внешний SHA — соседний .zip.sha256. LICENSES и THIRD-PARTY.md в дистрибутиве.
 
-Пересборка Windows x64: CPython3.14.8, PySide6/Qt6.11.2, ADS5.1.1,
-pyvips3.2.0/binary8.18.7. Новых runtime зависимостей итерация4 не добавляет.
-
-```powershell
-py -3.14 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements-build.lock
-.\.venv\Scripts\python.exe -m pip install --no-build-isolation --no-deps -e .
-.\.venv\Scripts\python.exe -m pytest
-.\.venv\Scripts\python.exe -m ruff check .
-.\.venv\Scripts\python.exe -m pip check
-.\build_support\build_windows.ps1 -Archive LODANDSY-Iteration4-2026-11-19.zip
-```
-
-Лицензии/source/provenance в THIRD-PARTY.md и LICENSES. Qt LGPL/GPL texts должны находиться
-в .prototype-deps/license-texts; libvips hash проверяется сборщиком. ICU Windows, без лишней
-ICU78. При смене dependencies повторять compatibility/license/preflight. Commit/push/merge/
-release требуют нового отдельного разрешения владельца.
+Backup/restore пока синхронны,≤4GiB без tile cache; full snapshot writer остаётся.
+Background backup/progress/cancel/incremental SQL — отдельные задачи. Source map≤2GiB,
+cache≤4GiB/32768tiles, worker512MiB/900s, tileLRU64MiB, BMP/GIF≤16MP. Media64MiB/32MP,
+thumbnail≤1024, documentLRU8MiB/shared16MiB/32pending. MOW≤500файлов/2MiB/64MiB total,
+v1 subset. Эти пределы не являются SLA; реальные измерения и непроверенные пункты — отчёт.

@@ -1,40 +1,40 @@
 # LODANDSY
 
-Локальное Windows-приложение ведущего: независимые документы, общее дерево, карты и
-инструменты. Python 3.14 / PySide6 6.11.2 / Qt ADS 5.1.1. Tree/Inspector фиксированы;
-ADS размещает окна, WindowManager управляет жизнью.
+Локальное Windows-приложение ведущего: независимые документы, общее дерево и инструменты.
+Python3.14 / PySide6 6.11.2 / Qt ADS5.1.1. ADS размещает окна, WindowManager управляет жизнью.
 
-Итерация 4: [контракт MVP](docs/MVP.md), [требования A–G](docs/iterations/2026-11-19-iteration-4/CODEX-ITERATION-4.md),
-[проверки](docs/validation/2026-11-19-iteration-4.md). План и статусы — Linear.
+Итерация5: [MVP](docs/MVP.md), [пакет A–G](docs/iterations/2026-11-19-iteration-5/CODEX-ITERATION-5.md),
+[фактические проверки](docs/validation/2026-11-19-iteration-5.md),
+[визуальный контракт](docs/design/iteration-5-layout.md). План и статусы — Linear.
 
-Одно смешанное дерево Card/Map/Table/DiceDocument без разделов. «+» раскрывает создание,
-поиск скрыт под кнопкой (Ctrl+F); дочерние документы — через контекстное меню.
-Enter/двойной щелчок открывает или фокусирует окно ID. Выбор меняет Inspector, сохраняя
-контекст редакторов. Card — визуальный QTextEdit: шрифт/размер/цвет/списки/выравнивание,
-ссылки/изображения/Undo. Формат — контролируемый Qt HTML. Только lodandsy://entity/UUID;
-копирование ссылки даёт HTML fragment и plain URI. HTTP/HTTPS открываются по явной
-активации; сетевые ресурсы заблокированы, локальные картинки — только assets проекта.
-Импорт raster64MiB/32MP, bounded thumbnail, удаление ссылки не удаляет общий ресурс.
+Дерево Card/Map/Table. «+» раскрывает создание, поиск под кнопкой/Ctrl+F, дочерние через
+контекст. Card имеет только тип и UUID-вкладки: визуальный текст либо ссылка на дочернюю
+Table. Инвентарь персонажа — одна настоящая дочерняя таблица. Характеристики только в
+Inspector. Hero/портрет с crop, отдельный Undo каждой rich-вкладки, scoped hotkeys.
+Ширины боковых областей меняются native разделителями и сохраняются с раскладкой.
 
-SQLite S3 — единственный источник данных, assets отдельно. Autosave/Ctrl+S используют
-один writer с ревизиями и видимыми ошибками. Backup/restore до4GiB, UI state отдельно.
-По решению владельца legacy Markdown, старые форматы/режимы/адаптеры, обязательные
-миграции и архивирование отменены. Неподдерживаемый проект отклоняется без изменения
-файлов; тестовые миры пересоздаются. Устаревшее сохраняется лишь при обоснованной необходимости.
+Map viewer и самостоятельный Map Editor — два окна одного канона/Undo/tiles с разными
+камерами. Viewer управляет токенами Card, editor — слоями/raster objects и преобразованиями.
+Свободное движение без snap; grid в общих world coords. Большие карты — libvips worker и
+перестраиваемая пирамида, без полного background QPixmap в GUI. Source≤2GiB,
+cache≤4GiB/32768tiles, worker≤512MiB/900s, tileLRU64MiB, BMP/GIF≤16MP (ADR-011).
 
-Большие PNG/JPEG/WebP: ограниченный libvips worker и перестраиваемые тайлы (ADR-011).
-Source2GiB; cache4GiB/32768tiles; worker512MiB/900s; GUI LRU64MiB. BMP/GIF bounded16MP.
-Отмена/ошибка не публикует частичную пирамиду. Не заменять renderer полным QPixmap.
+Table: text/number/bool, [+] после заголовков, контекст/drag порядка, atomic TSV и copy,
+общие данные/drafts между окнами. «Инструменты → Кубики» — один tool:dice без Entity,
+доступный без проекта: d4…d100, modifier, каждый результат/сумма/copy/history50 в сессии.
 
-Карточка: канонические typed поля, независимые тип и компоновка, общие с Inspector
-данные, встроенный портрет, rich sections с отдельным Undo. TokenInstance — размещение Card:
-одна Card на нескольких картах, явные presentation overrides; удаление Card предупреждает
-числом размещений и удаляет их атомарно. Режим «Редактировать карту» управляет слоями и
-независимыми raster assets, движением/размером/порядком/видимостью/Undo.
+SQLite S3 — единственный канон, assets отдельно. SQLite12/Card4/Map5/Table2, UI state4.
+Autosave/Ctrl+S — один revision writer. Invalid UI drafts помечаются отдельно и не мешают
+сохранению допустимых данных. Close/switch предлагает исправить/отбросить draft/отмену.
+Backup/restore≤4GiB пока синхронны; full snapshot writer сохраняется (отдельные работы).
+Legacy Markdown/templates/tags/snap/Dice entity/random table mode удалены без адаптеров.
+Неподдерживаемые проекты отклоняются без записи, тестовые разрешено пересоздавать.
 
-Импорт MOW: «Проект → Импорт карточки/каталога MOW», preview → явный skip/remap → apply.
-Поддержан bounded v1 YAML + HTML card shell; runtime не исполняется, data-asset без manifest
-диагностируется. Source read-only, текущий Card формат единственный (SQLite11/Cardv3/Mapv4).
+Qt HTML whitelist, единственный URI lodandsy://entity/UUID через application layer.
+HTTP(S) только по явному клику, network resources заблокированы, local images — только
+assets с защитой выхода из директории. Media≤64MiB/32MP, bounded thumbnails/working set.
+MOW v1 subset — read-only import preview → skip/remap → atomic apply, source metadata/
+aliases/безопасные тексты/media/links сохраняются, исключённые данные отражены в отчёте.
 
 ## Подготовка и запуск
 
@@ -52,9 +52,11 @@ python -m lodandsy.main
 python -m pytest
 python -m ruff check .
 python -m pip check
+git diff --check
 ```
 
-Windows: requirements-build.lock и build_support/build_windows.ps1;
-[сборка и ручная приёмка](build_support/README.md). Прежняя приёмка не покрывает A–G.
-Новая полная поставка без Python пока не проверена (ARU-64). Публичного release нет.
-Commit/push/merge требуют отдельного разрешения.
+Windows: requirements-build.lock, build_support/build_windows.ps1 и
+[сборка/чек-лист приёмки23 пунктов](build_support/README.md).
+Прежняя приёмка не покрывает новый вид/поведение. Clean Windows без Python (ARU-64),
+физическая mixedDPI и визуальная приёмка владельца учитываются отдельно. Public release нет.
+Git-действия только после итоговой проверки и разрешения владельца.

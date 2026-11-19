@@ -1,9 +1,9 @@
 from PySide6.QtGui import QColor, QFont, QPalette
 
 COLORS = {
-    "background": "#101722",
-    "surface": "#172230",
-    "input": "#131e2d",
+    "background": "#0b111a",
+    "surface": "#121c29",
+    "input": "#101925",
     "border": "#303e50",
     "text": "#e8edf4",
     "muted": "#aab7ca",
@@ -42,14 +42,25 @@ def apply_theme(app):
         palette.setColor(QPalette.ColorGroup.Disabled, role, QColor("#7e8ca2"))
     app.setPalette(palette)
     app.setStyleSheet("""
-        QWidget#cardPage { background:#131e2d; }
+        QMainWindow::separator { background:#263447; width:5px; height:5px; }
+        QMainWindow::separator:hover { background:#ceb075; }
+        QWidget#cardPage { background:#121c29; }
+        QLabel#emptyInspector { color:#aab7ca; padding:24px; font-size:14px; }
+        QToolButton#portraitImage { background:#0b111a; border:1px solid #263447;
+                                   padding:4px; color:#aab7ca; font-size:16px; }
+        QToolButton#portraitImage:hover, QToolButton#portraitImage:focus { border-color:#ceb075; }
         QLineEdit#cardHeroTitle { font-size:22px; font-weight:600; padding:4px 0;
                                 border:1px solid transparent; background:transparent; }
         QLineEdit#cardHeroTitle:focus { border-bottom:1px solid #ceb075; }
         QPlainTextEdit#cardSummary { background:transparent; border:0; padding:0;
                                    color:#bcc8d8; font-size:14px; }
-        QLabel#portraitImage { background:#101722; border:1px solid rgba(255,255,255,22);
-                               border-radius:6px; color:#aab7ca; }
+        QWidget#diceFace { background:#121c29; border:1px solid #263447; border-radius:6px; }
+        QPushButton#primaryAction { background:#ceb075; color:#0b111a; font-weight:600; }
+        QPushButton#primaryAction:hover { background:#dfc28b; border-color:#dfc28b; }
+        QLabel#mapStatus { color:#aab7ca; padding:4px 8px; }
+        QHeaderView::section { background:#172235; padding:6px; border:0;
+                              border-right:1px solid #263447; color:#bcc8d8; }
+        QTableView { gridline-color:#263447; }
         QLabel#mutedCaption { color:#aab7ca; font-size:12px; }
         QLabel#errorNotice { color:#f19a9a; padding:4px 12px; }
         QTextEdit#visualCardEditor { background:#131e2d; padding:12px 18px;

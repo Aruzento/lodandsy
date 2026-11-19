@@ -73,6 +73,8 @@ class CardEditorBinding:
         if not self._disposed:
             try:
                 self.session.update_card_fields(self.card_id, changes)
+                for key in changes:
+                    self.session.set_field_draft(self.card_id, key, None)
             except ValueError as error:
                 from lodandsy.ui.card_fields import field_text
 
@@ -106,4 +108,14 @@ class CardEditorBinding:
         if card_id != self.card_id:
             return
 
-        self.session.update_card_fields(card_id, {self.editor.current_section: content})
+        key = self.editor.current_section
+        try:
+            self.session.update_section(card_id, key, content=content)
+        except ValueError as error:
+            self.session.set_field_draft(card_id, key, content)
+            self.editor.show_link_error(str(error))
+            return
+        self.session.set_field_draft(card_id, key, None)
+        self.editor._content = content
+        self.editor.text_edit.document().canonical_content = content
+        self.editor.text_edit.document().pending_content = None

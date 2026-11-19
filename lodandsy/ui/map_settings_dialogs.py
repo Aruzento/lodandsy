@@ -31,9 +31,6 @@ class MapGridDialog(QDialog):
         self.x = number(self, grid.offset_x, -1e9, 1e9)
         self.y = number(self, grid.offset_y, -1e9, 1e9)
         self.opacity = number(self, grid.opacity * 100, 0, 100)
-        self.snap = QCheckBox("Прилипание к центрам клеток", self)
-        self.snap.setChecked(grid.snap)
-        self.snap.setToolTip("Применяется при перемещении; скрытая сетка тоже поддерживает snap")
         self.color = QLineEdit(grid.color)
         for label, widget in [
             ("", self.enabled),
@@ -42,7 +39,6 @@ class MapGridDialog(QDialog):
             ("Смещение Y:", self.y),
             ("Непрозрачность (%):", self.opacity),
             ("Цвет (#RRGGBB):", self.color),
-            ("", self.snap),
         ]:
             layout.addRow(label, widget)
         self.buttons = dialog_buttons(self, layout)
@@ -63,7 +59,6 @@ class MapGridDialog(QDialog):
             self.x.value(),
             self.y.value(),
             self.opacity.value() / 100,
-            self.snap.isChecked(),
             self.color.text(),
         )
 
@@ -119,29 +114,3 @@ class TokenPropertiesDialog(QDialog):
             kind_override=self.kind.currentData(),
             z=self.z.value(),
         )
-
-
-class MapObjectDialog(QDialog):
-    def __init__(self, item, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Свойства изображения на карте")
-        form = QFormLayout(self)
-        self.values = {}
-        for key, label, minimum, maximum in [
-            ("width", "Ширина", 0.01, 1e7),
-            ("height", "Высота", 0.01, 1e7),
-            ("rotation", "Поворот", -360, 360),
-            ("z", "Порядок внутри слоя", 0, 9999),
-        ]:
-            box = QDoubleSpinBox(self)
-            box.setRange(minimum, maximum)
-            box.setDecimals(0 if key == "z" else 2)
-            box.setValue(getattr(item, key))
-            form.addRow(label, box)
-            self.values[key] = box
-        dialog_buttons(self, form)
-
-    def changes(self):
-        return {
-            key: int(box.value()) if key == "z" else box.value() for key, box in self.values.items()
-        }

@@ -61,7 +61,7 @@ class CardSearchDialog(QDialog):
             if card.kind == "card":
                 from lodandsy.domain.card_schema import field_definition
 
-                values = [html_text(content)]
+                values = [html_text(s.content or "") for s in payload.sections]
                 for key, value in payload.values:
                     if value is not None:
                         values.append(

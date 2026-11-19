@@ -5,16 +5,14 @@ from types import MappingProxyType
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QUndoCommand, QUndoStack
 
-from lodandsy.domain.dice_document import DiceDocument
 from lodandsy.domain.document_payloads import module_document, module_payload, project_entities
 from lodandsy.domain.map_document import (
     MapDocument,
     MapLayer,
     PlacedAssetObject,
     TokenInstance,
-    resolve_token,
 )
-from lodandsy.domain.table_document import RandomTable
+from lodandsy.domain.table_document import TableDocument
 
 
 class MapEdit(QUndoCommand):
@@ -34,8 +32,6 @@ class ModuleSession(QObject):
 
     map_changed = Signal(str)
     table_changed = Signal(str)
-    dice_changed = Signal(str)
-    dice_deleted = Signal(str)
     map_deleted = Signal(str)
     table_deleted = Signal(str)
     changed = Signal()
@@ -65,15 +61,9 @@ class ModuleSession(QObject):
     def tables(self):
         return self._documents("table")
 
-    @property
-    def dice(self):
-        return self._documents("dice")
-
-    def reset(self, maps=(), tables=(), dice=(), *, entities=None):
+    def reset(self, maps=(), tables=(), *, entities=None):
         replacement = (
-            entities
-            if entities is not None
-            else project_entities(maps=maps, tables=tables, dice=dice)
+            entities if entities is not None else project_entities(maps=maps, tables=tables)
         )
         for stack in self._undo.values():
             stack.deleteLater()
@@ -91,28 +81,6 @@ class ModuleSession(QObject):
         if self.entities.get(key).kind != kind:
             raise ValueError("Неподдерживаемый тип документа")
         return module_document(self.entities, key)
-
-    def get_dice(self, key):
-        return self._get(key, "dice")
-
-    def create_dice(self, title, parent_id=None):
-        document = DiceDocument(title)
-        self.entities.create(
-            "dice", document.title, module_payload(document), parent_id, id=document.id
-        )
-        self.dice_changed.emit(document.id)
-        self.changed.emit()
-        return document
-
-    def edit_dice(self, key, **changes):
-        if changes.keys() - {"title", "presets"}:
-            raise ValueError("Неподдерживаемые поля кубиков")
-        before = self.get_dice(key)
-        after = replace(before, **changes)
-        if before != after:
-            self._put(after)
-            self.dice_changed.emit(key)
-            self.changed.emit()
 
     def _delete(self, key):
         if self.delete_handler is not None:
@@ -154,7 +122,6 @@ class ModuleSession(QObject):
             # Each listener closes only its own key. Payloads were removed atomically.
             self.map_deleted.emit(key)
             self.table_deleted.emit(key)
-            self.dice_deleted.emit(key)
         self.changed.emit()
 
     def undo_stack(self, map_id):
@@ -202,23 +169,15 @@ class ModuleSession(QObject):
             self.undo_stack(map_id).push(MapEdit(self, before, after, command))
 
     def add_token(self, map_id, card_id, x, y, **values):
-        card = self.card(card_id)
+        self.card(card_id)
         document = self.get_map(map_id)
         token = TokenInstance(card_id, x, y, **values)
-        presentation = resolve_token(token, card)
-        if document.grid.snap:
-            x, y = document.grid.snap_point(x, y, presentation.cells_w, presentation.cells_h)
-            token = replace(token, x=max(0, x), y=max(0, y))
         self.edit_map(map_id, tokens=(*document.tokens, token), command="Разместить карточку")
         return token
 
     def add_card_placement(self, card, map_id, x, y):
         before = self.get_map(map_id)
         token = TokenInstance(card.id, x, y)
-        presentation = resolve_token(token, card)
-        if before.grid.snap:
-            x, y = before.grid.snap_point(x, y, presentation.cells_w, presentation.cells_h)
-            token = replace(token, x=max(0, x), y=max(0, y))
         after = replace(before, tokens=(*before.tokens, token))
         with self.entities.atomic():
             self.entities.create("card", card.title, card.payload(), card.parent_id, id=card.id)
@@ -258,14 +217,6 @@ class ModuleSession(QObject):
         token = next((t for t in document.tokens if t.id == token_id), None)
         if token is None:
             raise ValueError("Токен отсутствует")
-        grid = document.grid
-        if grid.snap:
-            try:
-                card = self.card(token.card_id)
-            except ValueError:
-                card = None
-            presentation = resolve_token(token, card)
-            x, y = grid.snap_point(x, y, presentation.cells_w, presentation.cells_h)
         if bounds is not None:
             x, y = max(0, min(bounds[0], x)), max(0, min(bounds[1], y))
         self.edit_token(map_id, token_id, x=x, y=y)
@@ -369,7 +320,7 @@ class ModuleSession(QObject):
         return self._delete(map_id)
 
     def create_table(self, title, parent_id=None):
-        table = RandomTable(title)
+        table = TableDocument(title)
         self.entities.create("table", table.title, module_payload(table), parent_id, id=table.id)
         self.table_changed.emit(table.id)
         self.changed.emit()
@@ -384,7 +335,7 @@ class ModuleSession(QObject):
             self.update_table(after)
 
     def update_table(self, document):
-        if not isinstance(document, RandomTable):
+        if not isinstance(document, TableDocument):
             raise ValueError("Ожидается валидированная таблица")
         before = self.get_table(document.id)
         if before != document:

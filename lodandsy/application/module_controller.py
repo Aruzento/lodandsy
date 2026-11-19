@@ -1,17 +1,20 @@
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
+from weakref import WeakSet
 
 from PySide6.QtCore import QEventLoop, QObject, Qt, Signal
 from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox, QProgressDialog
+from shiboken6 import isValid
 
 from lodandsy.application.map_pyramid import MAX_SOURCE_BYTES, ensure_pyramid
 from lodandsy.application.map_tiles import MapTiles
 from lodandsy.application.module_session import ModuleSession
 from lodandsy.ui.dice_widget import DiceWidget
-from lodandsy.ui.map_settings_dialogs import MapGridDialog, MapObjectDialog, TokenPropertiesDialog
+from lodandsy.ui.map_editor import MapEditorWidget
+from lodandsy.ui.map_settings_dialogs import MapGridDialog, TokenPropertiesDialog
 from lodandsy.ui.map_widget import MapWidget
-from lodandsy.ui.table_widget import RandomTableWidget
+from lodandsy.ui.table_widget import TableWidget
 
 
 class ModuleController(QObject):
@@ -35,10 +38,13 @@ class ModuleController(QObject):
         self._decode_cancels = set()
         self.progress = None
         self._map_ui = {}
+        self._map_editor_ui = {}
         self._card_maps = {}
         app.session.deletion_planners.append(self.session.plan_delete)
         app.window.tree_panel.deletion_reference_count = self.session.placement_count
         self._table_drafts = {}
+        self._table_views = {}
+        self._draft_snapshots = {}
         self._table_ui = {}
         self._dice_runtime = {}
         self.importing = False
@@ -46,18 +52,18 @@ class ModuleController(QObject):
         self.session.map_changed.connect(self._refresh_map)
         self.session.table_changed.connect(self._refresh_table)
         self.session.map_deleted.connect(lambda key: app.window_manager.close_window(f"map:{key}"))
+        self.session.map_deleted.connect(
+            lambda key: app.window_manager.close_window(f"map-editor:{key}")
+        )
         self.session.table_deleted.connect(
             lambda key: app.window_manager.close_window(f"table:{key}")
-        )
-        self.session.dice_changed.connect(self._refresh_dice)
-        self.session.dice_deleted.connect(
-            lambda key: app.window_manager.close_window(f"dice:{key}")
         )
         app.session.entities_deleted.connect(self.session.notify_deleted)
         self.session.table_deleted.connect(lambda key: self._table_drafts.pop(key, None))
         self.session.table_deleted.connect(lambda key: self._table_ui.pop(key, None))
-        self.session.dice_deleted.connect(lambda key: self._dice_runtime.pop(key, None))
         app.session.entity_changed.connect(self._entity_changed)
+        app.session.entity_created.connect(self._new_entity)
+        app.session.entities_deleted.connect(lambda keys: self._refresh_embedded_links())
         app.session.card_created.connect(self._card_created)
         app.session.card_changed.connect(lambda key, fields: self._card_created(key))
 
@@ -66,10 +72,6 @@ class ModuleController(QObject):
             self.request_map(parent_id)
         elif kind == "table":
             self.request_table(parent_id)
-        elif kind == "dice":
-            title, ok = QInputDialog.getText(self.app.window, "Новые кубики", "Название:")
-            if ok and title.strip():
-                self.open_dice(self.session.create_dice(title, parent_id).id)
         else:
             raise ValueError("Unsupported module kind")
 
@@ -110,10 +112,12 @@ class ModuleController(QObject):
         self._generation += 1
         self.tiles.reset()
         self._map_ui.clear()
+        self._map_editor_ui.clear()
         self._card_maps.clear()
         self._table_drafts.clear()
+        self._table_views.clear()
+        self._draft_snapshots.clear()
         self._table_ui.clear()
-        self._dice_runtime.clear()
         self.session.reset(entities=self.app.session.entities)
 
     def wait_import(self):
@@ -211,28 +215,10 @@ class ModuleController(QObject):
     def _error(self, error):
         QMessageBox.warning(self.app.window, "Карты и инструменты", str(error))
 
-    def open_dice(self, key=None):
-        if key is None:
-            key = next(iter(self.session.dice), None)
-            if key is None:
-                key = self.session.create_dice("Кубики").id
-        document = self.session.get_dice(key)
-
-        def factory():
-            widget = DiceWidget(document, self._dice_runtime.setdefault(key, {}))
-            widget.document_changed.connect(
-                lambda value: self.session.edit_dice(key, presets=value.presets)
-            )
-            return widget
-
-        return self.app.window_manager.open_window(f"dice:{key}", document.title, factory)
-
-    def _refresh_dice(self, key):
-        window = self.app.window_manager.find_window(f"dice:{key}")
-        if window:
-            document = self.session.get_dice(key)
-            window.setWindowTitle(document.title)
-            window.widget().set_document(document)
+    def open_dice(self):
+        return self.app.window_manager.open_window(
+            "tool:dice", "Кубики", lambda: DiceWidget(self._dice_runtime)
+        )
 
     def _entity_changed(self, key, fields):
         kind = self.app.session.entities.get(key).kind
@@ -240,11 +226,9 @@ class ModuleController(QObject):
             self.session.map_changed.emit(key)
         elif kind == "table":
             self.session.table_changed.emit(key)
-        elif kind == "dice":
-            self.session.dice_changed.emit(key)
 
     def request_table(self, parent_id=None):
-        title, ok = QInputDialog.getText(self.app.window, "Случайная таблица", "Название:")
+        title, ok = QInputDialog.getText(self.app.window, "Новая таблица", "Название:")
         if ok and title.strip():
             self.open_table(self.session.create_table(title, parent_id).id)
 
@@ -252,24 +236,7 @@ class ModuleController(QObject):
         table = self.session.get_table(table_id)
 
         def factory():
-            widget = RandomTableWidget(table, self._table_drafts.setdefault(table_id, {}))
-            widget.document_changed.connect(self.session.update_table)
-            widget.draft_changed.connect(self.app.project_controller.saver.mark_dirty)
-            widget.rename_requested.connect(lambda: self._rename("table", table_id))
-            widget.delete_requested.connect(lambda: self._delete("table", table_id))
-
-            def roll():
-                try:
-                    index, row = self.session.get_table(table_id).choose()
-                    widget.result.setText(
-                        f"{index}. {self.session.get_table(table_id).row_text(row)}"
-                    )
-                    widget.copy.setEnabled(True)
-                except ValueError as error:
-                    widget.result.setText(str(error))
-                    widget.copy.setEnabled(False)
-
-            widget.roll_requested.clicked.connect(roll)
+            widget = self.table_view(table_id)
             return widget
 
         window = self.app.window_manager.open_window(f"table:{table_id}", table.title, factory)
@@ -281,138 +248,259 @@ class ModuleController(QObject):
             window.table_ui_connected = True
         return window
 
+    def _new_entity(self, key):
+        if self.app.session.entities.get(key).kind == "table":
+            self.session.table_changed.emit(key)
+
+    def table_view(self, key):
+        widget = TableWidget(self.session.get_table(key), self._table_drafts.setdefault(key, {}))
+        self._table_views.setdefault(key, WeakSet()).add(widget)
+        widget.document_changed.connect(self.session.update_table)
+        widget.draft_changed.connect(lambda: self._table_draft_changed(key))
+        widget.setProperty("table_id", key)
+        return widget
+
+    def _table_draft_changed(self, key):
+        current = self._table_drafts.get(key, {})
+        before = self._draft_snapshots.get(key, {})
+        changed = {
+            cell for cell in current.keys() | before.keys() if current.get(cell) != before.get(cell)
+        }
+        self._draft_snapshots[key] = dict(current)
+        for widget in tuple(self._table_views.get(key, ())):
+            if not isValid(widget):
+                continue
+            widget.update_draft_notice()
+            rows = {r.id: i for i, r in enumerate(widget.model.document.rows)}
+            cols = {c.id: i for i, c in enumerate(widget.model.document.columns)}
+            for row, col in changed:
+                if row in rows and col in cols:
+                    index = widget.model.index(rows[row], cols[col])
+                    widget.model.dataChanged.emit(index, index)
+        self.app.project_controller._update_status()
+
+    def embedded_table(self, card_id, section, previous=None):
+        if section.table_id is None:
+            return None
+        try:
+            entity = self.app.session.entities.get(section.table_id)
+            if entity.kind != "table" or entity.parent_id != card_id:
+                return None
+            if (
+                previous is not None
+                and isValid(previous)
+                and previous.property("table_id") == section.table_id
+            ):
+                return previous
+            return self.table_view(section.table_id)
+        except ValueError:
+            return None
+
+    def _refresh_embedded_links(self, key=None):
+        for editor in self.app.card_editors.values():
+            try:
+                card = self.app.cards.get(editor.card_id)
+            except ValueError:
+                continue
+            if editor._model and any(
+                s.kind == "table_ref" and (key is None or s.table_id == key)
+                for s in editor._model.sections
+            ):
+                editor.set_canonical(card, self.app.session.field_drafts)
+
     def _refresh_table(self, key):
+        table = self.session.get_table(key)
         window = self.app.window_manager.find_window(f"table:{key}")
         if window:
-            table = self.session.get_table(key)
             window.setWindowTitle(table.title)
-            window.widget().set_document(table)
+        for widget in tuple(self._table_views.get(key, ())):
+            if isValid(widget):
+                widget.set_document(table)
+        self._refresh_embedded_links(key)
 
     def open_map(self, map_id):
+        return self._open_map_view(map_id, False)
+
+    def open_map_editor(self, map_id):
+        return self._open_map_view(map_id, True)
+
+    def _open_map_view(self, map_id, editor):
         document = self.session.get_map(map_id)
-        key = f"map:{map_id}"
+        key = ("map-editor:" if editor else "map:") + map_id
+        title = ("Редактор карты · " if editor else "") + document.title
         existing = self.app.window_manager.find_window(key)
         if existing:
             return self.app.window_manager.focus_window(key)
 
         def factory():
-            widget = MapWidget(self.session.undo_stack(map_id))
+            widget = (
+                MapEditorWidget(self.session.undo_stack(map_id))
+                if editor
+                else MapWidget(self.session.undo_stack(map_id))
+            )
             widget.project_root = self.app.project_root
             self.app.card_images.ready.connect(widget.image_ready)
-            widget.layer_action.connect(lambda action: self._layer_action(map_id, action))
-            widget.mode_changed.connect(lambda: self._refresh_map(map_id))
-            widget.view.object_moved.connect(
-                lambda key, x, y: self.session.edit_object(map_id, key, x=x, y=y)
-            )
-            widget.view.object_action.connect(
-                lambda key, action: self._object_action(map_id, key, action)
-            )
-            widget.grid_requested.connect(lambda: self._grid_settings(map_id))
-            widget.view.token_moved.connect(
-                lambda token, x, y: self._move_token(map_id, token, x, y, widget.view)
-            )
-            widget.view.token_action.connect(
-                lambda token, action: self._token_action(map_id, token, action)
-            )
-            widget.view.token_add_requested.connect(lambda x, y: self._add_token(map_id, x, y))
-            widget.view.card_exists = self._is_card
-            widget.view.card_dropped.connect(
-                lambda card, x, y: self.session.add_token(map_id, card, x, y)
-            )
+            if editor:
+                widget.asset_provider = lambda key: (
+                    self.app.card_images.cached_preview(
+                        self.app.project_root, self.app.project_controller.assets[key].path
+                    )
+                    if key in self.app.project_controller.assets
+                    else None
+                )
+                widget.asset_size = lambda key: (
+                    self.app.card_images.image_size(
+                        self.app.project_root, self.app.project_controller.assets[key].path
+                    )
+                    if key in self.app.project_controller.assets
+                    else None
+                )
+                widget.layer_action.connect(
+                    lambda action: self._editor_layer_action(map_id, action)
+                )
+                widget.layer_edit_requested.connect(
+                    lambda key, changes: self._edit_layer(map_id, key, changes)
+                )
+                widget.object_edit_requested.connect(
+                    lambda key, changes: self.session.edit_object(map_id, key, **changes)
+                )
+                widget.object_delete_requested.connect(
+                    lambda key: self.session.delete_object(map_id, key)
+                )
+                widget.asset_import_requested.connect(lambda: self._editor_import_asset(map_id))
+                widget.asset_place_requested.connect(
+                    lambda layer, asset, x, y: self._editor_place(map_id, layer, asset, x, y)
+                )
+                widget.view.object_moved.connect(
+                    lambda key, x, y: self.session.edit_object(map_id, key, x=x, y=y)
+                )
+                widget.view.object_action.connect(
+                    lambda key, action: self._editor_object_action(map_id, key, action)
+                )
+            else:
+                widget.editor_requested.connect(lambda: self.open_map_editor(map_id))
+                widget.grid_requested.connect(lambda: self._grid_settings(map_id))
+                widget.view.token_moved.connect(
+                    lambda token, x, y: self._move_token(map_id, token, x, y, widget.view)
+                )
+                widget.view.token_action.connect(
+                    lambda token, action: self._token_action(map_id, token, action)
+                )
+                widget.view.token_add_requested.connect(lambda x, y: self._add_token(map_id, x, y))
+                widget.view.card_exists = self._is_card
+                widget.view.card_dropped.connect(
+                    lambda card, x, y: self.session.add_token(map_id, card, x, y)
+                )
 
-            def add_token():
-                center = widget.view.mapToScene(widget.view.viewport().rect().center())
-                self._add_token(map_id, center.x(), center.y())
+                def add_token():
+                    center = widget.view.mapToScene(widget.view.viewport().rect().center())
+                    self._add_token(map_id, center.x(), center.y())
 
-            widget.token_add.triggered.connect(add_token)
-            widget.rename_requested.connect(lambda: self._rename("map", map_id))
-            widget.delete_requested.connect(lambda: self._delete("map", map_id))
+                widget.token_add.triggered.connect(add_token)
             return widget
 
-        window = self.app.window_manager.open_window(key, document.title, factory)
-        window.closed.connect(lambda closed: self._remember_map_camera(map_id, closed.widget()))
+        window = self.app.window_manager.open_window(key, title, factory)
+        window.closed.connect(
+            lambda closed: self._remember_map_camera(map_id, closed.widget(), editor)
+        )
         widget = window.widget()
         cancel = Event()
         self._decode_cancels.add(cancel)
-        window.closed.connect(lambda _closed: cancel.set())
+        window.closed.connect(lambda closed: cancel.set())
         self.tiles.failed.connect(widget.message.setText)
 
-        def loaded(image, error):
+        def loaded(pyramid, error):
             self._decode_cancels.discard(cancel)
             if self.app.window_manager.find_window(key) is not window:
                 return
             if error:
                 widget.message.setText("Изображение недоступно: " + error)
-                widget.view.scene().setSceneRect(0, 0, 1000, 700)
             else:
-                self.tiles.errors.clear()
-                widget.view.set_pyramid(image, self.tiles)
-                widget.token_add.setEnabled(True)
+                widget.view.set_pyramid(pyramid, self.tiles)
+                if not editor:
+                    widget.token_add.setEnabled(True)
                 widget.message.setText(
-                    "Колесо — масштаб · фон — перемещение · ПКМ — токены · "
-                    "двойной щелчок по токену — документ"
+                    "Выбор / панорама / размещение · Escape — отмена жеста"
+                    if editor
+                    else "Колесо — масштаб · фон — перемещение · двойной щелчок — карточка"
                 )
             self._refresh_map(map_id)
-            camera = widget.pending_camera or self._map_ui.get(map_id)
+            cameras = self._map_editor_ui if editor else self._map_ui
+            camera = widget.pending_camera or cameras.get(map_id)
             if camera:
                 widget.view.restore_camera(camera)
             widget.pending_camera = None
 
-        project = getattr(self.app, "project_controller", None)
-        asset = project.assets.get(document.asset_id) if project else None
-        if asset and self.app.project_root:
-            root = self.app.project_root
-            self._run(lambda: ensure_pyramid(root, asset, cancel), loaded)
+        other = self.app.window_manager.find_window(("map:" if editor else "map-editor:") + map_id)
+        if other and other.widget().view._background is not None:
+            loaded(other.widget().view._background.pyramid, None)
         else:
-            loaded(None, "ресурс отсутствует")
+            project = self.app.project_controller
+            asset = project.assets.get(document.asset_id)
+            if asset and self.app.project_root:
+                root = self.app.project_root
+                self._run(lambda: ensure_pyramid(root, asset, cancel), loaded)
+            else:
+                loaded(None, "ресурс отсутствует")
         self._refresh_map(map_id)
         return window
 
-    def _remember_map_camera(self, map_id, widget):
-        state = widget.camera_state()
-        if map_id in self.session.maps and state is not None:
-            self._map_ui[map_id] = state
+    def _remember_map_camera(self, map_id, widget, editor=False):
+        camera = widget.camera_state()
+        if map_id in self.session.maps and camera is not None:
+            (self._map_editor_ui if editor else self._map_ui)[map_id] = camera
 
     def _refresh_map(self, key):
-        window = self.app.window_manager.find_window(f"map:{key}")
-        if window:
-            document = self.session.get_map(key)
-            for ids in self._card_maps.values():
-                ids.discard(key)
-            for token in document.tokens:
-                self._card_maps.setdefault(token.card_id, set()).add(key)
-            window.setWindowTitle(document.title)
-            window.widget().set_layers(document.layers)
-            project = getattr(self.app, "project_controller", None)
-            window.widget().view.set_annotations(
+        windows = [
+            self.app.window_manager.find_window(prefix + key) for prefix in ("map:", "map-editor:")
+        ]
+        if not any(windows):
+            return
+        document = self.session.get_map(key)
+        for ids in self._card_maps.values():
+            ids.discard(key)
+        for token in document.tokens:
+            self._card_maps.setdefault(token.card_id, set()).add(key)
+        project = self.app.project_controller
+        for window in windows:
+            if not window:
+                continue
+            widget = window.widget()
+            editor = isinstance(widget, MapEditorWidget)
+            window.setWindowTitle(("Редактор карты · " if editor else "") + document.title)
+            widget.view.set_annotations(
                 document,
                 self.app.cards.get,
                 self.app.project_root,
-                project.assets if project else {},
+                project.assets,
                 self.app.card_images.cached_preview,
             )
+            if editor:
+                widget.set_document(document, project.assets)
 
-    def _layer_action(self, map_id, action):
+    def _edit_layer(self, map_id, key, changes):
+        try:
+            self.session.edit_layer(map_id, key, **changes)
+        except ValueError as error:
+            self.app.window.show_notice(str(error))
+            self._refresh_map(map_id)
+
+    def _editor_layer_action(self, map_id, action):
+        widget = self.open_map_editor(map_id).widget()
+        key = widget.active_layer()
         document = self.session.get_map(map_id)
-        widget = self.app.window_manager.find_window(f"map:{map_id}").widget()
-        key = widget.layers.currentData()
-        layer = next((layer for layer in document.layers if layer.id == key), None)
         if action == "add":
             title, ok = QInputDialog.getText(widget, "Новый слой", "Название:")
             if ok and title.strip():
                 layer = self.session.add_layer(map_id, title)
-                widget.layers.setCurrentIndex(widget.layers.findData(layer.id))
+                for i in range(widget.layers.count()):
+                    if widget.layers.item(i).data(Qt.ItemDataRole.UserRole) == layer.id:
+                        widget.layers.setCurrentRow(i)
             return
-        if layer is None:
-            self.app.window.show_notice("Сначала создайте слой")
+        layer = next((layer for layer in document.layers if layer.id == key), None)
+        if not layer:
             return
-        if action == "rename":
-            title, ok = QInputDialog.getText(widget, "Название слоя", "Название:", text=layer.title)
-            if ok and title.strip():
-                self.session.edit_layer(map_id, key, title=title)
-        elif action == "visible":
-            self.session.edit_layer(map_id, key, visible=not layer.visible)
-        elif action in {"up", "down"}:
+        if action in {"up", "down"}:
             position = max(
                 0, min(len(document.layers) - 1, layer.position + (1 if action == "up" else -1))
             )
@@ -430,46 +518,36 @@ class ModuleController(QObject):
                 == QMessageBox.StandardButton.Yes
             ):
                 self.session.delete_layer(map_id, key, delete_contents=True)
-        elif action in {"place", "import"}:
-            center = widget.view.mapToScene(widget.view.viewport().rect().center())
-            x, y = max(0, center.x()), max(0, center.y())
 
-            def place(asset, error):
-                if error:
-                    self._error(error)
-                    return False
-                current = self.session.maps.get(map_id)
-                if current is None or not any(layer.id == key for layer in current.layers):
-                    return False
-                self.session.add_object(map_id, key, asset.id, x, y)
-                return True
-
-            if action == "import":
-                source = self._image_filename()
-                if source:
-                    self.app.card_images.import_image(Path(source), place)
-            else:
-                assets = list(self.app.project_controller.assets.values())
-                labels = [a.path for a in assets]
-                if not labels:
-                    self.app.window.show_notice("В проекте пока нет изображений")
-                    return
-                choice, ok = QInputDialog.getItem(
-                    widget, "Разместить asset", "Изображение:", labels, 0, False
-                )
-                if ok:
-                    place(assets[labels.index(choice)], None)
-
-    def _object_action(self, map_id, key, action):
-        item = next((o for o in self.session.get_map(map_id).objects if o.id == key), None)
-        if item is None:
+    def _editor_import_asset(self, map_id):
+        source = self._image_filename()
+        if not source:
             return
+
+        def publish(asset, error):
+            if error:
+                self._error(error)
+                return False
+            if map_id not in self.session.maps:
+                return False
+            self._refresh_map(map_id)
+            widget = self.open_map_editor(map_id).widget()
+            for i in range(widget.assets.count()):
+                if widget.assets.item(i).data(Qt.ItemDataRole.UserRole) == asset.id:
+                    widget.assets.setCurrentRow(i)
+            return True
+
+        self.app.card_images.import_image(Path(source), publish)
+
+    def _editor_place(self, map_id, layer, asset, x, y):
+        item = self.session.add_object(map_id, layer, asset, x, y)
+        self.open_map_editor(map_id).widget().select_object(item.id)
+
+    def _editor_object_action(self, map_id, key, action):
         if action == "delete":
             self.session.delete_object(map_id, key)
         else:
-            dialog = MapObjectDialog(item, self.app.window)
-            if dialog.exec():
-                self.session.edit_object(map_id, key, **dialog.changes())
+            self.open_map_editor(map_id).widget().select_object(key)
 
     def _grid_settings(self, map_id):
         dialog = MapGridDialog(self.session.get_map(map_id).grid, self.app.window)
@@ -528,18 +606,14 @@ class ModuleController(QObject):
                 map_id, cards[choices.index(choice) - 1].id, max(0, x), max(0, y)
             )
         else:
-            title, template, kind, ok = CardCreationDialog.get_card(self.app.window)
+            title, kind, ok = CardCreationDialog.get_card(self.app.window)
             if ok:
-                self.create_card_token(
-                    map_id, None, title, max(0, x), max(0, y), card_type=kind, template_id=template
-                )
+                self.create_card_token(map_id, None, title, max(0, x), max(0, y), card_type=kind)
 
-    def create_card_token(
-        self, map_id, source, title, x, y, *, card_type="character", template_id="empty"
-    ):
+    def create_card_token(self, map_id, source, title, x, y, *, card_type="character"):
         from lodandsy.domain.card import Card, Portrait
 
-        candidate = Card(title, card_type=card_type, template_id=template_id)
+        candidate = Card(title, card_type=card_type)
         self.session.get_map(map_id)
 
         def publish(asset, error):

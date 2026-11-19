@@ -50,26 +50,15 @@ class GridLayer(QGraphicsItem):
                 else:
                     lines.append(QLineF(rect.left(), point, rect.right(), point))
                 self.last_line_count += 1
-        # Align in physical device pixels; one pass avoids accumulated translucent halos.
-        transform = painter.deviceTransform()
-        dpr = painter.device().devicePixelRatioF()
+        # Keep world coordinates throughout: the paint engine already applies viewport/DPR offsets.
         painter.save()
-        painter.resetTransform()
+        painter.setClipRect(self.boundingRect(), Qt.ClipOperation.IntersectClip)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        pen = QPen(color, 1 / dpr)
+        pen = QPen(color)
+        pen.setWidth(0)
+        pen.setCosmetic(True)
         painter.setPen(pen)
-        aligned = []
-        for line in lines:
-            a, b = transform.map(line.p1()), transform.map(line.p2())
-            aligned.append(
-                QLineF(
-                    (math.floor(a.x()) + 0.5) / dpr,
-                    (math.floor(a.y()) + 0.5) / dpr,
-                    (math.floor(b.x()) + 0.5) / dpr,
-                    (math.floor(b.y()) + 0.5) / dpr,
-                )
-            )
-        painter.drawLines(aligned)
+        painter.drawLines(lines)
         painter.restore()
 
 
@@ -114,7 +103,7 @@ class TokenItem(QGraphicsItem):
         self.setZValue(10000 + token.z)
         self.setFlag(
             QGraphicsItem.GraphicsItemFlag.ItemIsMovable,
-            self.view._background is not None and not self.view.edit_mode,
+            self.view._background is not None and self.view.role == "viewer",
         )
         self.update()
 
@@ -150,13 +139,23 @@ class TokenItem(QGraphicsItem):
         image = self.provider(self.root, self.asset_path) if self.asset_path else None
         if image is not None and not image.isNull():
             if character:
-                size = min(image.width(), image.height())
-                source = QRectF((image.width() - size) / 2, (image.height() - size) / 2, size, size)
+                x, y, w, h = self.presentation.crop
+                source = QRectF(
+                    x * image.width(), y * image.height(), w * image.width(), h * image.height()
+                )
+                size = min(source.width(), source.height())
+                source = QRectF(
+                    source.center().x() - size / 2, source.center().y() - size / 2, size, size
+                )
                 painter.drawImage(rect, image, source)
             else:
-                scale = min(rect.width() / image.width(), rect.height() / image.height())
-                width, height = image.width() * scale, image.height() * scale
-                painter.drawImage(QRectF(-width / 2, -height / 2, width, height), image)
+                x, y, w, h = self.presentation.crop
+                source = QRectF(
+                    x * image.width(), y * image.height(), w * image.width(), h * image.height()
+                )
+                scale = min(rect.width() / source.width(), rect.height() / source.height())
+                width, height = source.width() * scale, source.height() * scale
+                painter.drawImage(QRectF(-width / 2, -height / 2, width, height), image, source)
             self.setToolTip("<qt>" + escape(self.base_tip) + "</qt>")
         else:
             message = self.base_tip + (
@@ -195,14 +194,14 @@ class TokenItem(QGraphicsItem):
         QTimer.singleShot(0, view, lambda: view.token_moved.emit(key, x, y))
 
     def mouseDoubleClickEvent(self, event):
-        if self.view.edit_mode:
+        if self.view.role == "editor":
             event.ignore()
             return
         self.view.token_action.emit(self.token.id, "open")
         event.accept()
 
     def contextMenuEvent(self, event):
-        if self.view.edit_mode:
+        if self.view.role == "editor":
             event.ignore()
             return
         menu = QMenu()
@@ -245,11 +244,13 @@ class RasterObjectItem(QGraphicsItem):
         self.setVisible(layer.visible)
         self.setFlag(
             QGraphicsItem.GraphicsItemFlag.ItemIsMovable,
-            self.view.edit_mode and self.view._background is not None,
+            self.view.role == "editor"
+            and self.view.tool != "pan"
+            and self.view._background is not None,
         )
         self.setAcceptedMouseButtons(
             Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton
-            if self.view.edit_mode
+            if self.view.role == "editor"
             else Qt.MouseButton.NoButton
         )
         self.update()
@@ -280,16 +281,26 @@ class RasterObjectItem(QGraphicsItem):
 
     def mousePressEvent(self, event):
         self._origin = self.pos()
+        self._dragging = True
+        self._cancelled = False
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if not getattr(self, "_cancelled", False):
+            super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
+        self._dragging = False
+        if getattr(self, "_cancelled", False):
+            self.setPos(self._origin)
+            return
         if self.pos() != getattr(self, "_origin", self.pos()):
             key, x, y = self.value.id, max(0, self.x()), max(0, self.y())
             QTimer.singleShot(0, self.view, lambda: self.view.object_moved.emit(key, x, y))
 
     def contextMenuEvent(self, event):
-        if not self.view.edit_mode:
+        if self.view.role == "viewer":
             event.ignore()
             return
         menu = QMenu()

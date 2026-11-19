@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QApplication
 
 from lodandsy.application.app_controller import AppController
 from lodandsy.application.project_controller import ProjectController
-from lodandsy.domain.table_document import ColumnDefinition, RandomTable, RowRecord
+from lodandsy.domain.table_document import ColumnDefinition, RowRecord, TableDocument
 from lodandsy.ui.app_shell import AppShell
 
 
@@ -46,7 +46,7 @@ def main():
                     ColumnDefinition(f"Column{i}", "number" if i % 2 else "text", i)
                     for i in range(ncols)
                 )
-                table = RandomTable(
+                table = TableDocument(
                     "Load",
                     columns=columns,
                     rows=tuple(

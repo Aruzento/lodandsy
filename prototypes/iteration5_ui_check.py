@@ -1,5 +1,6 @@
 """Native, disposable review workspace. All operations use production application services."""
 
+import argparse
 from pathlib import Path
 from uuid import uuid4
 
@@ -14,23 +15,23 @@ from lodandsy.domain.card import Portrait
 from lodandsy.ui.app_shell import AppShell
 from lodandsy.ui.theme import apply_theme
 
+parser = argparse.ArgumentParser()
+parser.add_argument("--prepare-only", action="store_true")
+args = parser.parse_args()
 app = QApplication([])
 apply_theme(app)
 window = AppShell()
 controller = AppController(window)
 project = ProjectController(controller)
-root = Path(".prototype-deps").resolve() / f"GUI-check-iteration4-{uuid4().hex[:8]}"
+root = Path(".prototype-deps").resolve() / f"GUI-check-iteration5-{uuid4().hex[:8]}"
 root.mkdir()
-project.create_project(root / "Проверка итерации 4")
-a = controller.create_card(
-    "Эйрин · хранитель перевала", template_id="character", card_type="character"
-)
-b = controller.create_card("Западный перевал", template_id="location", card_type="location")
+project.create_project(root / "Проверка итерации 5")
+a = controller.create_card("Эйрин · хранитель перевала", card_type="character")
+b = controller.create_card("Западный перевал", card_type="location")
 controller.session.update_card_fields(
     a.id,
     dict(
         summary="Следопыт, знающий тайные тропы северных гор.",
-        tags=("Союзник", "Север"),
         aliases=("Смотритель",),
         race="Человек",
         class_or_role="Следопыт",
@@ -40,7 +41,6 @@ controller.session.update_card_fields(
         description=text_document(
             "Эйрин встречает путников у старого моста. Он обещал провести караван до рассвета."
         ),
-        history=text_document("Десять лет охраняет путь через перевал."),
     ),
 )
 image = QImage(320, 400, QImage.Format.Format_RGB32)
@@ -49,9 +49,7 @@ source = root / "portrait.png"
 image.save(str(source))
 asset = project.store.import_asset(source)
 project.assets[asset.id] = asset
-controller.session.update_card(
-    a.id, portrait=Portrait(asset.id, "Тестовый портрет", "Хранитель перевала")
-)
+controller.session.update_card(a.id, portrait=Portrait(asset.id))
 background = QImage(1200, 800, QImage.Format.Format_RGB32)
 background.fill(0xFF304B3A)
 map_source = root / "map.png"
@@ -70,6 +68,10 @@ prepared = prepare_import(
     plan, project.store, controller.cards.all(), tuple(project.assets.values())
 )
 apply_import(controller.session, prepared)
+inventory = next(s for s in controller.cards.get(a.id).sections if s.purpose == "inventory")
+controller.session.section_table(a.id, inventory.id)
+controller.modules.open_map_editor(document.id)
+controller.modules.open_dice()
 controller.open_card_editor(b.id)
 controller.open_card_editor(a.id)
 window.resize(1400, 900)
@@ -77,7 +79,9 @@ window.show()
 project.save_current()
 print(str(root), flush=True)
 try:
-    app.exec()
+    project._save_ui_state()
+    if not args.prepare_only:
+        app.exec()
 finally:
     controller.modules.shutdown()
     controller.card_images.shutdown()

@@ -1,7 +1,6 @@
-from lodandsy.domain.dice_document import DiceDocument, DicePayload
 from lodandsy.domain.entity import Entity, EntityCollection
 from lodandsy.domain.map_document import MapDocument, MapPayload
-from lodandsy.domain.table_document import RandomTable, TablePayload
+from lodandsy.domain.table_document import TableDocument, TablePayload
 
 
 def module_payload(document):
@@ -9,10 +8,8 @@ def module_payload(document):
         return MapPayload(
             document.asset_id, document.tokens, document.grid, document.layers, document.objects
         )
-    if isinstance(document, RandomTable):
+    if isinstance(document, TableDocument):
         return TablePayload(document.columns, document.rows)
-    if isinstance(document, DiceDocument):
-        return DicePayload(document.presets)
     return document.payload()
 
 
@@ -33,18 +30,15 @@ def _module_document(entity, payload):
             payload.objects,
         )
     if entity.kind == "table":
-        return RandomTable(entity.title, key, payload.columns, payload.rows)
-    if entity.kind == "dice":
-        return DiceDocument(entity.title, key, payload.presets)
+        return TableDocument(entity.title, key, payload.columns, payload.rows)
     raise ValueError("Unsupported module document")
 
 
-def project_entities(cards=(), maps=(), tables=(), dice=(), envelopes=()):
+def project_entities(cards=(), maps=(), tables=(), envelopes=()):
     documents = [
         *(("card", c) for c in cards),
         *(("map", m) for m in maps),
         *(("table", t) for t in tables),
-        *(("dice", d) for d in dice),
     ]
     if len({d.id for _, d in documents}) != len(documents):
         raise ValueError("Duplicate entity ID across modules; ids must be unique")

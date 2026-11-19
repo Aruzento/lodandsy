@@ -28,6 +28,7 @@ from lodandsy.ui.project_tree_model import (
 class TreePanel(QDockWidget):
     entity_selected = Signal(str, str)
     entity_open_requested = Signal(str, str)
+    map_editor_requested = Signal(str)
     module_create_requested = Signal(str, object)
     module_rename_requested = Signal(str, str)
     module_delete_requested = Signal(str, str)
@@ -35,7 +36,7 @@ class TreePanel(QDockWidget):
     move_parent_requested = Signal(str)
 
     create_requested = Signal(str, object)
-    template_create_requested = Signal(str, object, str, str)
+    typed_create_requested = Signal(str, object, str)
     rename_requested = Signal(str, str)
     delete_requested = Signal(str)
     reparent_requested = Signal(str, object)
@@ -121,8 +122,7 @@ class TreePanel(QDockWidget):
         for kind, title in [
             ("card", "Карточка…"),
             ("map", "Карта из изображения…"),
-            ("table", "Случайная таблица…"),
-            ("dice", "Кубики…"),
+            ("table", "Таблица…"),
         ]:
             action = menu.addAction(title)
             action.setObjectName(f"create-{kind}")
@@ -275,7 +275,7 @@ class TreePanel(QDockWidget):
                 self.tree_model.index(row, 0, current)
                 for row in range(self.tree_model.rowCount(current))
             )
-        labels = {"card": "карточек", "map": "карт", "table": "таблиц", "dice": "кубиков"}
+        labels = {"card": "карточек", "map": "карт", "table": "таблиц"}
         details = ", ".join(f"{labels[kind]}: {count}" for kind, count in counts.items())
         title = target_index.data()
         message = (
@@ -309,7 +309,7 @@ class TreePanel(QDockWidget):
         self,
         parent_id: str | None,
     ) -> None:
-        title, template_id, card_type, accepted = CardCreationDialog.get_card(self)
+        title, card_type, accepted = CardCreationDialog.get_card(self)
 
         if not accepted:
             return
@@ -319,10 +319,9 @@ class TreePanel(QDockWidget):
         if not title:
             return
 
-        self.template_create_requested.emit(
+        self.typed_create_requested.emit(
             title,
             parent_id,
-            template_id,
             card_type,
         )
 
@@ -345,6 +344,10 @@ class TreePanel(QDockWidget):
         key = index.data(NODE_KEY_ROLE)
         entity_id = index.data(NODE_ID_ROLE)
         menu = QMenu(self)
+        if index.data(NODE_KIND_ROLE) == "map":
+            menu.addAction(
+                "Открыть редактор карты", lambda: self.map_editor_requested.emit(entity_id)
+            )
 
         def command(name, title, callback):
             action = QAction(title, menu)
@@ -361,7 +364,6 @@ class TreePanel(QDockWidget):
                 ("card", "Создать карточку…"),
                 ("map", "Создать карту…"),
                 ("table", "Создать таблицу…"),
-                ("dice", "Создать кубики…"),
             ]:
                 action = command(
                     f"create-{k}", title, lambda _checked=False, k=k: self._create_kind(k)

@@ -18,7 +18,7 @@ from lodandsy.application.sqlite_project_store import (
     connect_database,
 )
 from lodandsy.domain.card import Card
-from lodandsy.domain.dice_document import roll_dice
+from lodandsy.domain.dice import roll_dice
 from lodandsy.domain.map_document import MapDocument, TokenInstance
 from tests.project_fixture import record_rows, text_table, text_values
 
@@ -26,7 +26,7 @@ pytest_plugins = ["tests.project_fixture"]
 
 
 def test_dice_details_total_and_repeatable_randomness():
-    from lodandsy.domain.dice_document import DiceConfig
+    from lodandsy.domain.dice import DiceConfig
 
     result = roll_dice(DiceConfig((0, 3, 0, 0, 0, 0, 0), -2), random.Random(4))
     assert result.groups == ((6, (2, 3, 1)),)
@@ -53,12 +53,11 @@ def test_map_validation_undo_noops_and_immutable_state(qapp):
         TokenInstance(str(uuid4()), -1, 0)
 
 
-def test_random_table_choice_and_empty_behavior():
+def test_table_retains_empty_whitespace_and_plain_text():
     table = text_table("Table", rows=("", "First", " ", "Second"))
-    index, row = table.choose(random.Random(1))
-    assert index == 2 and row.value(table.columns[0].id) == "First"
-    with pytest.raises(ValueError):
-        text_table("Empty").choose()
+    assert text_values(table) == ("", "First", " ", "Second")
+    assert not text_table("Empty").rows
+    assert not hasattr(table, "choose")
 
 
 def test_real_map_table_card_workflow_and_project_roundtrip(project, tmp_path, qtbot):
@@ -86,9 +85,9 @@ def test_real_map_table_card_workflow_and_project_roundtrip(project, tmp_path, q
     table_window = app.modules.open_table(table.id)
     widget = table_window.widget()
     widget.model.apply(replace(table, rows=record_rows(table, ("Goblin", "Dragon"))))
-    widget.roll_requested.click()
-    widget.copy.click()
-    assert QApplication.clipboard().text() == widget.result.text()
+    widget.table.selectRow(1)
+    widget.copy_selection()
+    assert QApplication.clipboard().text() == "Dragon"
     dice = app.modules.open_dice().widget()
     dice.counts[20].setValue(0)
     dice.counts[4].setValue(1)
@@ -136,15 +135,15 @@ def test_live_table_editor_is_in_ctrl_s_snapshot(project, tmp_path, qtbot):
     assert text_values(project.store.load().tables[0]) == ("Live text",)
 
 
-def test_random_table_result_preserves_literal_markup(project):
+def test_table_display_and_clipboard_preserve_literal_markup(project):
     app, project = project
     table = app.modules.session.create_table("Literal text")
     app.modules.session.edit_table(table.id, rows=record_rows(table, ("<b>Text</b>",)))
     widget = app.modules.open_table(table.id).widget()
-    widget.roll_requested.click()
-    widget.result.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-    widget.result.setSelection(0, len(widget.result.text()))
-    assert widget.result.selectedText() == "1. Вариант: <b>Text</b>"
+    assert widget.model.data(widget.model.index(0, 0)) == "<b>Text</b>"
+    widget.table.selectRow(0)
+    widget.copy_selection()
+    assert QApplication.clipboard().text() == "<b>Text</b>"
 
 
 def test_missing_map_image_remains_editable_and_keeps_links(project, tmp_path, qtbot):

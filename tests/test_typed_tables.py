@@ -1,4 +1,3 @@
-import random
 from dataclasses import replace
 
 import pytest
@@ -6,8 +5,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QInputDialog, QLineEdit, QMessageBox
 
 from lodandsy.application.sqlite_project_store import ProjectSnapshot, SQLiteProjectStore
-from lodandsy.domain.table_document import ColumnDefinition, RandomTable, RowRecord
-from lodandsy.ui.table_widget import RandomTableWidget
+from lodandsy.domain.table_document import ColumnDefinition, RowRecord, TableDocument
+from lodandsy.ui.table_widget import TableWidget
 
 pytest_plugins = ["tests.project_fixture"]
 
@@ -19,17 +18,16 @@ def typed_table(title="Table"):
             [("Событие", "text"), ("Количество", "number"), ("Есть", "bool")]
         )
     )
-    table = RandomTable(title, columns=columns, rows=(RowRecord(0), RowRecord(1)))
+    table = TableDocument(title, columns=columns, rows=(RowRecord(0), RowRecord(1)))
     table = table.with_cell(table.rows[1].id, columns[0].id, "<b>Dragon</b>")
     table = table.with_cell(table.rows[1].id, columns[1].id, 0)
     return table.with_cell(table.rows[1].id, columns[2].id, False)
 
 
-def test_types_ids_order_random_whole_row_and_rejections():
+def test_types_ids_order_whole_row_and_rejections():
     table = typed_table()
-    index, row = table.choose(random.Random(3))
-    assert index == 2 and row == table.rows[1]
-    assert "Количество: 0" in table.row_text(row) and "Есть: false" in table.row_text(row)
+    row = table.rows[1]
+    assert row.value(table.columns[1].id) == 0 and row.value(table.columns[2].id) is False
     for col, bad in [(0, 12), (1, True), (1, float("nan")), (2, "false")]:
         with pytest.raises(ValueError):
             table.with_cell(row.id, table.columns[col].id, bad)
@@ -38,14 +36,14 @@ def test_types_ids_order_random_whole_row_and_rejections():
     with pytest.raises(ValueError, match="order"):
         replace(table, rows=(replace(row, position=2),))
     zero = replace(table, rows=(RowRecord(0, ((table.columns[1].id, 0),)),))
-    assert zero.choose()[0] == 1
+    assert zero.rows[0].value(table.columns[1].id) == 0
     false = replace(table, rows=(RowRecord(0, ((table.columns[2].id, False),)),))
-    assert false.choose()[0] == 1
+    assert false.rows[0].value(table.columns[2].id) is False
 
 
 def test_model_tsv_atomic_checkbox_and_copy(qtbot):
     table = typed_table()
-    widget = RandomTableWidget(table)
+    widget = TableWidget(table)
     qtbot.addWidget(widget)
     model = widget.model
     model.paste(model.index(0, 0), "Wolf\t2\ttrue")
@@ -73,13 +71,13 @@ def test_model_tsv_atomic_checkbox_and_copy(qtbot):
 
 def test_column_row_commands_reorder_rename_delete_cancel_and_type_rejection(qtbot, monkeypatch):
     table = typed_table()
-    widget = RandomTableWidget(table)
+    widget = TableWidget(table)
     qtbot.addWidget(widget)
     widget.table.setCurrentIndex(widget.model.index(1, 0))
-    widget.move_row(-1)
+    widget.table.verticalHeader().moveSection(1, 0)
     assert widget.model.document.rows[0].id == table.rows[1].id
     widget.table.setCurrentIndex(widget.model.index(0, 0))
-    widget.move_column(1)
+    widget.table.horizontalHeader().moveSection(0, 1)
     assert widget.model.document.columns[1].id == table.columns[0].id
     assert widget.model.document.rows[0].value(table.columns[0].id) == "<b>Dragon</b>"
     monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.StandardButton.No)
@@ -101,7 +99,7 @@ def test_column_row_commands_reorder_rename_delete_cancel_and_type_rejection(qtb
     assert widget.model.document.columns[-1].name == "Renamed"
 
 
-def test_live_invalid_draft_survives_close_blocks_save_and_can_be_fixed(project, qtbot, tmp_path):
+def test_live_invalid_draft_survives_close_saves_canon_and_can_be_fixed(project, qtbot, tmp_path):
     app, project = project
     project.create_project(tmp_path / "world")
     table = app.modules.session.create_table("Table")
@@ -109,7 +107,8 @@ def test_live_invalid_draft_survives_close_blocks_save_and_can_be_fixed(project,
     app.modules.session.edit_table(table.id, columns=source.columns, rows=source.rows)
     widget = app.modules.open_table(table.id).widget()
     assert not widget.model.setData(widget.model.index(0, 1), "bad")
-    assert not project.save_current()
+    assert project.save_current()
+    assert project.store.load().tables[0].rows[0].value(source.columns[1].id) is None
     app.window_manager.close_window(f"table:{table.id}")
     widget = app.modules.open_table(table.id).widget()
     assert widget.model.data(widget.model.index(0, 1)) == "bad"
@@ -174,7 +173,7 @@ def test_validation_memo_only_reuses_immutable_rows_and_schema(monkeypatch):
             ),
         )
     with pytest.raises(ValueError, match="unknown column"):
-        domain.RandomTable(
+        domain.TableDocument(
             "No columns",
             columns=(),
             rows=(domain.RowRecord(0, ((table.columns[0].id, "illegal"),)),),

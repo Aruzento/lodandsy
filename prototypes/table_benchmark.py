@@ -10,8 +10,8 @@ from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication
 
 from lodandsy.application.sqlite_project_store import ProjectSnapshot, SQLiteProjectStore
-from lodandsy.domain.table_document import ColumnDefinition, RandomTable, RowRecord
-from lodandsy.ui.table_widget import RandomTableWidget
+from lodandsy.domain.table_document import ColumnDefinition, RowRecord, TableDocument
+from lodandsy.ui.table_widget import TableWidget
 
 
 def main():
@@ -24,7 +24,7 @@ def main():
         RowRecord(y, tuple((c.id, y if c.data_type == "number" else f"Value {y}") for c in columns))
         for y in range(5000)
     )
-    table = RandomTable("Load", columns=columns, rows=rows)
+    table = TableDocument("Load", columns=columns, rows=rows)
     result = {
         "rows": 5000,
         "columns": 20,
@@ -48,7 +48,7 @@ def main():
         result["sqlite_load_validate_s"] = round(time.perf_counter() - start, 3)
         result["sqlite_bytes"] = store.path.stat().st_size
         start = time.perf_counter()
-        widget = RandomTableWidget(table)
+        widget = TableWidget(table)
         widget.resize(1200, 700)
         widget.show()
         app.processEvents()
@@ -56,7 +56,7 @@ def main():
         widget.render(canvas)
         result["first_view_s"] = round(time.perf_counter() - start, 3)
         start = time.perf_counter()
-        widget.model.setData(widget.model.index(0,0), "Edited")
+        widget.model.setData(widget.model.index(0, 0), "Edited")
         result["single_cell_edit_s"] = round(time.perf_counter() - start, 3)
         widget.close()
         store.close()

@@ -12,7 +12,7 @@ pytest_plugins = ["tests.project_fixture"]
 
 
 def test_typed_portrait_and_unknown_fields():
-    portrait = Portrait(str(uuid4()), "<alt>", "Подпись")
+    portrait = Portrait(str(uuid4()), (0.1, 0.2, 0.5, 0.6))
     card = Card("A", portrait=portrait)
     version, source = encode_card(card)
     assert decode_card(card.title, card.id, None, version, source) == card
@@ -25,8 +25,8 @@ def test_typed_portrait_and_unknown_fields():
 def test_portrait_inline_replace_remove_reopen_backup(project, qtbot, tmp_path):
     app, project = project
     project.create_project(tmp_path / "world")
-    card = app.create_card("Person", template_id="character")
-    assert card.portrait == Portrait()
+    card = app.create_card("Person", card_type="character")
+    assert card.portrait is None
     editor = app.open_card_editor(card.id).widget()
     source = image_file(tmp_path / "wide.png", 800, 200)
     app.card_images.portrait(editor, source)
@@ -37,15 +37,14 @@ def test_portrait_inline_replace_remove_reopen_backup(project, qtbot, tmp_path):
     qtbot.waitUntil(lambda: not app.card_images.importing)
     content = app.cards.get(card.id).content
     assert "<img" in content and len(project.assets) == 1
-    editor.portrait_panel.caption.setText("<Подпись>")
-    editor.portrait_panel.caption.editingFinished.emit()
-    assert app.cards.get(card.id).portrait.caption == "<Подпись>"
+    editor.portrait_panel.changed.emit(replace(portrait, crop=(0.1, 0.2, 0.5, 0.6)))
+    assert app.cards.get(card.id).portrait.crop == (0.1, 0.2, 0.5, 0.6)
     second = image_file(tmp_path / "second.png", 100, 100)
     app.card_images.portrait(editor, second)
     qtbot.waitUntil(lambda: not app.card_images.importing)
     updated = app.cards.get(card.id).portrait
     assert updated.asset_id != portrait.asset_id and len(project.assets) == 2
-    assert updated.caption == "<Подпись>" and app.cards.get(card.id).content == content
+    assert updated.crop == (0, 0, 1, 1) and app.cards.get(card.id).content == content
     assert project.save_current()
     archive = tmp_path / "backup.zip"
     project.store.backup(archive)
@@ -55,7 +54,7 @@ def test_portrait_inline_replace_remove_reopen_backup(project, qtbot, tmp_path):
     project.open_project(tmp_path / "restored")
     editor = app.open_card_editor(card.id).widget()
     assert editor.portrait_panel.portrait == updated
-    editor.portrait_panel.remove.trigger()
+    editor.portrait_panel.remove.click()
     assert app.cards.get(card.id).portrait is None
     assert app.cards.get(card.id).content == content and len(project.assets) == 2
 
@@ -63,7 +62,7 @@ def test_portrait_inline_replace_remove_reopen_backup(project, qtbot, tmp_path):
 def test_missing_portrait_never_changes_body_or_revision(project, qtbot, tmp_path):
     app, project = project
     project.create_project(tmp_path / "world")
-    card = app.create_card("Person", template_id="character")
+    card = app.create_card("Person", card_type="character")
     app.session.update_card(card.id, portrait=Portrait(str(uuid4())))
     before = app.cards.get(card.id)
     editor = app.open_card_editor(card.id).widget()
@@ -81,7 +80,7 @@ def test_missing_portrait_never_changes_body_or_revision(project, qtbot, tmp_pat
 def test_import_survives_closed_editor_and_deleted_card(project, qtbot, tmp_path):
     app, project = project
     project.create_project(tmp_path / "world")
-    card = app.create_card("Person", template_id="character")
+    card = app.create_card("Person", card_type="character")
     editor = app.open_card_editor(card.id).widget()
     app.card_images.portrait(editor, image_file(tmp_path / "portrait.png"))
     app.window_manager.close_window(app.card_editor_window_key(card.id))

@@ -1,9 +1,8 @@
 from PySide6.QtCore import QObject, Signal
 
-from lodandsy.domain.card import EMPTY_DOCUMENT, Card, Portrait
+from lodandsy.domain.card import EMPTY_DOCUMENT, Card
 from lodandsy.domain.card_collection import CardCollection
 from lodandsy.domain.card_schema import FIELD_DEFINITIONS
-from lodandsy.domain.card_templates import card_template
 
 
 class ApplicationSession(QObject):
@@ -13,6 +12,7 @@ class ApplicationSession(QObject):
     entities_deleted = Signal(object)
     entities_replaced = Signal()
     current_card_changed = Signal(object)
+    entity_created = Signal(str)
     card_created = Signal(str)
     card_changed = Signal(str, object)
     cards_deleted = Signal(object)
@@ -102,20 +102,119 @@ class ApplicationSession(QObject):
         self.cards_deleted.emit(deleted)
         return deleted
 
-    def create_card(
-        self, title: str, parent_id: str | None = None, *, template_id="empty", card_type=None
-    ) -> Card:
-        template = card_template(template_id)
-        card = self.cards.create(
-            title,
-            parent_id,
-            content=EMPTY_DOCUMENT,
-            portrait=Portrait() if template.portrait else None,
-            card_type=card_type or template.default_type,
-            template_id=template_id,
-        )
+    def create_card(self, title, parent_id=None, *, card_type="note"):
+        card = self.cards.create(title, parent_id, card_type=card_type)
         self.card_created.emit(card.id)
         return card
+
+    def add_card_field(self, card_id, key):
+        after = self.cards.get(card_id).add_field(key)
+        return self.update_card(card_id, values=after.values)
+
+    def update_section(self, card_id, section_id, **changes):
+        from dataclasses import replace
+
+        if changes.keys() - {"title", "content", "table_id"}:
+            raise ValueError("Неподдерживаемые изменения раздела")
+        card = self.cards.get(card_id)
+        card.section(section_id)
+        sections = tuple(
+            replace(section, **changes) if section.id == section_id else section
+            for section in card.sections
+        )
+        return self.update_card(card_id, sections=sections)
+
+    def add_section(self, card_id, title, *, kind="rich_text", table_id=None):
+        from lodandsy.domain.card import CardSection
+
+        card = self.cards.get(card_id)
+        if table_id is not None:
+            entity = self.entities.get(table_id)
+            if entity.kind != "table" or entity.parent_id != card_id:
+                raise ValueError("Выберите дочернюю таблицу карточки")
+        section = CardSection(
+            title,
+            len(card.sections),
+            kind,
+            content=EMPTY_DOCUMENT if kind == "rich_text" else None,
+            table_id=table_id,
+        )
+        self.update_card(card_id, sections=(*card.sections, section))
+        return section
+
+    def delete_section(self, card_id, key):
+        from dataclasses import replace
+
+        card = self.cards.get(card_id)
+        card.section(key)
+        sections = tuple(
+            replace(s, position=i) for i, s in enumerate(s for s in card.sections if s.id != key)
+        )
+        self.update_card(card_id, sections=sections)
+        self.set_field_draft(card_id, key, None)
+
+    def move_section(self, card_id, key, position):
+        from dataclasses import replace
+
+        card = self.cards.get(card_id)
+        sections = list(card.sections)
+        if type(position) is not int or not 0 <= position < len(sections):
+            raise ValueError("Invalid section position")
+        section = card.section(key)
+        sections.remove(section)
+        sections.insert(position, section)
+        self.update_card(
+            card_id, sections=tuple(replace(s, position=i) for i, s in enumerate(sections))
+        )
+
+    def section_table(self, card_id, key, *, existing_id=None, replace_link=False, title=None):
+        from dataclasses import replace
+
+        from lodandsy.domain.document_payloads import module_document, module_payload
+        from lodandsy.domain.table_document import ColumnDefinition, TableDocument
+
+        card = self.cards.get(card_id)
+        section = card.section(key)
+        if section.kind != "table_ref":
+            raise ValueError("Это не табличный раздел")
+        if section.table_id and not replace_link:
+            entity = self.entities.get(section.table_id)
+            if entity.kind != "table" or entity.parent_id != card_id:
+                raise ValueError("Связанная дочерняя таблица недоступна")
+            return module_document(self.entities, entity.id)
+        if existing_id:
+            entity = self.entities.get(existing_id)
+            if entity.kind != "table" or entity.parent_id != card_id:
+                raise ValueError("Выберите дочернюю таблицу")
+            table = module_document(self.entities, existing_id)
+            create = False
+        else:
+            columns = tuple(
+                ColumnDefinition(name, kind, i)
+                for i, (name, kind) in enumerate(
+                    [("Предмет", "text"), ("Количество", "number"), ("Описание", "text")]
+                    if section.purpose == "inventory"
+                    else [("Столбец 1", "text")]
+                )
+            )
+            table = TableDocument(title or section.title, columns=columns)
+            create = True
+        candidate = replace(
+            card,
+            sections=tuple(
+                replace(s, table_id=table.id) if s.id == key else s for s in card.sections
+            ),
+        )
+        with self.entities.atomic():
+            if create:
+                self.entities.create(
+                    "table", table.title, module_payload(table), card_id, id=table.id
+                )
+            self.entities.put_payload(card_id, candidate.payload())
+        if create:
+            self.entity_created.emit(table.id)
+        self.card_changed.emit(card_id, frozenset({"sections", key}))
+        return table
 
     def update_card_fields(self, card_id, changes):
         if not isinstance(changes, dict):
@@ -125,7 +224,7 @@ class ApplicationSession(QObject):
         return self.update_card(
             card_id,
             title=after.title,
-            content=after.content,
+            sections=after.sections,
             portrait=after.portrait,
             values=after.values,
         )
@@ -136,13 +235,12 @@ class ApplicationSession(QObject):
             from lodandsy.application.rich_html import validate_html
 
             validate_html(changes["content"])
-        if "values" in changes:
+        if "sections" in changes:
             from lodandsy.application.rich_html import validate_html
 
-            for key, value in changes["values"]:
-                definition = FIELD_DEFINITIONS.get(key)
-                if definition and definition.data_type == "richtext" and value is not None:
-                    validate_html(value)
+            for section in changes["sections"]:
+                if section.kind == "rich_text":
+                    validate_html(section.content)
         previous_position = (
             self.cards.position(card_id) if changes.keys() & {"position", "parent_id"} else None
         )
@@ -153,6 +251,13 @@ class ApplicationSession(QObject):
             if field not in {"position", "values", "content"}
             if getattr(previous, field) != getattr(card, field)
         )
+        old_sections = {s.id: s for s in previous.sections}
+        new_sections = {s.id: s for s in card.sections}
+        fields |= {
+            key
+            for key in old_sections.keys() | new_sections.keys()
+            if old_sections.get(key) != new_sections.get(key)
+        }
         fields |= set(dict(previous.values)) ^ set(dict(card.values))
         fields |= {key for key in FIELD_DEFINITIONS if previous.value(key) != card.value(key)}
         if previous_position is not None and previous_position != self.cards.position(card_id):

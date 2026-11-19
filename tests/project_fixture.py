@@ -42,7 +42,7 @@ def sample_store(root):
         "Map",
         asset.id,
         tokens=(TokenInstance(second.id, 11, 9, cells_w=2, cells_h=1, image_override=asset.id),),
-        grid=MapGrid(True, 80, -2, 3, 0.6, True),
+        grid=MapGrid(True, 80, -2, 3, 0.6),
     )
     table = text_table("Table", rows=("Forest", "", "0", "<text>"))
     store.save(ProjectSnapshot(cards.all(), 7, (asset,), (document,), (table,)))
@@ -58,9 +58,9 @@ def record_rows(table, values):
 def text_table(title, *, rows=(), id=None):
     from dataclasses import replace
 
-    from lodandsy.domain.table_document import RandomTable
+    from lodandsy.domain.table_document import TableDocument
 
-    table = RandomTable(title) if id is None else RandomTable(title, id)
+    table = TableDocument(title) if id is None else TableDocument(title, id)
     return replace(table, rows=record_rows(table, rows))
 
 

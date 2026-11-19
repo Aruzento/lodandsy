@@ -13,10 +13,8 @@ from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
 from lodandsy.application.card_payload_codec import decode_card, encode_card
-from lodandsy.application.dice_payload_codec import decode_dice, encode_dice
 from lodandsy.domain.card import Card, validate_card_id
 from lodandsy.domain.card_collection import CardCollection
-from lodandsy.domain.dice_document import DiceDocument
 from lodandsy.domain.document_payloads import project_entities
 from lodandsy.domain.entity import Entity
 from lodandsy.domain.map_document import (
@@ -26,10 +24,10 @@ from lodandsy.domain.map_document import (
     PlacedAssetObject,
     TokenInstance,
 )
-from lodandsy.domain.table_document import ColumnDefinition, RandomTable, RowRecord
+from lodandsy.domain.table_document import ColumnDefinition, RowRecord, TableDocument
 
 DATABASE_NAME = "project.sqlite3"
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 MAX_BACKUP_BYTES = 4 * 1024**3
 
 
@@ -73,12 +71,11 @@ class ProjectSnapshot:
     revision: int
     assets: tuple[AssetRecord, ...] = ()
     maps: tuple[MapDocument, ...] = ()
-    tables: tuple[RandomTable, ...] = ()
-    dice: tuple[DiceDocument, ...] = ()
+    tables: tuple[TableDocument, ...] = ()
     entities: tuple[Entity, ...] = ()
 
     def entity_collection(self):
-        return project_entities(self.cards, self.maps, self.tables, self.dice, self.entities)
+        return project_entities(self.cards, self.maps, self.tables, self.entities)
 
     def __post_init__(self):
         if not self.entities:
@@ -203,11 +200,6 @@ class SQLiteProjectStore:
                       FOREIGN KEY(table_id,row_id) REFERENCES table_row(table_id,id),
                       FOREIGN KEY(table_id,column_id) REFERENCES table_column(table_id,id));
                 """)
-                connection.execute(
-                    "CREATE TABLE dice_document(id TEXT PRIMARY KEY "
-                    "REFERENCES entity(id) ON DELETE CASCADE, "
-                    "payload_version INTEGER NOT NULL, presets TEXT NOT NULL)"
-                )
                 connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             (root / "assets").mkdir()
         except sqlite3.Error as error:
@@ -269,17 +261,9 @@ class SQLiteProjectStore:
                         "FROM entity e JOIN card_content c ON e.id=c.id WHERE e.kind='card'"
                     )
                 )
-                dice = tuple(
-                    decode_dice(title, key, payload_version, presets)
-                    for key, title, payload_version, presets in connection.execute(
-                        "SELECT e.id,e.title,d.payload_version,d.presets "
-                        "FROM entity e JOIN dice_document d ON e.id=d.id WHERE e.kind='dice'"
-                    )
-                    if self._require_version(payload_version, 2, "Dice")
-                )
                 maps, tables = self._load_modules(connection)
                 snapshot = ProjectSnapshot(
-                    tuple(cards), metadata[0][0], assets, maps, tables, dice, envelopes
+                    tuple(cards), metadata[0][0], assets, maps, tables, envelopes
                 )
                 collection = snapshot.entity_collection()
                 ordered_cards = CardCollection(entities=collection).all()
@@ -288,7 +272,6 @@ class SQLiteProjectStore:
                     "card": "card_content",
                     "map": "map_document",
                     "table": "table_document",
-                    "dice": "dice_document",
                 }
                 for kind, table in expected.items():
                     ids = {row[0] for row in connection.execute(f"SELECT id FROM {table}")}
@@ -300,7 +283,6 @@ class SQLiteProjectStore:
                     assets,
                     maps,
                     tables,
-                    dice,
                     collection.summaries(),
                 )
         except sqlite3.Error as error:
@@ -325,7 +307,7 @@ class SQLiteProjectStore:
                 "m.tokens,m.grid,m.layers,m.objects "
                 "FROM map_document m JOIN entity e ON e.id=m.id ORDER BY e.position,e.id"
             ):
-                SQLiteProjectStore._require_version(version, 4, "Map")
+                SQLiteProjectStore._require_version(version, 5, "Map")
                 tokens, grid = json.loads(tokens), json.loads(grid)
                 if not isinstance(tokens, list) or not isinstance(grid, dict):
                     raise ValueError("Invalid map payload")
@@ -363,7 +345,7 @@ class SQLiteProjectStore:
             ):
                 SQLiteProjectStore._require_version(version, 2, "Table")
                 tables.append(
-                    RandomTable(title, key, tuple(columns.get(key, ())), tuple(rows.get(key, ())))
+                    TableDocument(title, key, tuple(columns.get(key, ())), tuple(rows.get(key, ())))
                 )
         except (TypeError, KeyError, ValueError) as error:
             raise ProjectError(f"Cannot read module data: {error}") from error
@@ -416,7 +398,6 @@ class SQLiteProjectStore:
                 "card_content",
                 "map_document",
                 "table_document",
-                "dice_document",
             ):
                 connection.execute(f"DELETE FROM {table}")
             connection.execute("DELETE FROM entity")
@@ -436,7 +417,7 @@ class SQLiteProjectStore:
                     (
                         m.id,
                         m.asset_id,
-                        4,
+                        5,
                         json.dumps([asdict(token) for token in m.tokens], ensure_ascii=False),
                         json.dumps(asdict(m.grid)),
                         json.dumps([asdict(layer) for layer in m.layers], ensure_ascii=False),
@@ -469,10 +450,6 @@ class SQLiteProjectStore:
                     for r in t.rows
                     for key, value in r.cells
                 ],
-            )
-            connection.executemany(
-                "INSERT INTO dice_document VALUES(?,?,?)",
-                [(d.id, 2, encode_dice(d)) for d in snapshot.dice],
             )
             connection.execute("UPDATE metadata SET revision=?", (snapshot.revision,))
 

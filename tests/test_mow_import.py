@@ -45,7 +45,8 @@ def test_supplied_real_sample_actual_id_title_type_empty_body_and_parent(tmp_pat
     prepared = prepare_import(plan, store, (), ())
     (card,) = prepared.cards
     assert card.title == "Существа.Тюрьма - подземка" and card.card_type == "folder"
-    assert card.value("tags") == ("card", "folder")
+    assert "tags" not in dict(card.values) and not hasattr(card, "template_id")
+    assert any("tags" in w for w in prepared.warnings)
     assert not html_text(card.content).strip() and card.portrait is None
     assert card.parent_id is None and any("parent" in w for w in prepared.warnings)
     assert "select" not in card.content and "Изображение" not in card.content
@@ -91,6 +92,11 @@ def test_two_pass_links_order_media_repeat_and_backup(tmp_path, qapp):
         and "character" not in parent.content
     )
     assert len(prepared.assets) == 1 and child.portrait.asset_id == prepared.assets[0].id
+    assert child.value("aliases") == ("Alias",)
+    assert any("portrait description/caption" in w for w in prepared.warnings)
+    assert not child.section(
+        next(s.id for s in child.sections if s.purpose == "inventory")
+    ).table_id
     assert [
         session.cards.get(i).value("mow_id") for i in session.entities.child_ids(parent.id)
     ] == [child2, child1]

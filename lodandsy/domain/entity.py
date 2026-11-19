@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from lodandsy.domain.module_values import validate_id, validate_title
 
-DOCUMENT_KINDS = frozenset({"card", "map", "table", "dice"})
+DOCUMENT_KINDS = frozenset({"card", "map", "table"})
 
 
 @dataclass(frozen=True, slots=True)

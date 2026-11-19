@@ -18,7 +18,7 @@ class ProjectTreeModel(QStandardItemModel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._nodes, self._items = {}, {}
-        self._icons = {kind: icon(kind) for kind in ("card", "map", "table", "dice")}
+        self._icons = {kind: icon(kind) for kind in ("card", "map", "table")}
 
     def index_for_node(self, key):
         item = self._nodes.get(key)

@@ -37,15 +37,21 @@ LODANDSY — нативное локальное Windows-приложение д
 
 ## Рабочий цикл
 
-Активна утверждённая итерация 4: docs/iterations/2026-11-19-iteration-4/CODEX-ITERATION-4.md. A–G выполняются непрерывно и последовательно, без промежуточных согласований/финальных отчётов. Пакет определяет новый Card CTV/TokenInstance/map objects/MOW import; это текущий контракт поверх исторических ADR. Внешний MOW импорт не является legacy runtime. Commit/push/merge/release требуют нового отдельного разрешения; разрешение a944157 не переносится.
+Активна утверждённая итерация 5: docs/iterations/2026-11-19-iteration-5/CODEX-ITERATION-5.md.
+A–G непрерывно и последовательно, без промежуточных согласований/финальных отчётов.
+Текущий контракт: docs/MVP.md, ADR-023…026. Исторические ADR не сохраняют отменённый runtime.
+Git-действия только после итоговой проверки и разрешения владельца.
 
-
-Текущие контракты: SQLite11/Cardv3/Mapv4/Tablev2/Dicev2, ADR-019…022.
-CardType/Field/Section/Template разделены, одно canonical title, typed fields не в HTML.
-Inspector и Card меняют ApplicationSession; invalid drafts блокируют save. TokenInstance
-хранит только размещение/явные overrides, PlacedAssetObject независим и принадлежит слою.
-MOW reader — ограниченный однонаправленный импорт, без legacy runtime/новых YAML зависимостей.
-Не сохранять промежуточные форматы итерации; неподдерживаемые проекты отклонять без записи.
+SQLite12/Cardv4/Mapv5/Tablev2, UI state4. Дерево Card/Map/Table, Dice — singleton tool:dice.
+Только card_type, UUID CardSection rich_text/table_ref, характеристики только в Inspector.
+Templates/tags/snap/Dice Entity/random table mode удалены. Aliases — данные/import без UI.
+Portrait asset+normalized oriented crop, без caption/description. Map viewer и отдельный
+Map Editor — общие ModuleSession/Undo/tiles и разные камеры. Invalid drafts не блокируют
+save валидного канона; rich content получает application ACK прежде canonical_content.
+MOW — однонаправленный входной конвертер, не legacy runtime, без выдуманного инвентаря.
+Неподдерживаемые версии отклонять без записи, реальные папки не удалять. Full snapshot
+writer и sync backup4GiB — отдельные задачи. Native libvips tiles сохраняются.
+Целевые проверки после блоков, полный gate и сборка после стабилизации.
 
 ## Проверки и отчёт
 
@@ -61,3 +67,5 @@ python -m pip check
 GUI-тесты pytest-qt и offscreen не заменяют ручную проверку Windows: focus, docking, floating, maximize/restore, mixed DPI, второй монитор, установленная сборка. Не заявляй о запуске тестов или сборки без фактического результата. Не считай количество тестов эквивалентом качества.
 
 Каждый отчёт о блоке: цель и ID Linear; изменения и затронутые файлы; команды и фактические результаты; что проверено и не проверено; риски и решение владельца (если нужно); состояние задач и следующий блок. Если есть блокер, укажи точную причину и условие продолжения. Продолжай до согласованного результата, а не до первой компилирующейся версии.
+
+Итерация5 отменяет templates/tags/snap/Dice entity/random table mode. Только card_type, UUID CardSection rich_text/table_ref, характеристики в Inspector, portrait crop, самостоятельный Map Editor и tool:dice. Invalid drafts не блокируют сохранение валидного канона. Целевые проверки по завершённым блокам; один полный gate и сборка после стабилизации.

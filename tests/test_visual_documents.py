@@ -20,7 +20,7 @@ pytest_plugins = ["tests.project_fixture"]
 def test_new_card_visual_edit_format_undo_reopen_and_restart(project, tmp_path):
     app, project = project
     project.create_project(tmp_path / "world")
-    card = app.create_card("Статья", template_id="article")
+    card = app.create_card("Статья", card_type="article")
     editor = app.open_card_editor(card.id).widget()
     assert isinstance(editor, CardEditorWidget)
     assert not editor.text_edit.isReadOnly()
@@ -157,10 +157,10 @@ def test_unknown_rich_version_refuses_without_rewriting(project, tmp_path):
     assert project.save_current()
     with closing(connect_database(project.store.path)) as connection, connection:
         encoded = json.loads(connection.execute("SELECT content FROM card_content").fetchone()[0])
-        encoded["document"]["version"] = 999
+        encoded["sections"][0]["kind"] = "future"
         connection.execute("UPDATE card_content SET content=?", (json.dumps(encoded),))
     digest = hashlib.sha256(project.store.path.read_bytes()).hexdigest()
-    with pytest.raises(ProjectError, match="Unsupported"):
+    with pytest.raises(ProjectError):
         project.store.load()
     assert hashlib.sha256(project.store.path.read_bytes()).hexdigest() == digest
 

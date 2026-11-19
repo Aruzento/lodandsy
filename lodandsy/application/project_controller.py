@@ -47,8 +47,9 @@ class ProjectController(QObject):
         session = controller.session
         session.entity_changed.connect(self.saver.mark_dirty)
         session.card_created.connect(self.saver.mark_dirty)
+        session.entity_created.connect(self.saver.mark_dirty)
         session.card_changed.connect(self.saver.mark_dirty)
-        session.field_draft_changed.connect(self.saver.mark_dirty)
+        session.field_draft_changed.connect(self._update_status)
         session.cards_deleted.connect(self.saver.mark_dirty)
         controller.modules.session.changed.connect(self.saver.mark_dirty)
         controller.modules.busy_changed.connect(self._update_status)
@@ -98,14 +99,11 @@ class ProjectController(QObject):
                 lambda checked=False, d=directory: self.mow_importer.request(d)
             )
             self.mow_actions.append(action)
+        tools = self.window.menuBar().addMenu("Инструменты")
+        dice = tools.addAction("Кубики")
+        dice.triggered.connect(self.controller.modules.open_dice)
 
     def _snapshot(self, revision):
-        if self.controller.session.field_drafts:
-            raise ProjectError("Исправьте поля карточек или отмените ошибочный ввод")
-        if any(self.controller.modules._table_drafts.values()):
-            raise ProjectError(
-                "Исправьте ошибочные ячейки таблиц или отмените ввод перед сохранением"
-            )
         modules = self.controller.modules.session
         return ProjectSnapshot(
             self.controller.cards.all(),
@@ -113,9 +111,71 @@ class ProjectController(QObject):
             tuple(self.assets.values()),
             tuple(modules.maps.values()),
             tuple(modules.tables.values()),
-            tuple(modules.dice.values()),
             self.controller.session.entities.summaries(),
         )
+
+    @property
+    def draft_count(self):
+        return len(self.controller.session.field_drafts) + sum(
+            len(values) for values in self.controller.modules._table_drafts.values()
+        )
+
+    def discard_drafts(self):
+        session = self.controller.session
+        for key in {key for key, field in session.field_drafts}:
+            session.discard_field_drafts(key)
+        for key, values in self.controller.modules._table_drafts.items():
+            if values:
+                for widget in tuple(self.controller.modules._table_views.get(key, ())):
+                    from shiboken6 import isValid
+
+                    if isValid(widget):
+                        widget.revert_active_editor()
+                values.clear()
+                self.controller.modules._table_draft_changed(key)
+        self._update_status()
+
+    def _confirm_drafts(self):
+        if not self.draft_count:
+            return True
+        dialog = QMessageBox(self.window)
+        dialog.setWindowTitle("Несохранённый ошибочный ввод")
+        dialog.setText(
+            "Корректные данные можно сохранить. Ошибочный ввод остаётся только в текущей сессии."
+        )
+        fix = dialog.addButton("Исправить", QMessageBox.ButtonRole.ActionRole)
+        discard = dialog.addButton(
+            "Отбросить ошибочный ввод", QMessageBox.ButtonRole.DestructiveRole
+        )
+        dialog.addButton(QMessageBox.StandardButton.Cancel)
+        dialog.exec()
+        if dialog.clickedButton() is fix:
+            session = self.controller.session
+            if session.field_drafts:
+                key, field = next(iter(session.field_drafts))
+                editor = self.controller.open_card_editor(key).widget()
+                if field in {s.id for s in session.cards.get(key).sections}:
+                    editor.select_section(field)
+                elif field == "title":
+                    editor.title_edit.setFocus()
+                elif field == "summary":
+                    editor.summary_edit.setFocus()
+                else:
+                    widget = self.window.inspector_panel.field_form.controls.get(field)
+                    if widget:
+                        widget.setFocus()
+            else:
+                key = next(
+                    key for key, values in self.controller.modules._table_drafts.items() if values
+                )
+                self.controller.modules.open_table(key)
+            return False
+        if dialog.clickedButton() is not discard:
+            return False
+        if self.saver.dirty and not self.save_current():
+            return False
+        self.discard_drafts()
+        return True
 
     def _update_status(self, *_args):
         labels = {
@@ -130,11 +190,13 @@ class ProjectController(QObject):
             text = "Создайте или откройте проект"
         if self.saver.last_error:
             text += f": {self.saver.last_error}"
+        if self.draft_count:
+            text += f" · Ошибочный ввод не сохранён: {self.draft_count}"
         self.status.setText(text)
         color = (
             "#f19a9a"
             if self.saver.state == SaveState.ERROR
-            else ("#ceb075" if self.saver.dirty else "#aab7ca")
+            else ("#ceb075" if self.saver.dirty or self.draft_count else "#aab7ca")
         )
         self.status.setStyleSheet(f"color: {color};")
         self.status.setToolTip(text)
@@ -157,7 +219,7 @@ class ProjectController(QObject):
         self.controller.card_images.wait_import()
         self.controller.modules.wait_import()
         self.saver.wait_current()
-        if self.saver.dirty and self.store is not None and not discard:
+        if (self.draft_count or (self.saver.dirty and self.store is not None)) and not discard:
             raise ProjectError("Save the current project before creating another")
         store = SQLiteProjectStore.create(folder)
         old = self.store
@@ -180,7 +242,6 @@ class ProjectController(QObject):
             or self.assets
             or self.controller.modules.session.maps
             or self.controller.modules.session.tables
-            or self.controller.modules.session.dice
         ):
             self.saver.mark_dirty()
             if not self.saver.save():
@@ -199,8 +260,8 @@ class ProjectController(QObject):
         self.saver.wait_current()
         if self.store is not None and self.store.root == Path(folder).resolve():
             return
-        if self.saver.dirty and not discard:
-            raise ProjectError("Save or explicitly discard current changes first")
+        if (self.saver.dirty or self.draft_count) and not discard:
+            raise ProjectError("Save valid changes, resolve drafts or explicitly discard first")
         store = SQLiteProjectStore.open(folder)
         try:
             snapshot = store.load()
@@ -254,6 +315,8 @@ class ProjectController(QObject):
         self.controller.card_images.wait_import()
         self.controller.modules.wait_import()
         self.saver.wait_current()
+        if not self._confirm_drafts():
+            return False
         if not self.saver.dirty:
             return True
         choice = QMessageBox.warning(

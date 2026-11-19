@@ -3,28 +3,28 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QApplication
 
 from lodandsy.domain.card import EMPTY_DOCUMENT
-from lodandsy.domain.card_templates import CARD_TEMPLATES, card_template
+from lodandsy.domain.card_schema import CARD_TYPES
 from lodandsy.ui.card_creation_dialog import CardCreationDialog
 
 pytest_plugins = ["tests.project_fixture"]
 
 
-def test_registry_is_versioned_text_and_rejects_unknown_before_mutation(project, qtbot):
+def test_type_registry_rejects_unknown_before_mutation(project, qtbot):
     app, _ = project
-    assert {t.id for t in CARD_TEMPLATES} == {"empty", "article", "character", "location", "item"}
-    assert all(t.version == 3 and isinstance(t.sections, tuple) for t in CARD_TEMPLATES)
+    assert set(CARD_TYPES) >= {"note", "article", "character", "location", "item"}
     assert "<body>" in EMPTY_DOCUMENT
     with pytest.raises(ValueError, match="Неизвестный"):
-        app.create_card("Unknown", template_id="absent")
+        app.create_card("Unknown", card_type="absent")
     assert app.cards.all() == ()
 
 
-@pytest.mark.parametrize("template", CARD_TEMPLATES)
-def test_independent_template_copy_edit_save_reopen(project, tmp_path, template):
+@pytest.mark.parametrize("card_type", ["note", "article", "character", "location", "item"])
+def test_independent_type_sections_edit_save_reopen(project, tmp_path, card_type):
     app, project = project
     project.create_project(tmp_path / "one")
-    first = app.create_card("First", template_id=template.id)
-    second = app.create_card("Child", first.id, template_id=template.id)
+    first = app.create_card("First", card_type=card_type)
+    second = app.create_card("Child", first.id, card_type=card_type)
+    assert {s.id for s in first.sections}.isdisjoint(s.id for s in second.sections)
     assert first.content == second.content == EMPTY_DOCUMENT
     from lodandsy.application.rich_html import sanitize_html
 
@@ -44,7 +44,7 @@ def test_independent_template_copy_edit_save_reopen(project, tmp_path, template)
     project.open_project(tmp_path / "one")
     assert app.cards.get(first.id).content == content
     assert app.cards.get(second.id).parent_id == first.id
-    assert card_template(template.id) == template
+    assert app.cards.get(first.id).card_type == card_type
 
 
 def test_creation_dialog_root_child_and_cancel(project, qtbot):
@@ -56,14 +56,13 @@ def test_creation_dialog_root_child_and_cancel(project, qtbot):
         assert isinstance(dialog, CardCreationDialog)
         assert not dialog.ok.isEnabled()
         dialog.title_edit.setText("  Персонаж  ")
-        dialog.template.setCurrentIndex(dialog.template.findData("character"))
         dialog.card_type.setCurrentIndex(dialog.card_type.findData("character"))
         qtbot.mouseClick(dialog.ok, Qt.MouseButton.LeftButton)
 
     QTimer.singleShot(0, choose)
     panel.request_create_root()
     root = app.cards.all()[0]
-    assert root.title == "Персонаж" and "inventory" in card_template(root.template_id).sections
+    assert root.title == "Персонаж" and any(s.purpose == "inventory" for s in root.sections)
     panel.select_node("card:" + root.id)
     QTimer.singleShot(0, choose)
     panel.request_create_child()

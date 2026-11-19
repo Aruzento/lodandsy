@@ -378,6 +378,11 @@ def prepare_import(plan, store, existing_cards, known_assets, *, conflicts="skip
             meta = record.metadata
             body, issues = sanitize_html(render(record.body, mapping, media, warnings))
             warnings.extend(record.title + ": " + x for x in issues)
+            excluded = [key for key in ("tags", "template") if key in meta]
+            if record.portrait and any(key in record.portrait.attrs for key in ("alt", "title")):
+                excluded.append("portrait description/caption")
+            if excluded:
+                warnings.append(record.title + ": намеренно исключены " + ", ".join(excluded))
             source_type = meta.get("type") or "note"
             kind = source_type if source_type in CARD_TYPES else "note"
             if kind != source_type:
@@ -386,7 +391,6 @@ def prepare_import(plan, store, existing_cards, known_assets, *, conflicts="skip
                 "mow_id": meta["id"],
                 "mow_type": str(source_type),
                 "summary": record.summary,
-                "tags": tuple(meta.get("tags") or ()),
                 "aliases": tuple(meta.get("aliases") or ()),
             }
             parent = mapping.get(meta.get("parent"), parent_id)
@@ -398,7 +402,7 @@ def prepare_import(plan, store, existing_cards, known_assets, *, conflicts="skip
                         raise ValueError("data-asset требует manifest")
                     relative = media(value or "")
                     asset = next(a for a in assets if a.path == relative)
-                    portrait = Portrait(asset.id, record.portrait.attrs.get("alt", ""))
+                    portrait = Portrait(asset.id)
                 except (ValueError, OSError) as error:
                     warnings.append(record.title + ": портрет недоступен: " + str(error))
             cards.append(

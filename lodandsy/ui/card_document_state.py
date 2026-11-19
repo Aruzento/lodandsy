@@ -6,30 +6,35 @@ from lodandsy.ui.rich_document import RichDocument
 class CardDocumentState:
     """Session document and cursor/zoom state, independent of the editor window."""
 
-    def __init__(self, content, parent):
+    def __init__(self, content, parent, primary_id=None):
         self.parent = parent
         self.sections = {}
         self.section_preferences = {}
-        self.active_section = "description"
+        self.primary_id = primary_id
+        self.active_section = primary_id
         self.document = RichDocument(content, parent)
         self.position = self.anchor = self.vertical_scroll = self.horizontal_scroll = 0
         self.text_scale = 100
         self.images_connected = False
 
     def capture(self, editor):
-        self.active_section = getattr(editor, "current_section", "description")
-        target = self.section(self.active_section)
-        target.capture_position(editor)
+        self.active_section = editor.current_section
+        target = self.existing(self.active_section)
+        if target and editor.body.currentIndex() == 0:
+            target.capture_position(editor)
 
     def section(self, key, content=None):
         from lodandsy.domain.card import EMPTY_DOCUMENT
 
-        if key == "description":
+        if key == self.primary_id:
             return self
         if key not in self.sections:
             self.sections[key] = CardDocumentState(content or EMPTY_DOCUMENT, self.parent)
             self.sections[key].load_ui_values(self.section_preferences.get(key, {}))
         return self.sections[key]
+
+    def existing(self, key):
+        return self if key == self.primary_id else self.sections.get(key)
 
     def documents(self):
         return (self.document, *(s.document for s in self.sections.values()))
@@ -59,11 +64,14 @@ class CardDocumentState:
         }
 
     def load_ui_values(self, values):
-        from lodandsy.domain.card_schema import FIELD_DEFINITIONS
+        from lodandsy.domain.card import validate_card_id
 
-        key = values.get("active_section", "description")
-        if key in FIELD_DEFINITIONS and FIELD_DEFINITIONS[key].data_type == "richtext":
+        key = values.get("active_section")
+        try:
+            validate_card_id(key)
             self.active_section = key
+        except ValueError:
+            pass
         self.section_preferences = (
             values.get("sections", {}) if isinstance(values.get("sections"), dict) else {}
         )
@@ -79,10 +87,11 @@ class CardDocumentState:
             self.text_scale = scale
 
     def restore(self, editor):
-        if hasattr(editor, "select_section"):
-            editor.select_section(self.active_section, capture=False)
-        else:
-            self.restore_position(editor)
+        key = self.active_section
+        editor.select_section(key, capture=False)
+        target = self.existing(editor.current_section)
+        if target and editor.body.currentIndex() == 0:
+            target.restore_position(editor)
 
     def restore_position(self, editor):
         editor.format_toolbar.scale.setValue(self.text_scale)
@@ -95,7 +104,12 @@ class CardDocumentState:
         editor.text_edit.horizontalScrollBar().setValue(self.horizontal_scroll)
 
     def sync_content(self, content):
-        if self.document.canonical_content == content:
+        pending = self.document.pending_content
+        if self.document.canonical_content == content and pending is None:
+            return
+        if pending == content:
+            self.document.canonical_content = content
+            self.document.pending_content = None
             return
         cursor = QTextCursor(self.document)
         cursor.beginEditBlock()
@@ -104,3 +118,4 @@ class CardDocumentState:
         cursor.insertHtml(content)
         cursor.endEditBlock()
         self.document.canonical_content = content
+        self.document.pending_content = None

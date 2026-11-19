@@ -19,7 +19,7 @@ from lodandsy.application.card_inspector_binding import (
 from lodandsy.application.clipboard import clipboard_writer
 from lodandsy.application.module_controller import ModuleController
 from lodandsy.application.rich_html import internal_entity_id
-from lodandsy.domain.card import Card
+from lodandsy.domain.card import EMPTY_DOCUMENT, Card
 from lodandsy.domain.card_collection import CardCollection
 from lodandsy.ui.app_shell import AppShell
 from lodandsy.ui.card_document_state import CardDocumentState
@@ -65,14 +65,13 @@ class AppController:
             session=self.session,
             inspector=self.window.inspector_panel,
         )
-        self.window.inspector_panel.open_field_requested.connect(self.open_card_field)
 
         self.window.tree_panel.entity_selected.connect(self._on_navigator_selected)
 
         self.window.tree_panel.entity_open_requested.connect(self.open_entity)
 
         self.window.tree_panel.create_requested.connect(self._on_create_requested)
-        self.window.tree_panel.template_create_requested.connect(self._on_create_requested)
+        self.window.tree_panel.typed_create_requested.connect(self._on_create_requested)
 
         self.window.tree_panel.rename_requested.connect(self.rename_card)
 
@@ -84,6 +83,7 @@ class AppController:
         self.window.tree_panel.move_parent_requested.connect(self.request_move_card)
 
         self.session.card_created.connect(self._on_structure_changed)
+        self.session.entity_created.connect(lambda key: self.refresh_tree())
         self.session.cards_deleted.connect(self._on_cards_deleted)
         self.session.card_changed.connect(self._on_card_changed)
         self.session.cards_replaced.connect(self.refresh_tree)
@@ -101,6 +101,7 @@ class AppController:
         self.window.tree_panel.search_requested.connect(self.open_search)
         self.refresh_tree()
         self.modules = ModuleController(self)
+        self.window.tree_panel.map_editor_requested.connect(self.modules.open_map_editor)
         self.window.tree_panel.module_create_requested.connect(self.modules.request_create)
         self.window.tree_panel.module_rename_requested.connect(self.modules.request_rename)
         self.window.tree_panel.module_delete_requested.connect(self.modules.request_delete)
@@ -112,8 +113,6 @@ class AppController:
             self.modules.session.table_changed,
             self.modules.session.map_deleted,
             self.modules.session.table_deleted,
-            self.modules.session.dice_changed,
-            self.modules.session.dice_deleted,
             self.modules.session.replaced,
         ]:
             signal.connect(self._refresh_navigator_modules)
@@ -122,7 +121,7 @@ class AppController:
         entity = self.session.entities.get(entity_id)
         if entity.kind != kind:
             raise ValueError("Тип документа не соответствует ID")
-        keys = {"card": "card-editor:", "map": "map:", "table": "table:", "dice": "dice:"}
+        keys = {"card": "card-editor:", "map": "map:", "table": "table:"}
         if kind not in keys:
             raise ValueError("Неподдерживаемый объект навигации")
         return self.open_document(keys[kind] + entity_id)
@@ -176,12 +175,14 @@ class AppController:
         prefix = "card-editor:"
         if key.startswith(prefix):
             return self.open_card_editor(key[len(prefix) :])
+        if key.startswith("map-editor:"):
+            return self.modules.open_map_editor(key[11:])
         if key.startswith("map:"):
             return self.modules.open_map(key[4:])
         if key.startswith("table:"):
             return self.modules.open_table(key[6:])
-        if key.startswith("dice:"):
-            return self.modules.open_dice(key[5:])
+        if key == "tool:dice":
+            return self.modules.open_dice()
         raise ValueError("Неподдерживаемый документ")
 
     def copy_card_link(self, entity_id):
@@ -266,13 +267,10 @@ class AppController:
             state = self.card_document_states.get(card_id)
             if state is not None:
                 card = self.cards.get(card_id)
-                if "description" in fields:
-                    state.sync_content(card.content)
-                for key in fields:
-                    if key in state.sections:
-                        from lodandsy.domain.card import EMPTY_DOCUMENT
-
-                        state.sections[key].sync_content(card.value(key) or EMPTY_DOCUMENT)
+                for section in card.sections:
+                    target = state.existing(section.id)
+                    if target and (card_id, section.id) not in self.session.field_drafts:
+                        target.sync_content(section.content or EMPTY_DOCUMENT)
         dock = self.window_manager.find_window(self.card_editor_window_key(card_id))
         if dock is not None and "title" in fields:
             dock.setWindowTitle(self.cards.get(card_id).title)
@@ -286,7 +284,8 @@ class AppController:
 
     def replace_cards(self, cards: CardCollection) -> None:
         for key in self.window_manager.window_keys():
-            self.window_manager.close_window(key)
+            if key != "tool:dice":
+                self.window_manager.close_window(key)
         for state in self.card_document_states.values():
             state.delete()
         self.card_document_states.clear()
@@ -328,16 +327,9 @@ class AppController:
         title: str,
         parent_id: str | None = None,
         *,
-        template_id: str = "empty",
-        card_type=None,
+        card_type="note",
     ) -> Card:
-        return self.session.create_card(
-            title, parent_id, template_id=template_id, card_type=card_type
-        )
-
-    def open_card_field(self, key, field):
-        editor = self.open_card_editor(key).widget()
-        editor.select_section(field)
+        return self.session.create_card(title, parent_id, card_type=card_type)
 
     def rename_card(self, card_id: str, title: str) -> None:
         self.session.update_entity(card_id, title=title)
@@ -351,13 +343,21 @@ class AppController:
     def _create_card_editor(self, card_id):
         state = self.card_document_states.get(card_id)
         if state is None:
-            state = CardDocumentState(self.cards.get(card_id).content, self.window)
+            state = CardDocumentState(
+                self.cards.get(card_id).content, self.window, self.cards.get(card_id).description_id
+            )
             values = self.saved_card_preferences.get(card_id)
             if values is not None:
                 state.load_ui_values(values)
             self.card_document_states[card_id] = state
         editor = CardEditorWidget()
         editor.document_state = state
+        editor.table_factory = lambda section, previous=None: self.modules.embedded_table(
+            card_id, section, previous
+        )
+        editor.section_action_requested.connect(
+            lambda action, key, value: self._section_action(card_id, action, key, value)
+        )
 
         def configure(document):
             document.configure_resources(
@@ -384,10 +384,78 @@ class AppController:
         editor.links_changed.connect(lambda: self._refresh_editor_links(editor))
         editor.copy_link_requested.connect(self.copy_card_link)
         editor.set_document(card_id, state.document)
+        active_section = state.active_section
         binding = CardEditorBinding(self.session, editor, card_id)
+        state.active_section = active_section
         self.card_editors[card_id] = editor
         self.card_editor_bindings[card_id] = binding
         return editor
+
+    def _section_action(self, card_id, action, key, value):
+        from PySide6.QtWidgets import QInputDialog, QMessageBox
+
+        session = self.session
+        card = self.cards.get(card_id)
+        editor = self.card_editors[card_id]
+        try:
+            if action == "add_text":
+                title, ok = QInputDialog.getText(editor, "Новая вкладка", "Название:")
+                if ok and title.strip():
+                    section = session.add_section(card_id, title)
+                    editor.select_section(section.id)
+            elif action in {"add_table", "table", "link_table"}:
+                if action == "add_table":
+                    title, ok = QInputDialog.getText(editor, "Табличная вкладка", "Название:")
+                    if not ok or not title.strip():
+                        return
+                else:
+                    title = card.section(key).title
+                children = [
+                    e
+                    for e in session.entities.summaries()
+                    if e.kind == "table" and e.parent_id == card_id
+                ]
+                labels = ["Создать новую таблицу", *[e.title + " · " + e.id[:8] for e in children]]
+                choice, ok = QInputDialog.getItem(
+                    editor, "Дочерняя таблица", "Таблица:", labels, 0, False
+                )
+                if not ok:
+                    return
+                existing = children[labels.index(choice) - 1].id if labels.index(choice) else None
+                if action == "add_table":
+                    key = session.add_section(card_id, title, kind="table_ref").id
+                session.section_table(
+                    card_id,
+                    key,
+                    existing_id=existing,
+                    replace_link=action == "link_table",
+                    title=title,
+                )
+                editor.select_section(key)
+            elif action == "rename":
+                title, ok = QInputDialog.getText(
+                    editor, "Название вкладки", "Название:", text=card.section(key).title
+                )
+                if ok and title.strip():
+                    session.update_section(card_id, key, title=title)
+            elif action == "delete":
+                if (
+                    QMessageBox.question(
+                        editor,
+                        "Удалить вкладку",
+                        "Удалить вкладку и её текст? Связанная таблица сохранится.",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                        QMessageBox.StandardButton.No,
+                    )
+                    == QMessageBox.StandardButton.Yes
+                ):
+                    session.delete_section(card_id, key)
+            elif action in {"left", "right"}:
+                position = card.section(key).position + (1 if action == "right" else -1)
+                if 0 <= position < len(card.sections):
+                    session.move_section(card_id, key, position)
+        except ValueError as error:
+            editor.show_link_error(str(error))
 
     def _dispose_card_editor(self, card_id: str) -> None:
         editor = self.card_editors.pop(card_id, None)
@@ -405,15 +473,13 @@ class AppController:
         self,
         title: str,
         parent_id: object,
-        template_id: str = "empty",
-        card_type=None,
+        card_type="note",
     ) -> None:
         resolved_parent_id = self._optional_card_id(parent_id)
 
         self.create_card(
             title,
             resolved_parent_id,
-            template_id=template_id,
             card_type=card_type,
         )
 

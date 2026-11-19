@@ -54,6 +54,7 @@ class RichDocument(OfflineDocument):
         validate_html(content)
         self.setHtml(content)
         self.canonical_content = content
+        self.pending_content = None
 
     def configure_resources(self, root, provider, size_provider=None):
         if self.project_root != root:

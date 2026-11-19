@@ -59,26 +59,25 @@ class CardInspectorBinding:
     def _add_field(self):
         from PySide6.QtWidgets import QInputDialog
 
-        from lodandsy.domain.card_schema import FIELD_DEFINITIONS
+        from lodandsy.domain.card_schema import available_fields
 
         key = self.session.current_card_id
         if not key:
             return
-        fields = [
-            f
-            for f in FIELD_DEFINITIONS.values()
-            if f.group != "source" and f.key not in {"title", "description", "portrait"}
-        ]
+        fields = available_fields(self.session.cards.get(key))
+        if not fields:
+            return
         labels = [f.label for f in fields]
         label, ok = QInputDialog.getItem(self.inspector, "Поле", "Добавить:", labels, 0, False)
         if ok:
-            field = fields[labels.index(label)]
-            self._on_fields(key, {field.key: field.default})
+            self.session.add_card_field(key, fields[labels.index(label)].key)
 
     def _on_fields(self, key, changes):
         if key == self.session.current_card_id:
             try:
                 self.session.update_card_fields(key, changes)
+                for field in changes:
+                    self.session.set_field_draft(key, field, None)
             except ValueError:
                 from lodandsy.ui.card_fields import field_text
 
@@ -100,8 +99,7 @@ class CardInspectorBinding:
             return
 
         if self.session.current_entity.kind == "card":
-            self.session.set_field_draft(card_id, "title", None)
-            self.session.update_card_fields(card_id, {"title": title})
+            self._on_fields(card_id, {"title": title})
         else:
             self.session.update_entity(card_id, title=title)
 

@@ -33,11 +33,10 @@ class CardCollection:
                 e.title,
                 key,
                 e.parent_id,
-                p.content,
-                p.portrait,
-                p.card_type,
-                p.template_id,
-                p.values,
+                portrait=p.portrait,
+                card_type=p.card_type,
+                values=p.values,
+                sections=p.sections,
             ),
         )
 
@@ -55,7 +54,7 @@ class CardCollection:
         content=EMPTY_DOCUMENT,
         portrait=None,
         card_type="note",
-        template_id="empty",
+        sections=None,
         values=(),
     ):
         card = Card(
@@ -64,7 +63,7 @@ class CardCollection:
             content=content,
             portrait=portrait,
             card_type=card_type,
-            template_id=template_id,
+            sections=sections,
             values=values,
         )
         self.entities.create("card", card.title, card.payload(), parent_id, id=card.id)
@@ -78,11 +77,14 @@ class CardCollection:
             "content",
             "portrait",
             "card_type",
-            "template_id",
+            "sections",
             "values",
         }:
             raise ValueError("Unsupported Card fields")
         current = self.get(key)
+        if "content" in changes:
+            body = current.with_fields({"description": changes.pop("content")})
+            changes["sections"] = body.sections
         updated = replace(current, **{k: v for k, v in changes.items() if k != "position"})
         self.entities.update(
             key, **{k: v for k, v in changes.items() if k in {"title", "parent_id", "position"}}

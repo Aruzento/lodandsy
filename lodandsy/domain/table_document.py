@@ -1,6 +1,5 @@
 import math
 from dataclasses import dataclass, field, replace
-from random import SystemRandom
 from uuid import uuid4
 
 from lodandsy.domain.module_values import validate_id, validate_title
@@ -91,11 +90,11 @@ def parse_cell(text, data_type):
 
 
 @dataclass(frozen=True, slots=True)
-class RandomTable:
+class TableDocument:
     title: str
     id: str = field(default_factory=lambda: str(uuid4()))
     columns: tuple[ColumnDefinition, ...] = field(
-        default_factory=lambda: (ColumnDefinition("Вариант"),)
+        default_factory=lambda: (ColumnDefinition("Столбец 1"),)
     )
     rows: tuple[RowRecord, ...] = ()
 
@@ -144,22 +143,6 @@ class RandomTable:
             for r in self.rows
         )
         return replace(self, rows=rows)
-
-    def choose(self, rng=None):
-        choices = [
-            r
-            for r in self.rows
-            if any(
-                v is not None and (not isinstance(v, str) or bool(v.strip())) for _, v in r.cells
-            )
-        ]
-        if not choices:
-            raise ValueError("Добавьте хотя бы одну непустую строку")
-        row = (rng or SystemRandom()).choice(choices)
-        return row.position + 1, row
-
-    def row_text(self, row):
-        return " · ".join(f"{c.name}: {display_value(row.value(c.id))}" for c in self.columns)
 
 
 def display_value(value):

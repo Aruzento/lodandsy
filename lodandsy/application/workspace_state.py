@@ -33,13 +33,16 @@ def capture_workspace(controller):
             camera = controller.window_manager.find_window(key).widget().camera_state()
             if camera is not None:
                 cameras[key[4:]] = camera
-    tables = {key: value for key,value in controller.modules._table_ui.items()
-              if key in controller.modules.session.tables}
+    tables = {
+        key: value
+        for key, value in controller.modules._table_ui.items()
+        if key in controller.modules.session.tables
+    }
     for key in controller.window_manager.window_keys():
         if key.startswith("table:"):
             tables[key[6:]] = controller.window_manager.find_window(key).widget().ui_state()
     return {
-        "version": 3,
+        "version": 4,
         "documents": list(controller.window_manager.window_keys()),
         "active": controller.window_manager.active_window_key,
         "entity_selected": controller.session.current_entity_id,
@@ -49,9 +52,15 @@ def capture_workspace(controller):
         "cards": states,
         "maps": cameras,
         "tables": tables,
-        "dice_selected": {key: value.get("selected")
-                          for key,value in controller.modules._dice_runtime.items()
-                          if key in controller.modules.session.dice},
+        "map_editors": {
+            **controller.modules._map_editor_ui,
+            **{
+                key[11:]: controller.window_manager.find_window(key).widget().camera_state()
+                for key in controller.window_manager.window_keys()
+                if key.startswith("map-editor:")
+            },
+        },
+        "panel_widths": controller.window.panel_widths(),
         "geometry": base64.b64encode(bytes(controller.window.saveGeometry())).decode("ascii"),
         "chrome": base64.b64encode(bytes(controller.window.saveState(1))).decode("ascii"),
         "layout": base64.b64encode(bytes(controller.window.workspace.saveState(1))).decode("ascii"),
@@ -59,7 +68,7 @@ def capture_workspace(controller):
 
 
 def restore_workspace(controller, data):
-    if not isinstance(data, dict) or data.get("version") != 3:
+    if not isinstance(data, dict) or data.get("version") != 4:
         raise ValueError("Неподдерживаемая версия раскладки")
     documents = data.get("documents")
     if not isinstance(documents, list) or not all(isinstance(key, str) for key in documents):
@@ -82,6 +91,9 @@ def restore_workspace(controller, data):
             raise ValueError("Не удалось восстановить раскладку; открыты стандартные вкладки")
     QApplication.processEvents()
     controller.window.workspace.ensure_visible()
+    widths = data.get("panel_widths", {})
+    if isinstance(widths, dict):
+        controller.window.restore_panel_widths(widths)
     cameras = data.get("maps", {})
     if isinstance(cameras, dict):
         controller.modules._map_ui.update(
@@ -95,6 +107,14 @@ def restore_workspace(controller, data):
             window = controller.window_manager.find_window(f"map:{key}")
             if window and isinstance(camera, dict):
                 window.widget().restore_camera_state(camera)
+    editor_cameras = data.get("map_editors", {})
+    if isinstance(editor_cameras, dict):
+        for key, camera in editor_cameras.items():
+            if key in controller.modules.session.maps and isinstance(camera, dict):
+                controller.modules._map_editor_ui[key] = camera
+                window = controller.window_manager.find_window("map-editor:" + key)
+                if window:
+                    window.widget().restore_camera_state(camera)
     tables = data.get("tables", {})
     if isinstance(tables, dict):
         controller.modules._table_ui.update(
@@ -108,12 +128,6 @@ def restore_workspace(controller, data):
             window = controller.window_manager.find_window(f"table:{key}")
             if window:
                 window.widget().restore_ui(value)
-    selected_dice = data.get("dice_selected", {})
-    if isinstance(selected_dice, dict):
-        for key,selected in selected_dice.items():
-            window = controller.window_manager.find_window(f"dice:{key}")
-            if window and isinstance(selected,str):
-                window.widget().select_preset(selected)
     saved = data.get("cards", {})
     if not isinstance(saved, dict):
         raise ValueError("Повреждён список настроек карточек")

@@ -26,23 +26,47 @@ class AppShell(QMainWindow):
         self.tree_panel = TreePanel(self)
         self.inspector_panel = InspectorPanel(self)
         self.tree_host = FixedPanelHost(
-            title="Tree Host", object_name="treeHost", area=Qt.ToolBarArea.LeftToolBarArea,
-            panel=self.tree_panel, parent=self,
+            title="Tree Host",
+            object_name="treeHost",
+            area=Qt.DockWidgetArea.LeftDockWidgetArea,
+            panel=self.tree_panel,
+            parent=self,
         )
         self.inspector_host = FixedPanelHost(
-            title="Inspector Host", object_name="inspectorHost",
-            area=Qt.ToolBarArea.RightToolBarArea,
-            panel=self.inspector_panel, parent=self,
+            title="Inspector Host",
+            object_name="inspectorHost",
+            area=Qt.DockWidgetArea.RightDockWidgetArea,
+            panel=self.inspector_panel,
+            parent=self,
         )
-        self.addToolBarBreak(Qt.ToolBarArea.LeftToolBarArea)
-        self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, self.tree_host)
-        self.addToolBarBreak(Qt.ToolBarArea.RightToolBarArea)
-        self.addToolBar(Qt.ToolBarArea.RightToolBarArea, self.inspector_host)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.tree_host)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.inspector_host)
+        self.resizeDocks(
+            [self.tree_host, self.inspector_host], [240, 300], Qt.Orientation.Horizontal
+        )
         self.left_rail.tree_action.toggled.connect(self.tree_host.setVisible)
         self.tree_host.visibilityChanged.connect(self.left_rail.tree_action.setChecked)
         self.right_rail.inspector_action.toggled.connect(self.inspector_host.setVisible)
         self.inspector_host.visibilityChanged.connect(self.right_rail.inspector_action.setChecked)
         self.workspace = WorkspaceHost(self)
+
+    def panel_widths(self):
+        return {
+            "tree": self.tree_host.width()
+            if self.tree_host.isVisible()
+            else self.tree_host.last_width,
+            "inspector": self.inspector_host.width()
+            if self.inspector_host.isVisible()
+            else self.inspector_host.last_width,
+        }
+
+    def restore_panel_widths(self, values):
+        for key, host in [("tree", self.tree_host), ("inspector", self.inspector_host)]:
+            width = values.get(key)
+            if type(width) is int:
+                host.last_width = max(180, min(width, max(180, int(self.width() * 0.45))))
+                if host.isVisible():
+                    self.resizeDocks([host], [host.last_width], Qt.Orientation.Horizontal)
 
     @Slot(str)
     def show_notice(self, text):
