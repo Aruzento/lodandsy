@@ -5,7 +5,7 @@ import pytest
 from PySide6.QtCore import QMimeData, Qt, QUrl
 from PySide6.QtGui import QImage, QTextDocument
 
-from lodandsy.application.card_images import read_card_image
+from lodandsy.application.media_service import read_card_image
 from lodandsy.application.rich_html import html_text, sanitize_html
 from lodandsy.application.sqlite_project_store import SQLiteProjectStore
 from lodandsy.domain.card import EMPTY_DOCUMENT
@@ -39,16 +39,16 @@ def test_insert_deduplicate_undo_save_move_and_backup(project, qtbot, tmp_path):
     card = app.create_card("Card")
     editor = app.open_card_editor(card.id).widget()
     path = image_file(tmp_path / "оригинал.png")
-    app.card_images.insert(editor, path, "Место [1]")
-    qtbot.waitUntil(lambda: not app.card_images.importing)
+    app.card_views.images.insert(editor, path, "Место [1]")
+    qtbot.waitUntil(lambda: not app.media.importing)
     content = app.cards.get(card.id).content
     assert "<img" in content and "assets/" in content and len(project.assets) == 1
     editor.text_edit.undo()
     assert html_text(app.cards.get(card.id).content).strip() == ""
     assert len(project.assets) == 1
     editor.text_edit.redo()
-    app.card_images.insert(editor, path, "Again")
-    qtbot.waitUntil(lambda: not app.card_images.importing)
+    app.card_views.images.insert(editor, path, "Again")
+    qtbot.waitUntil(lambda: not app.media.importing)
     assert len(project.assets) == 1
     assert project.save_current()
     backup = tmp_path / "world.lodbackup"
@@ -67,15 +67,15 @@ def test_import_can_finish_after_editor_closed_but_not_deleted(project, qtbot, t
     project.create_project(tmp_path / "world")
     card = app.create_card("Card")
     editor = app.open_card_editor(card.id).widget()
-    app.card_images.insert(editor, image_file(tmp_path / "a.png"), "Alt")
+    app.card_views.images.insert(editor, image_file(tmp_path / "a.png"), "Alt")
     app.window_manager.close_window(app.card_editor_window_key(card.id))
-    app.card_images.wait_import()
+    app.media.wait_import()
     assert "assets/" in app.cards.get(card.id).content
     assert project.save_current()
     editor = app.open_card_editor(card.id).widget()
-    app.card_images.insert(editor, image_file(tmp_path / "b.png"), "Deleted")
+    app.card_views.images.insert(editor, image_file(tmp_path / "b.png"), "Deleted")
     app.delete_card(card.id)
-    app.card_images.wait_import()
+    app.media.wait_import()
     assert len(project.assets) == 1
 
 
@@ -86,7 +86,7 @@ def test_document_images_async_fit_missing_corrupt_and_content(project, qtbot, t
     asset = project.store.import_asset(image_file(tmp_path / "wide.png", 2400, 800))
     project.assets[asset.id] = asset
     source = sanitize_html(f'<p><img src="{asset.path}" alt="wide"></p>')[0]
-    app.session.update_card(card.id, content=source)
+    app.cards_service.update_card(card.id, content=source)
     editor = app.open_card_editor(card.id).widget()
     editor.resize(420, 400)
     document = editor.text_edit.document()
@@ -147,7 +147,7 @@ def test_twenty_distinct_images_scroll_return_close_reopen_and_bounded_memory(
     canonical = sanitize_html(
         "".join(f'<p>Image {i}</p><p><img src="{a.path}"></p>' for i, a in enumerate(assets))
     )[0]
-    app.session.update_card(card.id, content=canonical)
+    app.cards_service.update_card(card.id, content=canonical)
     editor = app.open_card_editor(card.id).widget()
     document = editor.text_edit.document()
     positions = {}
@@ -172,8 +172,8 @@ def test_twenty_distinct_images_scroll_return_close_reopen_and_bounded_memory(
             timeout=10000,
         )
         assert document.image_budget <= 8 * 1024**2
-        assert len(app.card_images._pending) <= 32
-        assert sum(i.sizeInBytes() for i in app.card_images._cache.values()) <= 16 * 1024**2
+        assert len(app.media._pending) <= 32
+        assert sum(i.sizeInBytes() for i in app.media._cache.values()) <= 16 * 1024**2
     assert app.cards.get(card.id).content == canonical
     app.window_manager.close_window(app.card_editor_window_key(card.id))
     assert not document.images and document.image_budget == 0

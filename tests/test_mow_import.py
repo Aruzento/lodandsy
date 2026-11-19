@@ -5,7 +5,7 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage
 
-from lodandsy.application.application_session import ApplicationSession
+from lodandsy.application.cards_service import CardsService
 from lodandsy.application.mow_import import (
     PreparedImport,
     apply_import,
@@ -80,7 +80,7 @@ def test_two_pass_links_order_media_repeat_and_backup(tmp_path, qapp):
     plan = inspect_source(source)
     store = SQLiteProjectStore.create(tmp_path / "world")
     prepared = prepare_import(plan, store, (), ())
-    session = ApplicationSession(CardCollection())
+    session = CardsService(CardCollection())
     apply_import(session, prepared)
     cards = session.cards.all()
     parent = next(c for c in cards if c.value("mow_id") == root)
@@ -131,7 +131,7 @@ def test_cycles_duplicates_corrupt_and_atomic_rollback(tmp_path, qapp):
     assert any("Цикл" in e for e in inspect_source(source).errors)
     fixture(source / "b.md", a)
     assert any("Повторный" in e for e in inspect_source(source).errors)
-    session = ApplicationSession(CardCollection())
+    session = CardsService(CardCollection())
     original = session.create_card("Preserved")
     one = Card("Valid")
     invalid = Card("Invalid", parent_id=str(uuid4()))

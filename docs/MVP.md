@@ -1,131 +1,150 @@
-# LODANDSY — текущий контракт, итерация 5
+# LODANDSY — действующий контракт, итерация 6-rev3
 
-Нативная локальная среда ведущего: независимые Card, Map, Table и инструмент кубиков.
-Утверждённый пакет: [A–G](iterations/2026-11-19-iteration-5/CODEX-ITERATION-5.md).
-План/статусы — существующие задачи Linear. Факты — [отчёт](validation/2026-11-19-iteration-5.md),
-ручная приёмка — build_support/README.md. Новые требования отменяют противоречащие старые.
+Утверждённый [пакет A–E](iterations/2026-11-19-iteration-6-rev3/CODEX-ITERATION-6.md)
+заменяет противоречащие прежние решения. План и статусы — существующие Linear задачи;
+фактические результаты — [отчёт6](validation/2026-11-19-iteration-6.md),
+[архитектура](architecture/LODANDSY.drawio), приёмка — build_support/README.md.
+Макеты6 с частным портретом не входят в public repo/поставку.
 
-## Общий контракт
+## Общий канон и границы (A, ARU-84/34–39/65)
 
-Python3.14 / PySide6 6.11.2 / Qt ADS5.1.1; модульный монолит domain/application/ui,
-домен без Qt/SQL. SQLite S3 через sqlite3 — единственный канон, assets отдельно с
-относительными путями. SQLite12 / Cardv4 / Mapv5 / Tablev2. Entity: UUID/kind/title/
-parent_id/position + payload модуля. Смешанный лес Card/Map/Table, валидированные parent,
-cycles и order, ссылки не являются иерархией. Неизвестная версия/повреждение отклоняются
-без перезаписи. Обязательные миграции, legacy Markdown, прежние шаблоны/режимы/адаптеры
-отменены владельцем; реальные папки не удаляются, тестовые разрешено пересоздавать.
+Windows-first Python3.14/PySide6 6.11.2/Qt Widgets/ADS5.1.1; модульный монолит,
+домен без Qt/SQL/UI. SQLite S3 через sqlite3, assets отдельно с относительными путями.
+Текущий единственный формат SQLite13/Card4/Map5/Table3, UI state4. Legacy, миграции и
+архивы старых тестовых форматов не обязательны; неподдерживаемый проект отклоняется
+без записи. Реальные пользовательские папки автоматически не удаляются.
 
-Tree/Inspector — фиксированные боковые области с native draggable разделителями,
-сохранением ширины/collapse; rails снаружи. ADS размещает, WindowManager управляет
-жизнью окон. Выбор Tree, активное окно, документ и UI state раздельны. «+» с меню,
-поиск под кнопкой/Ctrl+F, дочерние через контекст. Enter/двойной щелчок фокусирует окно
-UUID. UI state v4: раскладка/камеры/ширины/активные UUID-вкладки/курсоры, отдельно от канона.
+Core Entity: UUID/kind/title/parent_id/position + module payload. Единое смешанное дерево
+Card/Map/Table, parent/cycles/order/duplicates валидируются; links отдельно от hierarchy.
+EntitySession владеет выбором/transaction/generation; CardsService, TablesService,
+MapsService — своими командами/данными/drafts. CardsController, TablesController,
+MapsController, DiceController — своими views/session state/workers. AppController
+собирает явные зависимости/navigation; ProjectActions выполняет составные операции без
+widgets. Старые ApplicationSession/ModuleSession/ModuleController/card_images удалены.
+Cards получает embedded Table factory; Maps получает публичные Card queries/actions,
+не Card Editor; Dice не требует Entity/project/SQL. Нет locator/EventBus/ORM/второго store.
 
-## A/B — Card и разделы (ARU-80/83/75/76/33)
+Одна EntityCollection и один SQLite writer. Post-commit адресные events ID+fields;
+Card+Token, child inventory и cascade дают одно revision notification после атомарного
+применения. Закрытие/смена проекта отменяют workers и инвалидируют generation. UI не
+владеет отдельными копиями мира. AST-границы/отсутствие циклов проверяются автоматически.
 
-Единственный выбор — card_type. CardTypeDefinition задаёт начальные разделы и применимые
-поля; смена типа сохраняет введённые значения/разделы. Самостоятельного шаблона нет.
-Entity.title один, summary в шапке. HP/AC/скорость и другие характеристики — только
-Inspector через ApplicationSession. Неприменимые старые поля скрыты, данные сохранены.
-«Добавить поле» предлагает допустимые отсутствующие; повтор отвергается доменом/сессией,
-не сбрасывает значение. Aliases только в данных/импорте, tags удалены. Portrait — явный
-media contract, не дублируется в values.
+Tree/Inspector фиксированы, native resize/collapse/rails сохраняются; ADS размещает,
+WindowManager управляет жизнью независимых окон. Tree selection, active window, document
+UUID и UI preferences раздельны. «+» раскрывает создание, поиск под кнопкой/Ctrl+F,
+дочерние через контекст. Enter/двойной щелчок открывает/фокусирует существующее окно UUID.
 
-CardSection: UUID/title/position/kind rich_text|table_ref. Rich содержит контролируемый
-Qt HTML; table_ref — UUID дочерней Table либо пустую явную заготовку. Описание одно;
-Card.content — вычисляемая проекция purpose=description. «+» создаёт текст/дочернюю Table
-либо связывает существующую дочернюю Table. Контекст: rename/order/delete с подтверждением.
-Каждая rich-вкладка имеет свой QTextDocument/Undo/selection/scroll, сохраняемый при
-rename/close/reopen. До64 разделов, до2MiB HTML/раздел и до4MiB суммарного rich-текста.
+## Таблицы, инвентарь и ввод (B, ARU-83/78/80/46)
 
-Персонаж/существо: Описание, История, Связи, Инвентарь, Заметки. Инвентарь создаётся
-явной кнопкой ровно один раз атомарно: дочерняя Table «Предмет» text / «Количество» number /
-«Описание» text. Встроенная Table и самостоятельное окно используют один ModuleSession
-и общие invalid drafts. Удаление вкладки оставляет Table. Удалённая/перемещённая цель
-показывает недоступную связь и явную замену, без создания дубликатов.
+Table — универсальная Entity с UUID rows/columns и immutable scalar cells. Типы text,
+number, bool, entity_ref и projection. Column имеет стабильный key, constraints kind/
+card_type, source_column_id+field_key для проекции, number integer/min/max/required/default.
+Произвольных формул, отдельного Inventory store или игровых правил нет.
 
-## C — интерфейс и media (ARU-26/76/75)
+Инвентарь создаётся явно ровно один раз как настоящая дочерняя Table:
 
-[Визуальный контракт](design/iteration-5-layout.md): navy/black, спокойный gold, единые
-отступы/иконки, compact tools и keyboard/focus. Hero: название/тип/summary и портрет
-до280 logical px на широком окне, на узком — вертикально. Пустой портрет clickable;
-replace/crop/remove — hover/focus действия без подписи/описания/меню. Asset не изменяется
-и не удаляется. Crop — нормализованный rect ориентированного изображения, рамка/dim/
-drag/zoom/preview/Apply/Cancel/Reset. Bounded decoder учитывает EXIF. Наследующий токен
-получает crop портрета, token image override не получает чужой crop. Undo/Redo — единые
-изогнутые стрелки, tooltip, scoped Ctrl+Z/Ctrl+Y.
+| Ключ | Колонка | Поведение |
+|---|---|---|
+| item | Предмет | nullable UUID любого Card(item) текущего мира |
+| quantity | Количество | положительное целое, default1 |
+| description | Описание | read-only summary либо краткий безопасный plain description |
+| cost | Стоимость | read-only текущая единичная cost; None→«—»,0→0 |
+
+Проекции не сохраняются в rows/SQLite. Замена item сохраняет количество; одинаковый
+item в нескольких строках допустим. Rename/body/cost/type/delete адресно обновляют
+зависящие строки через reverse index, без N+1 чтения storage при paint. Недоступный item
+оставляет UUID+quantity и диагностику/повторный выбор; каскад инвентаря не происходит.
+Удалённый source column сохраняет диагностируемую projection definition.
+
+Native model/view picker ищет title/aliases, показывает path/UUID, Enter выбирает,
+Escape отменяет;10k записей не создают10k widgets. Произвольный ввод/TSV UUID валидируется,
+имена не превращаются в выдуманные UUID. Copy содержит UUID ref и displayed projections;
+TSV paste только writable range, пересечение read-only range отклоняется целиком.
+Header [+] не является model cell; context/drag меняют UUID-порядок без потери данных.
+
+Structured input хранит локальный UUID buffer/baseline/raw text до Enter/Tab/blur,
+Escape отменяет, checkbox/picker дискретны. Canon ACK не вызывает повторный setText или
+reset активного editor; курсор/выделение/native Undo сохраняются в двух представлениях.
+Конфликт не перезаписывает чужой канон. Удалённая ячейка сохраняет session orphan draft,
+который можно прочитать/скопировать и явно отбросить. Ctrl+S/close/switch flush валидный
+ввод; autosave других данных не публикует незавершённое слово.
+
+## Card, интерфейс и media (C/D, ARU-26/75/76/33)
+
+Card type-only, без templates/tags/aliases UI; смена типа сохраняет введённые значения и
+разделы. Характеристики только Inspector; add-field не сбрасывает существующее значение.
+Aliases остаются в данных/поиске/импорте. Один canonical title и явный Portrait contract.
+CardSection UUID/title/position/kind rich_text|table_ref. Описание — единственная
+purpose=description projection Card.content. До64 разделов,2MiB HTML/раздел,4MiB rich/Card.
+Текст — контролируемый Qt HTML и непрерывный QTextDocument, coalescing250ms idle/max2s,
+явный flush на save/switch/close. Нет reset/потери Undo/зависимости autosave от фокуса.
+
+Native graphite #191919/#202020, hover#292929/selection#303030/divider#333333,
+text#e5e5e3/muted#a6a6a3/accent#c9c7bf, primary#dededb; navy/blue-gold отменён.
+Segoe UI, title32/body15 logical px; rail46/tree224/Inspector244 по умолчанию регулируются.
+Card: breadcrumb/copy link, квадратный портрет слева, type/title/summary справа,
+без отдельного scroll шапки. Обычно184px, narrow132, при сильном сжатии compact88.
+Summary полностью редактируется через диалог. Prose≤760px, Table использует ширину окна.
+Пустой портрет clickable; hover/focus replace/crop/remove overlay, без caption/description.
+
+Paint использует актуальный contentRect, не iconSize от прошлого layout. Crop в oriented
+source coordinates, square frame; no-change10циклов идемпотентны, прямоугольный saved rect
+aspect-fit до явного recrop. Card/token используют один crop, token image override — свой
+полный источник. Assets неизменяемы. При удалении раздела освобождаются только его
+QTextDocument/preferences/embedded view/pending callbacks; Undo живых разделов сохранён.
 
 Только lodandsy://entity/UUID через application navigation. Copy link — HTML fragment и
-plain URI. HTTP/HTTPS только по явной активации, preview не загружает network. file/
-javascript/прочие схемы запрещены. Local images только внутри assets с защитой traversal/
-symlink/junction и HTML whitelist. Rich media≤64MiB/32MP, thumbnail≤1024; visible working
-set≤8MiB/document, shared LRU16MiB, до32 pending jobs. Закрытый раздел не удерживает bitmap,
-scroll возвращает вытесненные изображения, Undo/source не меняются. Alt inline image
-не является caption портрета.
+plain URI. HTTP(S) открывается только при явной активации; network resources не грузятся.
+Остальные URI запрещены, local images только assets с traversal/symlink/junction защитой.
+Media≤64MiB/32MP, EXIF-aware thumbnail≤1024, working set≤8MiB/document, sharedLRU16MiB,
+до32 pending jobs. Недоступные/повреждённые media имеют понятную заглушку. Alt inline image
+не является подписью портрета. Rich source при просмотре не переписывается.
 
-## D — карты (ARU-77/81/70/63)
+## Map и Dice (C/D, ARU-77/81/79/70)
 
-Viewer map:UUID и отдельный Map Editor map-editor:UUID — два ADS-окна одной Map, общий
-ModuleSession/Undo/writer/tiles, разные камеры/selection. Повторное открытие фокусирует
-окно, закрытие одного сохраняет другое, удаление Map закрывает оба. Viewer — токены/
-pan/zoom/grid/fit. Editor — select/pan/place, слои/палитра слева, canvas, inline x/y/width/
-height/rotation/z справа; import/place/move/delete/Undo. Escape отменяет текущий drag,
-Space временно включает pan. Старый встроенный edit-mode удалён.
+Viewer map:UUID и Editor map-editor:UUID независимы по lifecycle/camera/selection,
+используют один MapService/Undo/writer/tiles. Viewer — token/grid/fit/pan/zoom/editor;
+Editor — vertical tool rail/canvas/right layers/Object Card library/properties. Undo/Redo
+IconOnly с command tooltip/scoped hotkeys, Space временно pan, Escape отменяет drag.
 
-MapLayer и PlacedAssetObject raster независимы от Card/Token: UUID, общий asset, visible/
-order/rotation/z; удаление непустого слоя подтверждается. Background < raster layers <
-grid < tokens. TokenInstance — размещение существующей Card с явными label/image/kind/
-footprint overrides. Одна Card в нескольких точках/картах; удаление Card предупреждает
-числом размещений и атомарно удаляет их; Undo не воскрешает удалённую Card. Неожиданная
-broken reference диагностируется. Character круг/white border, item aspect/alpha без
-рамки. Footprint в клетках, свободные центры. Snap удалён. Grid рисуется/клипуется в world
-coords одним transform, cosmetic pen без resetTransform/двойного offset. LOD только линий.
+Библиотека только Card(object) с доступным main image, title/aliases search, thumbnail и
+UUID. Import создаёт/выбирает Object Card. Размещение использует original image/alpha/
+oriented aspect, long edge128 world px, без portrait crop; фиксирует asset+geometry,
+будущая правка/удаление Card не меняет raster. Слои front сверху, up повышает list/scene z,
+крайние действия выключены, выбор сохраняется по UUID. Layer visibility/rename/delete,
+object x/y/width/height/rotation/z/move/delete/Undo сохранены. Нет прежней all-assets palette.
 
-Большие PNG/JPEG/WebP — существующий libvips worker/атомарная пирамида ADR-011. Source≤2GiB,
-cache≤4GiB/32768tiles, worker≤512MiB/900s, GUI tile LRU64MiB, BMP/GIF≤16MP. SHA/version/
-cancel/error/rebuild, нет частичной публикации/полного background QPixmap в GUI. Decor
-только bounded media. До1000 слоёв/10000 объектов/10000 токенов — валидационные пределы,
-не SLA. Fog/combat/light/vector physics вне контракта.
+TokenInstance —0..N размещений Card с label/image/kind/footprint overrides. Card deletion
+атомарно удаляет placements, Undo не воскрешает удалённую Card. Для inventory ref другая
+политика — soft broken link. Background<raster layers<grid<tokens. Свободные центры,
+footprint в клетках, snap нет; grid clipping/world transform/cosmetic pen сохраняются.
 
-## E/F — Table и Dice (ARU-78/79)
+Большие изображения — прежний libvips worker/атомарная перестраиваемая пирамида ADR-011:
+source≤2GiB,cache≤4GiB/32768tiles,worker≤512MiB/900s,tileLRU64MiB,BMP/GIF≤16MP,
+SHA/version/source checksum, cancel/ошибки/перезапуск. Лимиты не повышены.
 
-Table — универсальный документ UUID строк/колонок, text/number/bool;0/false — данные.
-Компактные [+] после последнего заголовка столбца и номера строки — контролы, не ячейки.
-Пустая Table работает. Контекст: name/type/delete с подтверждением непустых данных;
-header drag меняет канонический порядок. Atomic TSV/copy диапазона. Нет random chooser/
-result panel/toolbar перемещения и дублирования. Адресные dataChanged; immutable row
-proof cache для правок, полная проверка схемы. Инвентарь использует тот же TableWidget.
+Tools/Dice — singleton tool:dice вне Entity, работает без мира: d4…d100/count/modifier,
+формула, каждый результат и сумма, repeat/clear/copy/history≤50 в сессии. Сетка7+modifier,
+result и история ограниченной ширины. Roll не dirty проект; switch не создаёт дубль.
+Нет eval/presets/Dice Entity/random table mode/дополнительных игровых моделей.
 
-«Инструменты → Кубики» доступно без проекта. Одно окно tool:dice, не Entity, без SQL/
-payload/preset CRUD. d4/d6/d8/d10/d12/d20/d100, адаптивная сетка2–4 колонки, счётчики,
-модификатор/формула/каждый результат/общий итог, repeat/clear/copy, история≤50 в сессии.
-Смена/закрытие проекта не создаёт дубль и не dirty канон. Eval нет, RNG тестируемый,
-невалидный/нулевой бросок безопасен.
+## Надёжность и поставка (E, ARU-63/64/66)
 
-## G — сохранение, импорт и поставка
+Autosave/Ctrl+S используют один SaveCoordinator/revision writer, FK на каждом соединении.
+Pending input, dirty/saving/saved, invalid draft и I/O error отображаются раздельно.
+Валидный канон сохраняется при иных invalid drafts, ACK только после принятого изменения.
+Close/switch: исправить/отбросить ошибочный ввод/отменить; данные не отбрасываются молча.
+Backup/restore — канон+assets/checksum/inventory, без derived projection values и tiles.
+Полный snapshot writer и synchronous backup≤4GiB сохранены: incremental changed-entity SQL
+и bounded backup worker/progress/cancel — отдельные следующие работы, ARU-54 открыта,
+ARU-45 Done относится к исходному snapshot/revision contract.
 
-Autosave/Ctrl+S — один SaveCoordinator, упорядоченные ревизии dirty/saving/error, FK на
-каждом соединении, составные операции транзакционны. Invalid Card/Table ввод остаётся
-явным session draft, канон хранит последнее допустимое значение. Draft не блокирует
-сохранение валидных данных; статус отдельно сообщает несохранённый ошибочный ввод.
-Перед закрытием/сменой: Исправить / Отбросить ошибочный ввод / Отмена. Валидные изменения
-сохраняются до отбрасывания draft; I/O error отделён от draft/dirty. Rich content получает
-application ACK прежде canonical_content; отказ бюджета видим, draft/Undo сохраняются.
+MOW read-only v1 subset сохраняется: preview/report→skip/remap→atomic apply, source UUID/
+type/aliases/summary/safe fields/media/links; исключённые tags/templates/unsafe/runtime
+controls отражаются в отчёте. Импорт не превращает prose в придуманный инвентарь.
 
-MOW — read-only однонаправленный v1 YAML subset + HTML preview/report → skip/remap →
-atomic apply, не legacy runtime. Source UUID/type/aliases/summary/safe fields/media/links
-сохраняются; tags/template/portrait caption-description исключаются с отчётом. Текст не
-превращается в выдуманный инвентарь. Два прохода UUID/parents/order/links; cycles/duplicates/
-unsafe YAML/network/JS/runtime controls запрещены. Local img только в source root,
-data-asset без manifest диагностируется. До500файлов/2MiB каждый/64MiB суммарно,200000
-HTML узлов/import,64уровня/20000узлов rich document. Ошибка очищает лишь собственные
-неопубликованные staged assets; источник не меняется.
-
-Backup/restore: канон+assets, inventory/checksum, без tiles; лимит4GiB и синхронная GUI
-операция сохраняются. Full snapshot writer, incremental SQL/lazy load, background backup/
-progress/cancel — отдельные работы ARU-45/46/47/52/54 (ADR-022/026), не решённые редизайном.
-
-После стабилизации полный pytest/Ruff/pip/diff, frozen smoke/native libraries/licenses/
-source parity, ZIP CRC/SHA и ручной чек-лист23 пунктов. Qt render не заменяет native
-визуальную приёмку. Clean Windows без Python, physical mixedDPI и новый внешний вид
-требуют отдельного подтверждения владельца (ARU-63/64/66).
+Targeted batches после A–D, полный итоговый gate после стабилизации; Windows frozen smoke,
+native libraries/licenses/source parity, ZIP CRC/manifest/SHA, architecture draw.io и
+единый чек-лист6 требований+2дефектов+последнего дополнения. Qt render не заменяет native
+capture/ручную визуальную приёмку. MixedDPI/второй монитор и чистая Windows без Python
+учитываются отдельно. Done не выставляется без обязательной приёмки; public release нет.

@@ -1,16 +1,19 @@
 """A map construction surface sharing the viewer's domain/session/tiles, never a second map."""
 
-from collections import OrderedDict
-
-from PySide6.QtCore import QPoint, QSignalBlocker, QSize, Qt, Signal
-from PySide6.QtGui import QAction, QIcon, QPixmap
+from PySide6.QtCore import QSignalBlocker, QSize, Qt, Signal
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QButtonGroup,
     QDoubleSpinBox,
     QFormLayout,
+    QFrame,
+    QHBoxLayout,
     QLabel,
+    QLineEdit,
+    QListView,
     QListWidget,
     QListWidgetItem,
+    QScrollArea,
     QSplitter,
     QToolBar,
     QToolButton,
@@ -19,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from lodandsy.ui.icons import icon
+from lodandsy.ui.map_library import ObjectLibraryModel
 from lodandsy.ui.map_widget import MapView, MapWidget
 
 
@@ -30,7 +34,7 @@ class MapEditorWidget(QWidget):
     asset_import_requested = Signal()
     asset_place_requested = Signal(str, str, float, float)
 
-    def __init__(self, undo_stack):
+    def __init__(self, undo_stack, queries, image_size, image_provider):
         super().__init__()
         self.setObjectName("mapEditorPage")
         self.document = None
@@ -46,6 +50,8 @@ class MapEditorWidget(QWidget):
         self.message.setWordWrap(True)
         self.message.setObjectName("mapStatus")
         bar = QToolBar(self)
+        bar.setOrientation(Qt.Orientation.Vertical)
+        self.tool_rail = bar
         bar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         group = QButtonGroup(self)
         group.setExclusive(True)
@@ -77,8 +83,11 @@ class MapEditorWidget(QWidget):
         self.layers = QListWidget()
         self.layers.setAccessibleName("Слои карты")
         self.layers.itemChanged.connect(self._layer_changed)
+        self.layers.currentRowChanged.connect(self._layer_actions)
         left_layout.addWidget(self.layers, 2)
         layer_bar = QToolBar()
+        layer_bar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.layer_actions = {}
         for title, name, ico in [
             ("Новый слой", "add", "plus"),
             ("Выше", "up", "up"),
@@ -87,15 +96,24 @@ class MapEditorWidget(QWidget):
         ]:
             action = layer_bar.addAction(icon(ico), title)
             action.triggered.connect(lambda checked=False, n=name: self.layer_action.emit(n))
+            self.layer_actions[name] = action
         left_layout.addWidget(layer_bar)
-        left_layout.addWidget(QLabel("Ресурсы проекта"))
-        self.assets = QListWidget()
-        self.assets.setAccessibleName("Палитра изображений проекта")
+        left_layout.addWidget(QLabel("Библиотека объектов"))
+        self.library_search = QLineEdit()
+        self.library_search.setPlaceholderText("Найти объект…")
+        self.library_search.setAccessibleName("Поиск объектов по названию или другому имени")
+        left_layout.addWidget(self.library_search)
+        self.assets = QListView()
+        self.assets.setAccessibleName("Карточки объектов с изображениями")
         self.assets.setIconSize(QSize(48, 48))
-        self.asset_provider = lambda key: None
-        self.asset_size = lambda key: None
-        self._icons = OrderedDict()
-        self.assets.verticalScrollBar().valueChanged.connect(lambda: self.refresh_palette())
+        self.library_model = ObjectLibraryModel(queries, image_size, image_provider, self)
+        self.assets.setModel(self.library_model)
+        self._library_selection = None
+        self.library_model.modelAboutToBeReset.connect(self._remember_library_selection)
+        self.library_model.modelReset.connect(
+            lambda: self.select_library_card(self._library_selection)
+        )
+        self.library_search.textChanged.connect(self._search_library)
         left_layout.addWidget(self.assets, 3)
         import_button = QToolButton()
         import_button.setText("Импорт изображения…")
@@ -131,24 +149,33 @@ class MapEditorWidget(QWidget):
         remove.clicked.connect(self._delete_selected)
         form.addRow(remove)
         self._selected = None
-        self._asset_ids = ()
+        left_layout.addWidget(self.properties)
+        side_scroll = QScrollArea()
+        side_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        side_scroll.setWidgetResizable(True)
+        side_scroll.setWidget(left)
+        side_scroll.setMinimumWidth(180)
+        self.sidebar = side_scroll
         center = QWidget()
         center_layout = QVBoxLayout(center)
         center_layout.setContentsMargins(0, 0, 0, 0)
-        center_layout.addWidget(bar)
+        center_layout.setSpacing(0)
+        canvas = QHBoxLayout()
+        canvas.setContentsMargins(0, 0, 0, 0)
+        canvas.setSpacing(0)
+        canvas.addWidget(bar)
+        canvas.addWidget(self.view, 1)
+        center_layout.addLayout(canvas, 1)
         center_layout.addWidget(self.message)
-        center_layout.addWidget(self.view, 1)
-        splitter = QSplitter()
-        splitter.addWidget(left)
-        splitter.addWidget(center)
-        splitter.addWidget(self.properties)
-        splitter.setStretchFactor(1, 1)
-        splitter.setSizes([190, 800, 200])
-        left.setMinimumWidth(140)
-        self.properties.setMinimumWidth(150)
+        self.splitter = QSplitter()
+        self.splitter.addWidget(center)
+        self.splitter.addWidget(side_scroll)
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 0)
+        self.splitter.setSizes([800, 230])
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(splitter)
+        layout.addWidget(self.splitter)
         delete = QAction("Удалить объект", self.view)
         delete.setShortcut("Delete")
         delete.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
@@ -160,7 +187,7 @@ class MapEditorWidget(QWidget):
         item = self.layers.currentItem()
         return item.data(Qt.ItemDataRole.UserRole) if item else None
 
-    def set_document(self, document, assets):
+    def set_document(self, document):
         self.document = document
         current = self.active_layer()
         old = [
@@ -177,7 +204,7 @@ class MapEditorWidget(QWidget):
                 layer.title,
                 Qt.CheckState.Checked if layer.visible else Qt.CheckState.Unchecked,
             )
-            for layer in document.layers
+            for layer in reversed(document.layers)
         ]
         if old != values:
             blocker = QSignalBlocker(self.layers)
@@ -195,29 +222,28 @@ class MapEditorWidget(QWidget):
             if self.layers.currentRow() < 0 and self.layers.count():
                 self.layers.setCurrentRow(0)
             del blocker
-        ids = tuple((a.id, a.path) for a in assets.values())
-        if self._asset_ids != ids:
-            current = (
-                self.assets.currentItem().data(Qt.ItemDataRole.UserRole)
-                if self.assets.currentItem()
-                else None
-            )
-            self._icons.clear()
-            self.assets.clear()
-            self._asset_ids = ids
-            for key, path in ids:
-                if self.asset_size(key) is None:
-                    continue
-                item = QListWidgetItem(path.rsplit("/", 1)[-1][:20])
-                item.setToolTip(path)
-                item.setData(Qt.ItemDataRole.UserRole, key)
-                self.assets.addItem(item)
-                if key == current:
-                    self.assets.setCurrentItem(item)
-            if self.assets.currentRow() < 0 and self.assets.count():
-                self.assets.setCurrentRow(0)
-        self.refresh_palette()
+        self._layer_actions()
         self._selection_changed()
+
+    def _layer_actions(self, *_):
+        row, count = self.layers.currentRow(), self.layers.count()
+        self.layer_actions["up"].setEnabled(row > 0)
+        self.layer_actions["down"].setEnabled(0 <= row < count - 1)
+        self.layer_actions["delete"].setEnabled(row >= 0)
+
+    def _remember_library_selection(self):
+        self._library_selection = self.assets.currentIndex().data(Qt.ItemDataRole.UserRole)
+
+    def select_library_card(self, key):
+        if key in self.library_model.ids:
+            self.assets.setCurrentIndex(self.library_model.index(self.library_model.ids.index(key)))
+        elif self.library_model.ids:
+            self.assets.setCurrentIndex(self.library_model.index(0))
+
+    def _search_library(self, text):
+        self._remember_library_selection()
+        self.library_model.filter(text)
+        self.select_library_card(self._library_selection)
 
     def _layer_changed(self, item):
         self.layer_edit_requested.emit(
@@ -261,41 +287,17 @@ class MapEditorWidget(QWidget):
             item.setSelected(identity == key)
 
     def _place(self, x, y):
-        asset = self.assets.currentItem()
+        card = self.assets.currentIndex().data(Qt.ItemDataRole.UserRole)
         layer = self.active_layer()
-        if layer and asset:
-            self.asset_place_requested.emit(layer, asset.data(Qt.ItemDataRole.UserRole), x, y)
+        if layer and card:
+            self.asset_place_requested.emit(layer, card, x, y)
         else:
-            self.message.setText("Выберите слой и ресурс в палитре")
+            self.message.setText("Выберите слой и карточку объекта в библиотеке")
 
     def image_ready(self, root, name):
         if root == self.project_root:
-            self.refresh_palette()
+            self.library_model.images_changed()
             self.view.viewport().update()
-
-    def refresh_palette(self):
-        start = max(0, self.assets.indexAt(QPoint(2, 2)).row())
-        for i in range(start, min(self.assets.count(), start + 24)):
-            item = self.assets.item(i)
-            key = item.data(Qt.ItemDataRole.UserRole)
-            if key in self._icons:
-                continue
-            image = self.asset_provider(key)
-            if image is not None and not image.isNull():
-                item.setIcon(
-                    QIcon(
-                        QPixmap.fromImage(image).scaled(
-                            48,
-                            48,
-                            Qt.AspectRatioMode.KeepAspectRatio,
-                            Qt.TransformationMode.SmoothTransformation,
-                        )
-                    )
-                )
-                self._icons[key] = item
-        while len(self._icons) > 128:
-            key, item = self._icons.popitem(last=False)
-            item.setIcon(QIcon())
 
     camera_state = MapWidget.camera_state
     restore_camera_state = MapWidget.restore_camera_state

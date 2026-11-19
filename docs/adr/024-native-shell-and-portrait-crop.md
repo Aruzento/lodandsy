@@ -17,3 +17,5 @@ Portrait asset+normalized crop — единственный контракт. Н
 
 Ручной screenshot и mixed DPI обязательны как приёмка, synthetic Qt render tests —
 только проверка геометрии/пикселей. Результаты и ограничения фиксируются в отчёте5.
+
+Итерация6-rev3 заменяет соответствующие границы владельцев, refs/semantic input, graphite composition и crop lifecycle: ADR-027/028/029. Исторические имена смешанных controllers/sessions выше больше не используются.

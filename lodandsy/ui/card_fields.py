@@ -3,7 +3,8 @@
 from PySide6.QtCore import QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import QCheckBox, QFormLayout, QLineEdit, QWidget
 
-from lodandsy.domain.card_schema import field_definition, parse_field
+from lodandsy.domain.card_schema import field_definition
+from lodandsy.ui.semantic_edits import SemanticLineEdit
 
 
 def field_text(value):
@@ -12,7 +13,10 @@ def field_text(value):
 
 class CardFieldsForm(QWidget):
     edited = Signal(object)
-    draft_changed = Signal(str, object)
+    edit_started = Signal(str)
+    buffer_changed = Signal(str, str)
+    commit_requested = Signal(str, str)
+    cancel_requested = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -23,6 +27,7 @@ class CardFieldsForm(QWidget):
         self.form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         self.form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.keys = ()
+        self.edit_active = lambda key: False
 
     def set_card(self, card, keys, drafts=None):
         if self.keys != tuple(keys):
@@ -37,15 +42,19 @@ class CardFieldsForm(QWidget):
                     widget.setTristate(True)
                     widget.checkStateChanged.connect(lambda state, k=key: self._boolean(k, state))
                 else:
-                    widget = QLineEdit()
+                    widget = SemanticLineEdit()
                     widget.setMaxLength(
                         definition.max_length if definition.data_type == "text" else 2048
                     )
                     widget.setPlaceholderText("—")
-                    widget.textEdited.connect(lambda text, k=key: self._edit(k, text))
-                    widget.editingFinished.connect(
-                        lambda k=key: self._edit(k, self.controls[k].text())
+                    widget.edit_started.connect(lambda k=key: self.edit_started.emit(k))
+                    widget.buffer_changed.connect(
+                        lambda raw, k=key: self.buffer_changed.emit(k, raw)
                     )
+                    widget.commit_requested.connect(
+                        lambda raw, k=key: self.commit_requested.emit(k, raw)
+                    )
+                    widget.cancel_requested.connect(lambda k=key: self.cancel_requested.emit(k))
                 widget.setObjectName("field_" + key)
                 widget.setAccessibleName(definition.label)
                 widget.setToolTip(definition.hint or definition.label)
@@ -66,25 +75,11 @@ class CardFieldsForm(QWidget):
                 )
             elif isinstance(widget, QLineEdit):
                 text = raw if raw is not None else field_text(value)
-                keep = False
-                if widget.hasFocus() and raw is None:
-                    try:
-                        keep = parse_field(key, widget.text()) == value
-                    except ValueError:
-                        pass
-                if not keep and widget.text() != text:
-                    widget.setText(text)
+                widget.set_value(text, force=not self.edit_active(key))
             widget.setProperty("invalid", raw is not None)
             widget.style().unpolish(widget)
             widget.style().polish(widget)
             del blocker
-
-    def _edit(self, key, text):
-        try:
-            value = parse_field(key, text)
-            self.edited.emit({key: value})
-        except ValueError:
-            self.draft_changed.emit(key, text)
 
     def _boolean(self, key, state):
         self.edited.emit(

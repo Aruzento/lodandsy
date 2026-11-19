@@ -26,3 +26,5 @@ lazy load/background backup эта UX-итерация не реализует.
 NASA233MP — validation/2026-11-19-iteration-5.md. Физическая mixedDPI/визуальная приёмка и
 Windows без Python отдельно. Пересмотр при durable UI drafts, конкурентной записи или
 фоновой операции backup.
+
+Итерация6-rev3 заменяет соответствующие границы владельцев, refs/semantic input, graphite composition и crop lifecycle: ADR-027/028/029. Исторические имена смешанных controllers/sessions выше больше не используются.

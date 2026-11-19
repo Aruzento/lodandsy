@@ -18,7 +18,7 @@ class AppShell(QMainWindow):
         self.close_guard: Callable[[], bool] | None = None
         self.setObjectName("appShell")
         self.setWindowTitle("LODANDSY")
-        self.resize(1280, 800)
+        self.resize(1440, 960)
         self.left_rail = LeftRail(self)
         self.right_rail = RightRail(self)
         self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, self.left_rail)
@@ -42,7 +42,7 @@ class AppShell(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.tree_host)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.inspector_host)
         self.resizeDocks(
-            [self.tree_host, self.inspector_host], [240, 300], Qt.Orientation.Horizontal
+            [self.tree_host, self.inspector_host], [224, 244], Qt.Orientation.Horizontal
         )
         self.left_rail.tree_action.toggled.connect(self.tree_host.setVisible)
         self.tree_host.visibilityChanged.connect(self.left_rail.tree_action.setChecked)

@@ -1,0 +1,35 @@
+{
+  "platform": "Windows-10-10.0.19045-SP0",
+  "cpu": "AMD64 Family 25 Model 80 Stepping 0, AuthenticAMD",
+  "logical_cpu": 12,
+  "workloads": [
+    {
+      "cells": 500,
+      "edit_p50_ms": 0.34279999090358615,
+      "edit_p95_ms": 0.5215999553911388,
+      "edit_max_ms": 1.1551000061444938,
+      "series_ms": 11.459100001957268,
+      "full_validation_ms": 0.19580003572627902,
+      "save_ms": 35.399300046265125,
+      "reopen_ms": 5.402899987529963,
+      "db_bytes": 266240,
+      "model_resets": 0,
+      "changed_range_max_cells": 1,
+      "tick_gap_max_ms": 18.52310000685975
+    },
+    {
+      "cells": 100000,
+      "edit_p50_ms": 3.143699956126511,
+      "edit_p95_ms": 3.87439999030903,
+      "edit_max_ms": 4.108400025870651,
+      "series_ms": 91.52539994101971,
+      "full_validation_ms": 43.176200008019805,
+      "save_ms": 897.3204999929294,
+      "reopen_ms": 624.9027000158094,
+      "db_bytes": 28876800,
+      "model_resets": 0,
+      "changed_range_max_cells": 1,
+      "tick_gap_max_ms": 634.5038000144996
+    }
+  ]
+}

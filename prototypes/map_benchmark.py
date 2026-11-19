@@ -41,14 +41,14 @@ def main():
         timer.timeout.connect(tick)
         timer.start()
         start = time.perf_counter()
-        controller.modules.import_map(source, "16MP")
-        while controller.modules.importing:
+        controller.maps.import_map(source, "16MP")
+        while controller.maps.importing:
             app.processEvents()
             time.sleep(0.001)
         elapsed = (time.perf_counter() - start) * 1000
         timer.stop()
-        document = next(iter(controller.modules.session.maps.values()))
-        widget = controller.modules.open_map(document.id).widget()
+        document = next(iter(controller.maps_service.maps.values()))
+        widget = controller.maps.open_map(document.id).widget()
         card = controller.create_card("Shared Card")
         tokens = tuple(TokenInstance(card.id, (i % 100) * 64, (i // 100) * 64) for i in range(1000))
         start = time.perf_counter()
@@ -64,11 +64,11 @@ def main():
             "largest_tick_gap_ms": round(max(ticks, default=0), 2),
             "scene_tokens": 1000,
             "scene_refresh_ms": round(scene_ms, 2),
-            "tile_cache_bytes": controller.modules.tiles.bytes,
+            "tile_cache_bytes": controller.maps.tiles.bytes,
         }
         print(json.dumps(result))
         project.saver.shutdown()
-        controller.modules.shutdown()
+        controller.shutdown_features()
         project.store.close()
         window.close_guard = None
         window.close()

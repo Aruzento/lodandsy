@@ -17,8 +17,8 @@ def test_tree_editor_inspector_share_one_card_state(qtbot):
     panel = window.tree_panel
     panel.tree_view.setCurrentIndex(panel.tree_model.index_for_node("card:" + city.id))
     window.tree_panel.request_open(panel.tree_model.index_for_node("card:" + city.id))
-    editor = controller.card_editors[city.id]
-    assert controller.session.current_card is cards.get(city.id)
+    editor = controller.card_views.editors[city.id]
+    assert controller.cards_service.current_card is cards.get(city.id)
     assert editor.text_edit.toPlainText() == "# Original"
     assert window.inspector_panel.id_edit.text() == city.id
     editor.text_edit.setPlainText("# Changed")
@@ -34,13 +34,14 @@ def test_tree_editor_inspector_share_one_card_state(qtbot):
         panel.tree_model.index_for_node("card:" + city.id).parent().data(NODE_ID_ROLE) == world.id
     )
     panel.tree_view.setCurrentIndex(panel.tree_model.index_for_node("card:" + world.id))
-    assert controller.session.current_card_id == world.id
+    assert controller.cards_service.current_card_id == world.id
     assert window.inspector_panel.id_edit.text() == world.id
     assert editor.card_id == city.id
     assert editor.text_edit.toPlainText() == "# Changed"
     controller.open_card_editor(world.id)
-    world_editor = controller.card_editors[world.id]
+    world_editor = controller.card_views.editors[world.id]
     world_editor.text_edit.setPlainText("# World")
+    world_editor.flush_pending()
     panel.tree_view.setCurrentIndex(panel.tree_model.index_for_node("card:" + city.id))
     assert html_text(cards.get(city.id).content).strip() == "# Changed"
     assert html_text(cards.get(world.id).content).strip() == "# World"

@@ -26,8 +26,8 @@ class AssetImageObject(QPyTextObject):
     def drawObject(self, painter, rect, document, position, format):
         image = self.document.image(format.toImageFormat().name())
         if image is None or image.isNull():
-            painter.fillRect(rect, QColor("#253146"))
-            painter.setPen(QColor("#aab7ca"))
+            painter.fillRect(rect, QColor("#292929"))
+            painter.setPen(QColor("#a6a6a3"))
             painter.drawText(
                 rect,
                 Qt.AlignmentFlag.AlignCenter,

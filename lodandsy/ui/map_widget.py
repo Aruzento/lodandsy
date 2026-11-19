@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMenu,
     QToolBar,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -62,7 +63,7 @@ class TileLayer(QGraphicsItem):
                 self.last_tile_count += 1
                 target = QRectF(x * span, y * span, span, span)
                 if image is None:
-                    painter.fillRect(target, QColor("#182437"))
+                    painter.fillRect(target, QColor("#202020"))
                 else:
                     target.setWidth(min(image.width() * factor, self.pyramid.width - x * span))
                     target.setHeight(min(image.height() * factor, self.pyramid.height - y * span))
@@ -377,10 +378,21 @@ class MapWidget(QWidget):
         ]:
             action.setIcon(icon(name))
             action.setShortcut(shortcut)
-            action.setToolTip(action.text() + " · " + shortcut)
+
+            def update_tip(a=action, key=shortcut):
+                text = a.text() + " · " + key
+                if a.toolTip() != text:
+                    a.setToolTip(text)
+
+            action.changed.connect(update_tip)
+            update_tip()
             action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             self.addAction(action)
-            bar.addAction(action)
+            button = QToolButton(bar)
+            button.setDefaultAction(action)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+            button.setAccessibleName("Отменить" if name == "undo" else "Повторить")
+            bar.addWidget(button)
 
     def image_ready(self, root, _name):
         if root == self.project_root:

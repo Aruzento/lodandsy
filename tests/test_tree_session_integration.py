@@ -39,26 +39,16 @@ def test_tree_selection_updates_session(
     )
 
     with qtbot.waitSignal(
-        controller.session.current_card_changed,
+        controller.cards_service.current_card_changed,
         timeout=1000,
     ) as signal:
-        window.tree_panel.tree_view.setCurrentIndex(
-            city_index
-        )
+        window.tree_panel.tree_view.setCurrentIndex(city_index)
 
-    assert signal.args == [
-        city.id
-    ]
+    assert signal.args == [city.id]
 
-    assert (
-        controller.session.current_card_id
-        == city.id
-    )
+    assert controller.cards_service.current_card_id == city.id
 
-    assert (
-        controller.session.current_card
-        is city
-    )
+    assert controller.cards_service.current_card is city
 
 
 def test_tree_can_switch_session_selection(
@@ -91,23 +81,13 @@ def test_tree_can_switch_session_selection(
         world_index,
     )
 
-    window.tree_panel.tree_view.setCurrentIndex(
-        world_index
-    )
+    window.tree_panel.tree_view.setCurrentIndex(world_index)
 
-    assert (
-        controller.session.current_card_id
-        == world.id
-    )
+    assert controller.cards_service.current_card_id == world.id
 
-    window.tree_panel.tree_view.setCurrentIndex(
-        city_index
-    )
+    window.tree_panel.tree_view.setCurrentIndex(city_index)
 
-    assert (
-        controller.session.current_card_id
-        == city.id
-    )
+    assert controller.cards_service.current_card_id == city.id
 
 
 def test_tree_selection_updates_editor_and_inspector(
@@ -136,7 +116,7 @@ def test_tree_selection_updates_editor_and_inspector(
     qtbot.addWidget(editor)
 
     editor_binding = CardEditorBinding(
-        controller.session,
+        controller.cards_service,
         editor,
         city.id,
     )
@@ -151,29 +131,18 @@ def test_tree_selection_updates_editor_and_inspector(
         world_index,
     )
 
-    window.tree_panel.tree_view.setCurrentIndex(
-        city_index
-    )
+    window.tree_panel.tree_view.setCurrentIndex(city_index)
 
-    assert (
-        controller.session.current_card_id
-        == city.id
-    )
+    assert controller.cards_service.current_card_id == city.id
 
     assert editor.card_id == city.id
     assert editor.text_edit.toPlainText() == "# City"
 
-    assert (
-        window.inspector_panel.id_edit.text()
-        == city.id
-    )
+    assert window.inspector_panel.id_edit.text() == city.id
 
-    assert (
-        window.inspector_panel.title_edit.text()
-        == "City"
-    )
+    assert window.inspector_panel.title_edit.text() == "City"
 
-    assert editor_binding.session is controller.session
+    assert editor_binding.session is controller.cards_service
 
 
 def test_deleting_selected_card_clears_session_and_views(
@@ -201,7 +170,7 @@ def test_deleting_selected_card_clears_session_and_views(
     qtbot.addWidget(editor)
 
     editor_binding = CardEditorBinding(
-        controller.session,
+        controller.cards_service,
         editor,
         city.id,
     )
@@ -216,18 +185,14 @@ def test_deleting_selected_card_clears_session_and_views(
         world_index,
     )
 
-    window.tree_panel.tree_view.setCurrentIndex(
-        city_index
-    )
+    window.tree_panel.tree_view.setCurrentIndex(city_index)
 
-    assert controller.session.current_card_id == city.id
+    assert controller.cards_service.current_card_id == city.id
 
-    controller.delete_card(
-        city.id
-    )
+    controller.delete_card(city.id)
 
-    assert controller.session.current_card_id is None
-    assert controller.session.current_card is None
+    assert controller.cards_service.current_card_id is None
+    assert controller.cards_service.current_card is None
 
     assert editor.card_id is None
     assert not editor.text_edit.isEnabled()
@@ -235,4 +200,4 @@ def test_deleting_selected_card_clears_session_and_views(
     assert window.inspector_panel.id_edit.text() == ""
     assert not window.inspector_panel.title_edit.isEnabled()
 
-    assert editor_binding.session is controller.session
+    assert editor_binding.session is controller.cards_service

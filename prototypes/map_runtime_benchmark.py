@@ -74,21 +74,20 @@ def main():
             ExitStack() as cleanup,
         ):
             cleanup.callback(lambda: project.store.close() if project.store else None)
-            cleanup.callback(controller.modules.shutdown)
-            cleanup.callback(controller.card_images.shutdown)
+            cleanup.callback(controller.maps.shutdown)
             cleanup.callback(project.saver.shutdown)
             project.create_project(Path(temporary) / "world")
             set_phase("import")
             start = time.perf_counter()
-            controller.modules.import_map(args.source, "Measured raster")
-            wait(lambda: not controller.modules.importing)
-            document = next(iter(controller.modules.session.maps.values()))
-            widget = controller.modules.open_map(document.id).widget()
+            controller.maps.import_map(args.source, "Measured raster")
+            wait(lambda: not controller.maps.importing)
+            document = next(iter(controller.maps_service.maps.values()))
+            widget = controller.maps.open_map(document.id).widget()
             wait(lambda: "Колесо" in widget.message.text())
             import_seconds = time.perf_counter() - start
             set_phase("scene_setup")
-            second = controller.modules.session.create_map("Second view", document.asset_id)
-            other = controller.modules.open_map(second.id).widget()
+            second = controller.maps_service.create_map("Second view", document.asset_id)
+            other = controller.maps.open_map(second.id).widget()
             wait(lambda: "Колесо" in other.message.text())
             if args.tokens:
                 token_source = Path(temporary) / "token.png"
@@ -100,7 +99,7 @@ def main():
                 columns = 40
                 rows = (args.tokens + columns - 1) // columns
                 card = controller.create_card("Shared Card", card_type="character")
-                controller.session.update_card(card.id, portrait=Portrait(asset.id))
+                controller.cards_service.update_card(card.id, portrait=Portrait(asset.id))
                 tokens = tuple(
                     TokenInstance(
                         card.id,
@@ -111,15 +110,15 @@ def main():
                     )
                     for i in range(args.tokens)
                 )
-                controller.modules.session.edit_map(
+                controller.maps_service.edit_map(
                     document.id, tokens=tokens, grid=MapGrid(True, 100)
                 )
             for doc in (document, second):
                 layers = [
-                    controller.modules.session.add_layer(doc.id, f"Layer {i}") for i in range(2)
+                    controller.maps_service.add_layer(doc.id, f"Layer {i}") for i in range(2)
                 ]
                 for i in range(15):
-                    controller.modules.session.add_object(
+                    controller.maps_service.add_object(
                         doc.id,
                         layers[i % 2].id,
                         asset.id if args.tokens else doc.asset_id,
@@ -145,14 +144,14 @@ def main():
                 tile_counts.append(view._background.last_tile_count)
                 app.processEvents()
                 time.sleep(0.01)
-            wait(lambda: not controller.modules.tiles.pending)
+            wait(lambda: not controller.maps.tiles.pending)
             drag = []
             if args.tokens:
                 set_phase("drag")
-                token = controller.modules.session.get_map(document.id).tokens[0]
+                token = controller.maps_service.get_map(document.id).tokens[0]
                 for i in range(30):
                     start = time.perf_counter()
-                    controller.modules.session.move_token(
+                    controller.maps_service.move_token(
                         document.id, token.id, 100 + i * 20, 200 + i * 20
                     )
                     app.processEvents()
@@ -171,7 +170,7 @@ def main():
             project._save_ui_state()
             controller.window_manager.close_window(f"map:{document.id}")
             start = time.perf_counter()
-            reopened = controller.modules.open_map(document.id).widget()
+            reopened = controller.maps.open_map(document.id).widget()
             wait(lambda: "Колесо" in reopened.message.text())
             result = {
                 "source": args.source.name,
@@ -185,7 +184,7 @@ def main():
                 "pan_zoom_render_p50_ms": round(sorted(samples)[40], 2),
                 "pan_zoom_render_p95_ms": round(sorted(samples)[76], 2),
                 "max_gui_tick_gap_ms": round(max(gaps), 2),
-                "tile_cache_bytes": controller.modules.tiles.bytes,
+                "tile_cache_bytes": controller.maps.tiles.bytes,
                 "max_visible_tiles": max(tile_counts),
                 "token_count": args.tokens,
                 "placed_objects": 30,
@@ -212,8 +211,7 @@ def main():
     finally:
         timer.stop()
         window.close_guard = None
-        controller.modules.shutdown()
-        controller.card_images.shutdown()
+        controller.shutdown_features()
         project.saver.shutdown()
         if project.store:
             project.store.close()

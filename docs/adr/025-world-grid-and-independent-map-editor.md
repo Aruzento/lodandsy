@@ -22,3 +22,5 @@ Palette использует bounded existing media decoder и visible48px previ
 worker source backgrounds не декодируются сюда. Raster objects/layers остаются отдельными
 от Card/Token; delete layer с данными требует подтверждения. Vector roads/walls/fog/lighting/
 combat/BigMap не реализуются. Результат native window/UI lifecycle и benchmark — отчёт5.
+
+Итерация6-rev3 заменяет соответствующие границы владельцев, refs/semantic input, graphite composition и crop lifecycle: ADR-027/028/029. Исторические имена смешанных controllers/sessions выше больше не используются.

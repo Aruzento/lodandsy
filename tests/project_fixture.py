@@ -13,8 +13,7 @@ def project(qtbot):
     project = ProjectController(controller)
     yield controller, project
     window.close_guard = None
-    controller.modules.shutdown()
-    controller.card_images.shutdown()
+    controller.shutdown_features()
     project.saver.shutdown()
     if project.store:
         project.store.close()
@@ -66,3 +65,17 @@ def text_table(title, *, rows=(), id=None):
 
 def text_values(table):
     return tuple(r.value(table.columns[0].id) for r in table.rows)
+
+
+def map_services():
+    from lodandsy.application.cards_service import CardsService
+    from lodandsy.application.entity_session import EntitySession
+    from lodandsy.application.maps_service import MapsService
+    from lodandsy.application.project_actions import ProjectActions
+    from lodandsy.application.tables_service import TablesService
+
+    core = EntitySession()
+    cards = CardsService(core=core)
+    maps = MapsService(core)
+    tables = TablesService(core)
+    return maps, ProjectActions(core, cards, tables, maps), tables, cards

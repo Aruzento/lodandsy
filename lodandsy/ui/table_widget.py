@@ -2,8 +2,8 @@ import csv
 import io
 from dataclasses import replace
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QKeySequence
+from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemDelegate,
     QApplication,
@@ -13,195 +13,26 @@ from PySide6.QtWidgets import (
     QMenu,
     QMessageBox,
     QPushButton,
-    QStyledItemDelegate,
     QVBoxLayout,
     QWidget,
 )
 
 from lodandsy.application.clipboard import copy_text
-from lodandsy.domain.table_document import ColumnDefinition, RowRecord, display_value, parse_cell
+from lodandsy.domain.table_document import ColumnDefinition
+from lodandsy.ui.entity_picker import EntityPicker
 from lodandsy.ui.table_headers import TableView
-
-
-class TableModel(QAbstractTableModel):
-    document_changed = Signal(object)
-    draft_changed = Signal()
-    error = Signal(str)
-
-    def __init__(self, document, drafts=None, parent=None):
-        super().__init__(parent)
-        self.document = document
-        self.drafts = drafts if drafts is not None else {}
-
-    def rowCount(self, parent=QModelIndex()):
-        return 0 if parent.isValid() else len(self.document.rows)
-
-    def columnCount(self, parent=QModelIndex()):
-        return 0 if parent.isValid() else len(self.document.columns)
-
-    def key(self, index):
-        return self.document.rows[index.row()].id, self.document.columns[index.column()].id
-
-    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
-        if not index.isValid():
-            return None
-        row, col = self.document.rows[index.row()], self.document.columns[index.column()]
-        value = row.value(col.id)
-        draft = self.drafts.get((row.id, col.id))
-        if role in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
-            return draft if draft is not None else display_value(value)
-        if role == Qt.ItemDataRole.CheckStateRole and col.data_type == "bool":
-            return (
-                Qt.CheckState.PartiallyChecked
-                if value is None
-                else Qt.CheckState.Checked
-                if value
-                else Qt.CheckState.Unchecked
-            )
-        if role == Qt.ItemDataRole.BackgroundRole and draft is not None:
-            return QColor("#713d49")
-        if role == Qt.ItemDataRole.ToolTipRole:
-            return (
-                "Ошибочный ввод не сохранён; исправьте или отмените. Другие данные сохраняются."
-                if draft
-                else col.data_type
-            )
-
-    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
-        if role == Qt.ItemDataRole.DisplayRole:
-            return (
-                self.document.columns[section].name
-                if orientation == Qt.Orientation.Horizontal
-                else str(section + 1)
-            )
-        if role == Qt.ItemDataRole.ToolTipRole and orientation == Qt.Orientation.Horizontal:
-            return self.document.columns[section].data_type
-
-    def flags(self, index):
-        if not index.isValid():
-            return Qt.ItemFlag.NoItemFlags
-        flags = (
-            Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEditable
-        )
-        if self.document.columns[index.column()].data_type == "bool":
-            flags |= Qt.ItemFlag.ItemIsUserCheckable
-        return flags
-
-    def setData(self, index, value, role=Qt.ItemDataRole.EditRole):
-        if not index.isValid() or role not in (
-            Qt.ItemDataRole.EditRole,
-            Qt.ItemDataRole.CheckStateRole,
-        ):
-            return False
-        row, col = self.key(index)
-        try:
-            parsed = (
-                value == Qt.CheckState.Checked.value or value == Qt.CheckState.Checked
-                if role == Qt.ItemDataRole.CheckStateRole
-                else parse_cell(value, self.document.columns[index.column()].data_type)
-            )
-            updated = self.document.with_cell(row, col, parsed)
-        except ValueError as error:
-            self.drafts[(row, col)] = str(value)
-            self.error.emit(str(error))
-            self.draft_changed.emit()
-            self.dataChanged.emit(index, index)
-            return False
-        had_draft = self.drafts.pop((row, col), None) is not None
-        if updated != self.document:
-            self.document = updated
-            self.document_changed.emit(updated)
-        if had_draft:
-            self.draft_changed.emit()
-        self.dataChanged.emit(index, index)
-        return True
-
-    def apply(self, document):
-        if document != self.document:
-            self.set_document(document)
-            self.document_changed.emit(document)
-
-    def set_document(self, document):
-        before = self.document
-        if document is before or document == before:
-            return
-        structural = document.columns != before.columns or tuple(
-            r.id for r in document.rows
-        ) != tuple(r.id for r in before.rows)
-        if structural:
-            self.beginResetModel()
-        self.document = document
-        if structural:
-            valid_rows, valid_cols = {r.id for r in document.rows}, {c.id for c in document.columns}
-            for key in list(self.drafts):
-                if key[0] not in valid_rows or key[1] not in valid_cols:
-                    del self.drafts[key]
-            self.endResetModel()
-        else:
-            for y, (old, new) in enumerate(zip(before.rows, document.rows)):
-                if old is new or old == new:
-                    continue
-                for x, column in enumerate(document.columns):
-                    if old.value(column.id) != new.value(column.id):
-                        index = self.index(y, x)
-                        self.dataChanged.emit(index, index)
-
-    def paste(self, start, text):
-        if len(text.encode("utf-8")) > 2**20:
-            raise ValueError("Вставка превышает 1 MiB")
-        if not start.isValid() or not text:
-            raise ValueError("Выберите начальную ячейку")
-        values = csv.reader(io.StringIO(text), delimiter="\t", strict=True)
-        document = self.document
-        updates, affected = {}, set()
-        try:
-            for y, line in enumerate(values, start.row()):
-                if y >= len(document.rows) or start.column() + len(line) > len(document.columns):
-                    raise ValueError("Диапазон вставки выходит за таблицу")
-                cells = dict(document.rows[y].cells)
-                for x, text in enumerate(line, start.column()):
-                    column = document.columns[x]
-                    cells[column.id] = parse_cell(text, column.data_type)
-                    affected.add((document.rows[y].id, column.id))
-                updates[y] = replace(document.rows[y], cells=tuple(cells.items()))
-        except csv.Error as error:
-            raise ValueError("Некорректный или слишком большой TSV-фрагмент") from error
-        # One validation and notification; no partially applied TSV.
-        updated = replace(
-            document, rows=tuple(updates.get(y, r) for y, r in enumerate(document.rows))
-        )
-        cleared = False
-        for key in affected:
-            cleared |= self.drafts.pop(key, None) is not None
-        self.apply(updated)
-        if cleared:
-            self.draft_changed.emit()
-
-
-class LiveCellDelegate(QStyledItemDelegate):
-    def createEditor(self, parent, option, index):
-        editor = QLineEdit(parent)
-        editor.setMaxLength(65536)
-        row_id, column_id = index.model().key(index)
-        model = index.model()
-
-        def changed(text):
-            row = next((i for i, r in enumerate(model.document.rows) if r.id == row_id), -1)
-            col = next((i for i, c in enumerate(model.document.columns) if c.id == column_id), -1)
-            if row >= 0 and col >= 0:
-                model.setData(model.index(row, col), text)
-
-        editor.textEdited.connect(changed)
-        return editor
+from lodandsy.ui.table_model import SemanticCellDelegate, TableModel
 
 
 class TableWidget(QWidget):
     document_changed = Signal(object)
     draft_changed = Signal()
 
-    def __init__(self, document, drafts=None):
+    def __init__(self, document, drafts=None, *, service=None, open_entity=None):
         super().__init__()
-        self.model = TableModel(document, drafts, self)
+        self.model = TableModel(document, drafts, self, service=service)
+        self.references = service.references if service else None
+        self.open_entity = open_entity or (lambda kind, key: None)
         self.model.document_changed.connect(self.document_changed)
         self.model.draft_changed.connect(self.draft_changed)
         layout = QVBoxLayout(self)
@@ -209,11 +40,17 @@ class TableWidget(QWidget):
         layout.setSpacing(6)
         self.table = TableView()
         self.table.setModel(self.model)
-        self.table.setItemDelegate(LiveCellDelegate(self.table))
+        self.table.setItemDelegate(SemanticCellDelegate(self.table))
         self.table.setAccessibleName("Таблица документов")
         self.table.horizontalHeader().setDefaultSectionSize(180)
-        self.model.modelAboutToBeReset.connect(self._remember_ui)
-        self.model.modelReset.connect(self._restore_ui)
+        for position, column in enumerate(document.columns):
+            if column.key in {"item", "quantity", "description", "cost"}:
+                self.table.setColumnWidth(
+                    position,
+                    {"item": 210, "quantity": 96, "description": 300, "cost": 116}[column.key],
+                )
+        self.model.structure_changing.connect(self._remember_ui)
+        self.model.structure_changed.connect(self._restore_ui)
         self._saved_ui = {}
         layout.addWidget(self.table, 1)
         self.discard = QPushButton("Отменить ошибочный ввод")
@@ -231,6 +68,9 @@ class TableWidget(QWidget):
         self.table.verticalHeader().customContextMenuRequested.connect(self._row_menu)
         self.table.horizontalHeader().sectionMoved.connect(lambda *args: self._header_order(True))
         self.table.verticalHeader().sectionMoved.connect(lambda *args: self._header_order(False))
+        self.table.installEventFilter(self)
+        self.table.viewport().installEventFilter(self)
+        self.table.doubleClicked.connect(self._activate_reference)
         self._reordering = False
         self.model.draft_changed.connect(self.update_draft_notice)
         self.update_draft_notice()
@@ -246,6 +86,94 @@ class TableWidget(QWidget):
 
     def set_document(self, document):
         self.model.set_document(document)
+
+    def refresh_references(self, cells):
+        self.model.refresh_cells(cells)
+
+    def hideEvent(self, event):
+        self.model.flush_owned_edits()
+        super().hideEvent(event)
+
+    def _activate_reference(self, index):
+        if not index.isValid():
+            return
+        kind = self.model.column(index).data_type
+        if kind == "entity_ref":
+            self.pick_reference(index)
+        elif kind == "projection":
+            self.open_reference(index)
+
+    def pick_reference(self, index):
+        if self.references is None:
+            return
+        row, col = self.model.key(index)
+        column = self.model.column(index)
+        if column.data_type != "entity_ref":
+            return
+        value = self.model.document.rows[index.row()].value(col)
+        generation = self.model.service.core.generation
+        picker = EntityPicker(self.references, column, self.table, current=value)
+        point = self.table.viewport().mapToGlobal(self.table.visualRect(index).bottomLeft())
+        screen = QApplication.screenAt(point)
+        if screen:
+            rect = screen.availableGeometry()
+            point.setX(min(point.x(), rect.right() - picker.width()))
+            point.setY(min(point.y(), rect.bottom() - picker.height()))
+        picker.move(point)
+        if picker.exec() == picker.DialogCode.Accepted:
+            try:
+                if generation != self.model.service.core.generation:
+                    raise ValueError("Проект изменился; выбор отменён")
+                self.model.service.set_cell(
+                    self.model.document.id, row, col, picker.chosen_id, expected=value, parsed=True
+                )
+            except ValueError as error:
+                self.model.service.reject_draft(
+                    self.model.document.id, row, col, picker.chosen_id, error
+                )
+                self.error.setText(str(error))
+        picker.deleteLater()
+
+    def open_reference(self, index):
+        if self.references is None or not index.isValid():
+            return
+        column = self.model.column(index)
+        source = column.id if column.data_type == "entity_ref" else column.source_column_id
+        if source is None:
+            return
+        value = self.model.document.rows[index.row()].value(source)
+        info = self.references.info(value)
+        if info:
+            self.open_entity(info.kind, info.id)
+        else:
+            self.error.setText("Документ недоступен")
+
+    def eventFilter(self, obj, event):
+        if event.type() == QEvent.Type.KeyPress:
+            index = self.table.currentIndex()
+            if index.isValid() and self.model.column(index).data_type in {
+                "entity_ref",
+                "projection",
+            }:
+                if event.key() in {Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space}:
+                    if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                        self.open_reference(index)
+                    else:
+                        self._activate_reference(index)
+                    return True
+        if (
+            obj is self.table.viewport()
+            and event.type() == QEvent.Type.MouseButtonPress
+            and event.modifiers() & Qt.KeyboardModifier.ControlModifier
+        ):
+            index = self.table.indexAt(event.position().toPoint())
+            if index.isValid() and self.model.column(index).data_type in {
+                "entity_ref",
+                "projection",
+            }:
+                self.open_reference(index)
+                return True
+        return super().eventFilter(obj, event)
 
     def ui_state(self):
         index = self.table.currentIndex()
@@ -301,15 +229,19 @@ class TableWidget(QWidget):
 
     def add_row(self):
         doc = self.model.document
-        self.model.apply(replace(doc, rows=(*doc.rows, RowRecord(len(doc.rows)))))
+        self.model.apply(replace(doc, rows=(*doc.rows, doc.new_row())))
         if doc.columns:
             self.table.setCurrentIndex(self.model.index(len(doc.rows), 0))
             self.table.scrollTo(self.table.currentIndex())
 
     def remove_row(self):
-        index = getattr(self, "_context_row", None)
-        index = self.table.currentIndex().row() if index is None else index
         doc = self.model.document
+        identity = getattr(self, "_context_row_id", None)
+        index = (
+            next((i for i, row in enumerate(doc.rows) if row.id == identity), -1)
+            if identity
+            else self.table.currentIndex().row()
+        )
         if index >= 0 and self._confirm(bool(doc.rows[index].cells)):
             self.model.apply(
                 replace(
@@ -325,37 +257,65 @@ class TableWidget(QWidget):
         name, ok = QInputDialog.getText(self, "Колонка", "Название:")
         if not ok or not name.strip():
             return
-        kind, ok = QInputDialog.getItem(self, "Тип", "Тип:", ["text", "number", "bool"], 0, False)
+        kinds = {
+            "Текст": "text",
+            "Число": "number",
+            "Флажок": "bool",
+            "Ссылка на документ": "entity_ref",
+            "Свойство связанного документа": "projection",
+        }
+        label, ok = QInputDialog.getItem(self, "Тип", "Тип:", list(kinds), 0, False)
         if ok:
+            kind = kinds[label]
             doc = self.model.document
-            self._apply(
-                lambda: replace(
-                    doc, columns=(*doc.columns, ColumnDefinition(name, kind, len(doc.columns)))
-                )
-            )
+            try:
+                column = self._column_definition(name, kind, len(doc.columns))
+            except ValueError as error:
+                self.error.setText(str(error))
+                return
+            if column is None:
+                return
+            self._apply(lambda: replace(doc, columns=(*doc.columns, column)))
             if doc.rows:
                 self.table.setCurrentIndex(self.model.index(0, len(doc.columns)))
                 self.table.scrollTo(self.table.currentIndex())
 
     def edit_column(self):
-        index = getattr(self, "_context_column", None)
-        index = self.table.currentIndex().column() if index is None else index
         doc = self.model.document
+        identity = getattr(self, "_context_column_id", None)
+        index = (
+            next((i for i, col in enumerate(doc.columns) if col.id == identity), -1)
+            if identity
+            else self.table.currentIndex().column()
+        )
         if index < 0:
             return
         column = doc.columns[index]
         name, ok = QInputDialog.getText(self, "Колонка", "Название:", text=column.name)
         if not ok or not name.strip():
             return
-        kinds = ["text", "number", "bool"]
-        kind, ok = QInputDialog.getItem(
-            self, "Тип", "Тип:", kinds, kinds.index(column.data_type), False
+        labels = {
+            "Текст": "text",
+            "Число": "number",
+            "Флажок": "bool",
+            "Ссылка на документ": "entity_ref",
+            "Свойство связанного документа": "projection",
+        }
+        kind_label, ok = QInputDialog.getItem(
+            self, "Тип", "Тип:", list(labels), list(labels.values()).index(column.data_type), False
         )
         if not ok:
             return
 
         def update():
-            changed = replace(column, name=name, data_type=kind)
+            kind = labels[kind_label]
+            changed = (
+                replace(column, name=name)
+                if kind == column.data_type
+                else self._column_definition(name, kind, column.position, column)
+            )
+            if changed is None:
+                return
             # Strict change: incompatible existing values are rejected, never dropped/coerced.
             return replace(
                 doc, columns=tuple(changed if c.id == column.id else c for c in doc.columns)
@@ -363,10 +323,62 @@ class TableWidget(QWidget):
 
         self._apply(update)
 
+    def _column_definition(self, name, kind, position, old=None):
+        metadata = {}
+        if kind == "entity_ref":
+            if self.references is None:
+                raise ValueError("Не подключён каталог документов")
+            kinds = {"Карточка": "card", "Карта": "map", "Таблица": "table"}
+            label, ok = QInputDialog.getItem(
+                self, "Ссылка", "Тип документа:", list(kinds), 0, False
+            )
+            if not ok:
+                return None
+            metadata["ref_kind"] = kinds[label]
+            if kinds[label] == "card":
+                choices = [("Любой тип", None), *self.references.type_options]
+                value, ok = QInputDialog.getItem(
+                    self, "Ссылка", "Тип карточки:", [label for label, key in choices], 0, False
+                )
+                if not ok:
+                    return None
+                metadata["ref_card_type"] = dict(choices)[value]
+        if kind == "projection":
+            columns = [c for c in self.model.document.columns if c.data_type == "entity_ref"]
+            if not columns:
+                raise ValueError("Сначала добавьте столбец ссылки")
+            choices = {c.name + " · " + c.id[:8]: c for c in columns}
+            label, ok = QInputDialog.getItem(
+                self, "Свойство", "Столбец ссылки:", list(choices), 0, False
+            )
+            if not ok:
+                return None
+            source = choices[label]
+            options = dict(
+                self.references.field_options
+                if source.ref_kind == "card"
+                else (("Название", "title"),)
+            )
+            field, ok = QInputDialog.getItem(
+                self, "Свойство", "Поле документа:", list(options), 0, False
+            )
+            if not ok:
+                return None
+            metadata.update(source_column_id=source.id, field_key=options[field])
+        if old is None:
+            return ColumnDefinition(name, kind, position, **metadata)
+        if old.key is not None:
+            return replace(old, name=name, data_type=kind)
+        return ColumnDefinition(name, kind, position, old.id, **metadata)
+
     def remove_column(self):
-        index = getattr(self, "_context_column", None)
-        index = self.table.currentIndex().column() if index is None else index
         doc = self.model.document
+        identity = getattr(self, "_context_column_id", None)
+        index = (
+            next((i for i, col in enumerate(doc.columns) if col.id == identity), -1)
+            if identity
+            else self.table.currentIndex().column()
+        )
         if index < 0:
             return
         key = doc.columns[index].id
@@ -402,11 +414,11 @@ class TableWidget(QWidget):
         menu = QMenu(self)
         menu.addAction("Добавить столбец…", self.add_column)
         if index >= 0:
-            self._context_column = index
+            self._context_column_id = self.model.document.columns[index].id
             menu.addAction("Название и тип…", self.edit_column)
             menu.addAction("Удалить столбец…", self.remove_column)
         menu.exec(header.mapToGlobal(point))
-        self._context_column = None
+        self._context_column_id = None
 
     def _row_menu(self, point):
         header = self.table.verticalHeader()
@@ -414,10 +426,10 @@ class TableWidget(QWidget):
         menu = QMenu(self)
         menu.addAction("Добавить строку", self.add_row)
         if index >= 0:
-            self._context_row = index
+            self._context_row_id = self.model.document.rows[index].id
             menu.addAction("Удалить строку…", self.remove_row)
         menu.exec(header.mapToGlobal(point))
-        self._context_row = None
+        self._context_row_id = None
 
     def update_draft_notice(self):
         invalid = bool(self.model.drafts)
@@ -425,7 +437,18 @@ class TableWidget(QWidget):
         if not invalid:
             self.error.clear()
         else:
-            self.error.setText("Ошибочный ввод не сохранён. Другие данные можно сохранять.")
+            message = next(
+                (
+                    self.model.service.draft_error(self.model.document.id, row, col)
+                    for row, col in self.model.drafts
+                    if self.model.service
+                    and self.model.service.draft_error(self.model.document.id, row, col)
+                ),
+                "",
+            )
+            self.error.setText(
+                message or "Ошибочный ввод не сохранён. Другие данные можно сохранять."
+            )
 
     def copy_selection(self):
         indexes = self.table.selectionModel().selectedIndexes()
@@ -436,7 +459,15 @@ class TableWidget(QWidget):
         writer = csv.writer(stream, delimiter="\t", lineterminator="\n")
         for y in range(min(rows), max(rows) + 1):
             writer.writerow(
-                [self.model.data(self.model.index(y, x)) for x in range(min(cols), max(cols) + 1)]
+                [
+                    self.model.data(
+                        self.model.index(y, x),
+                        Qt.ItemDataRole.EditRole
+                        if self.model.document.columns[x].data_type == "entity_ref"
+                        else Qt.ItemDataRole.DisplayRole,
+                    )
+                    for x in range(min(cols), max(cols) + 1)
+                ]
             )
         copy_text(stream.getvalue().rstrip("\n"))
 

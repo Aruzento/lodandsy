@@ -40,9 +40,9 @@ PATHS = {
 def icon(name, size=16):
     result = QIcon()
     for mode, color in [
-        (QIcon.Mode.Normal, "#e8edf4"),
-        (QIcon.Mode.Active, "#ceb075"),
-        (QIcon.Mode.Disabled, "#7e8ca2"),
+        (QIcon.Mode.Normal, "#e5e5e3"),
+        (QIcon.Mode.Active, "#c9c7bf"),
+        (QIcon.Mode.Disabled, "#737373"),
     ]:
         svg = (
             f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" '

@@ -1,0 +1,25 @@
+{
+  "platform": "Windows-10-10.0.19045-SP0",
+  "python": "3.14.8",
+  "qt": "6.11.2",
+  "catalog_entities": 10000,
+  "inventory_rows": 1000,
+  "views": 2,
+  "catalog_setup_ms": 1373.7455000518821,
+  "picker_create_ms": 9.84990003053099,
+  "picker_widgets": 8,
+  "filter": {
+    "p50_ms": 1.8550999811850488,
+    "p95_ms": 2.3379999911412597,
+    "max_ms": 3.3798000076785684
+  },
+  "item_update_500_rows": {
+    "p50_ms": 17.31560000916943,
+    "p95_ms": 20.36450000014156,
+    "max_ms": 41.50320001645014
+  },
+  "update_signals_per_view": 1500,
+  "model_resets": 0,
+  "unrelated_rows_updated": 0,
+  "note": "Synthetic fixed workload, offscreen; excludes physical input latency."
+}

@@ -1,3 +1,5 @@
+"""Map commands and one Undo history per map; no Table, Dice or feature editor dependency."""
+
 import math
 from dataclasses import replace
 from types import MappingProxyType
@@ -5,14 +7,20 @@ from types import MappingProxyType
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QUndoCommand, QUndoStack
 
-from lodandsy.domain.document_payloads import module_document, module_payload, project_entities
+from lodandsy.application.entity_session import EntitySession
 from lodandsy.domain.map_document import (
     MapDocument,
     MapLayer,
+    MapPayload,
     PlacedAssetObject,
     TokenInstance,
 )
-from lodandsy.domain.table_document import TableDocument
+
+
+def map_payload(document):
+    return MapPayload(
+        document.asset_id, document.tokens, document.grid, document.layers, document.objects
+    )
 
 
 class MapEdit(QUndoCommand):
@@ -27,71 +35,101 @@ class MapEdit(QUndoCommand):
         self.session._put_map(self.after)
 
 
-class ModuleSession(QObject):
-    """Canonical in-memory state of the two built-in modules; no SQL or widgets."""
-
+class MapsService(QObject):
     map_changed = Signal(str)
-    table_changed = Signal(str)
     map_deleted = Signal(str)
-    table_deleted = Signal(str)
-    changed = Signal()
-    replaced = Signal()
 
-    def __init__(self, parent=None, *, entities=None, delete_handler=None):
+    def __init__(self, core=None, parent=None):
         super().__init__(parent)
-        self.entities = entities if entities is not None else project_entities()
-        self.delete_handler = delete_handler
+        self.core = core if core is not None else EntitySession(parent=self)
         self._undo = {}
         self._deleted_card_ids = set()
+        self.core.replaced.connect(self.reset)
+        self.core.entities_deleted.connect(self.notify_deleted)
+        self.core.entity_changed.connect(self._entity_changed)
 
-    def _documents(self, kind):
-        return MappingProxyType(
-            {
-                e.id: module_document(self.entities, e.id)
-                for e in self.entities.summaries()
-                if e.kind == kind
-            }
-        )
+    @property
+    def entities(self):
+        return self.core.entities
 
     @property
     def maps(self):
-        return self._documents("map")
-
-    @property
-    def tables(self):
-        return self._documents("table")
-
-    def reset(self, maps=(), tables=(), *, entities=None):
-        replacement = (
-            entities if entities is not None else project_entities(maps=maps, tables=tables)
+        return MappingProxyType(
+            {e.id: self.get_map(e.id) for e in self.entities.summaries() if e.kind == "map"}
         )
+
+    def reset(self):
         for stack in self._undo.values():
+            stack.clear()
             stack.deleteLater()
         self._undo.clear()
         self._deleted_card_ids.clear()
-        self.entities = replacement
-        self.replaced.emit()
 
     def _put(self, document):
-        self.entities.update(document.id, title=document.title)
-        self.entities.put_payload(document.id, module_payload(document))
-        self.entities.project(document.id, lambda entity, payload: document)
+        # Undo belongs to Map payload. Entity rename/reparent is a separate Core command.
+        document = replace(document, title=self.entities.get(document.id).title)
+        self.entities.put_payload(document.id, map_payload(document))
+        self.entities.project(document.id, lambda e, p: document)
 
     def _get(self, key, kind):
         if self.entities.get(key).kind != kind:
-            raise ValueError("Неподдерживаемый тип документа")
-        return module_document(self.entities, key)
+            raise ValueError("Ожидается карта")
+        return self.entities.project(
+            key,
+            lambda e, p: MapDocument(
+                e.title, p.asset_id, e.id, p.tokens, p.grid, p.layers, p.objects
+            ),
+        )
 
-    def _delete(self, key):
-        if self.delete_handler is not None:
-            return self.delete_handler(key)
-        deleted = self.entities.delete(key)
-        self.notify_deleted(deleted)
-        return deleted
+    def card(self, key):
+        if self.entities.get(key).kind != "card":
+            raise ValueError("Ожидается карточка")
+
+    def _entity_changed(self, key, fields):
+        if self.entities.get(key).kind == "map":
+            self.map_changed.emit(key)
+
+    def notify_deleted(self, deleted):
+        self._deleted_card_ids.update(deleted)
+        for key in deleted:
+            stack = self._undo.pop(key, None)
+            if stack is not None:
+                stack.clear()
+                stack.deleteLater()
+            self.map_deleted.emit(key)
+
+    def _put_map(self, document):
+        tokens = []
+        for token in document.tokens:
+            if token.card_id in self._deleted_card_ids:
+                try:
+                    self.card(token.card_id)
+                except ValueError:
+                    continue
+            tokens.append(token)
+        document = replace(document, tokens=tuple(tokens))
+        with self.core.transaction():
+            self._put(document)
+            self.core.after_commit(lambda: self.map_changed.emit(document.id))
+            self.core.mark_changed()
+
+    def create_map(self, title, asset_id, parent_id=None):
+        document = MapDocument(title, asset_id)
+        with self.core.transaction():
+            self.entities.create(
+                "map", document.title, map_payload(document), parent_id, id=document.id
+            )
+            self.core.after_commit(lambda: self.core.entity_created.emit(document.id))
+            self.core.after_commit(lambda: self.map_changed.emit(document.id))
+            self.core.mark_changed()
+        return document
+
+    def record_card_placement(self, before, after):
+        self.undo_stack(before.id).push(MapEdit(self, before, after, "Разместить новую карточку"))
 
     def plan_delete(self, deleted):
         return {
-            document.id: module_payload(
+            document.id: map_payload(
                 replace(
                     document,
                     tokens=tuple(
@@ -107,23 +145,6 @@ class ModuleSession(QObject):
     def placement_count(self, ids):
         return sum(t.card_id in ids for d in self.maps.values() for t in d.tokens)
 
-    def card(self, key):
-        from lodandsy.domain.card_collection import CardCollection
-
-        return CardCollection(entities=self.entities).get(key)
-
-    def notify_deleted(self, deleted):
-        self._deleted_card_ids.update(deleted)
-        for key in deleted:
-            stack = self._undo.pop(key, None)
-            if stack is not None:
-                stack.clear()
-                stack.deleteLater()
-            # Each listener closes only its own key. Payloads were removed atomically.
-            self.map_deleted.emit(key)
-            self.table_deleted.emit(key)
-        self.changed.emit()
-
     def undo_stack(self, map_id):
         self.get_map(map_id)
         if map_id not in self._undo:
@@ -134,34 +155,8 @@ class ModuleSession(QObject):
     def get_map(self, map_id):
         return self._get(map_id, "map")
 
-    def get_table(self, table_id):
-        return self._get(table_id, "table")
-
-    def _put_map(self, document):
-        tokens = []
-        for token in document.tokens:
-            if token.card_id in self._deleted_card_ids:
-                try:
-                    self.card(token.card_id)
-                except ValueError:
-                    continue
-            tokens.append(token)
-        document = replace(document, tokens=tuple(tokens))
-        self._put(document)
-        self.map_changed.emit(document.id)
-        self.changed.emit()
-
-    def create_map(self, title, asset_id, parent_id=None):
-        document = MapDocument(title, asset_id)
-        self.entities.create(
-            "map", document.title, module_payload(document), parent_id, id=document.id
-        )
-        self.map_changed.emit(document.id)
-        self.changed.emit()
-        return document
-
     def edit_map(self, map_id, *, command="Изменить карту", **changes):
-        if changes.keys() - {"title", "tokens", "grid", "layers", "objects"}:
+        if changes.keys() - {"tokens", "grid", "layers", "objects"}:
             raise ValueError("Изменять ID или источник карты этой командой нельзя")
         before = self.get_map(map_id)
         after = replace(before, **changes)
@@ -173,16 +168,6 @@ class ModuleSession(QObject):
         document = self.get_map(map_id)
         token = TokenInstance(card_id, x, y, **values)
         self.edit_map(map_id, tokens=(*document.tokens, token), command="Разместить карточку")
-        return token
-
-    def add_card_placement(self, card, map_id, x, y):
-        before = self.get_map(map_id)
-        token = TokenInstance(card.id, x, y)
-        after = replace(before, tokens=(*before.tokens, token))
-        with self.entities.atomic():
-            self.entities.create("card", card.title, card.payload(), card.parent_id, id=card.id)
-            self.entities.put_payload(map_id, module_payload(after))
-        self.undo_stack(map_id).push(MapEdit(self, before, after, "Разместить новую карточку"))
         return token
 
     def edit_token(self, map_id, token_id, **changes):
@@ -314,35 +299,3 @@ class ModuleSession(QObject):
             objects=tuple(o for o in document.objects if o.id != object_id),
             command="Удалить объект",
         )
-
-    def delete_map(self, map_id):
-        self.get_map(map_id)
-        return self._delete(map_id)
-
-    def create_table(self, title, parent_id=None):
-        table = TableDocument(title)
-        self.entities.create("table", table.title, module_payload(table), parent_id, id=table.id)
-        self.table_changed.emit(table.id)
-        self.changed.emit()
-        return table
-
-    def edit_table(self, table_id, **changes):
-        if changes.keys() - {"title", "columns", "rows"}:
-            raise ValueError("Неподдерживаемые поля таблицы")
-        before = self.get_table(table_id)
-        after = replace(before, **changes)
-        if after != before:
-            self.update_table(after)
-
-    def update_table(self, document):
-        if not isinstance(document, TableDocument):
-            raise ValueError("Ожидается валидированная таблица")
-        before = self.get_table(document.id)
-        if before != document:
-            self._put(document)
-            self.table_changed.emit(document.id)
-            self.changed.emit()
-
-    def delete_table(self, table_id):
-        self.get_table(table_id)
-        return self._delete(table_id)

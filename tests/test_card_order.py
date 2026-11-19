@@ -15,8 +15,12 @@ def test_reorder_and_reparent_share_domain_validation_and_preserve_sibling_order
     assert cards.child_ids(None) == (c.id, b.id)
     assert cards.child_ids(c.id) == (a.id,)
     assert [summary.position for summary in cards.summaries()] == [0, 0, 1]
-    for changes in [{"position": -1}, {"position": 10}, {"position": True},
-                    {"parent_id": a.id, "position": 0}]:
+    for changes in [
+        {"position": -1},
+        {"position": 10},
+        {"position": True},
+        {"parent_id": a.id, "position": 0},
+    ]:
         before = cards.all()
         with pytest.raises(ValueError):
             cards.update(c.id, **changes)
@@ -35,4 +39,4 @@ def test_real_tree_drop_reorders_domain_and_keeps_selection(qtbot):
     assert panel.tree_model.dropMimeData(mime, Qt.DropAction.MoveAction, 2, 0, section)
     assert controller.cards.child_ids(None) == (b.id, a.id)
     assert panel.tree_model.index(0, 0, section).data() == "B"
-    assert controller.session.current_card_id == a.id
+    assert controller.cards_service.current_card_id == a.id

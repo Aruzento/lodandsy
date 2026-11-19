@@ -12,21 +12,22 @@ def test_invalid_card_and_table_drafts_do_not_block_valid_save_or_ack(project, t
     project.create_project(tmp_path / "world")
     card = app.create_card("Character", card_type="character")
     editor = app.open_card_editor(card.id).widget()
-    app.session.update_card_fields(card.id, {"hp": 15})
-    editor._edit_field("title", "")
+    app.cards_service.update_card_fields(card.id, {"hp": 15})
+    editor.title_edit.setText("")
+    editor.title_edit.finish()
     assert (
-        app.session.field_drafts[(card.id, "title")] == ""
+        app.cards_service.field_drafts[(card.id, "title")] == ""
         and app.cards.get(card.id).title == "Character"
     )
-    table = app.modules.session.create_table("Table")
-    view = app.modules.open_table(table.id).widget()
+    table = app.tables_service.create_table("Table")
+    view = app.tables.open_table(table.id).widget()
     from lodandsy.domain.table_document import ColumnDefinition, RowRecord
 
     col = ColumnDefinition("Number", "number")
-    app.modules.session.edit_table(table.id, columns=(col,), rows=(RowRecord(),))
+    app.tables_service.edit_table(table.id, columns=(col,), rows=(RowRecord(),))
     assert not view.model.setData(view.model.index(0, 0), "bad")
     other = app.create_card("Saved even with invalid drafts")
-    app.session.update_card_fields(other.id, {"summary": "Valid"})
+    app.cards_service.update_card_fields(other.id, {"summary": "Valid"})
     assert project.save_current()
     assert (
         project.saver.state == SaveState.CLEAN
@@ -61,16 +62,16 @@ def test_rejected_total_rich_budget_is_a_visible_draft_without_premature_ack(
     project.create_project(tmp_path / "world")
     card = app.create_card("Large card")
     one = card.sections[0]
-    two = app.session.add_section(card.id, "Second")
-    three = app.session.add_section(card.id, "Third")
-    app.session.update_section(
+    two = app.cards_service.add_section(card.id, "Second")
+    three = app.cards_service.add_section(card.id, "Third")
+    app.cards_service.update_section(
         card.id,
         one.id,
         content=text_document("A" * 700).replace(
             "</body>", ("<p>" + "A" * 700 + "</p>") * 1999 + "</body>"
         ),
     )
-    app.session.update_section(
+    app.cards_service.update_section(
         card.id,
         two.id,
         content=text_document("B" * 700).replace(
@@ -82,7 +83,8 @@ def test_rejected_total_rich_budget_is_a_visible_draft_without_premature_ack(
     document = editor.text_edit.document()
     previous = app.cards.get(card.id).section(three.id).content
     editor.text_edit.insertHtml(("<p>" + "C" * 700 + "</p>") * 2000)
-    assert (card.id, three.id) in app.session.field_drafts
+    editor.flush_pending()
+    assert (card.id, three.id) in app.cards_service.field_drafts
     assert app.cards.get(card.id).section(three.id).content == previous
     assert document.canonical_content == previous and document.isUndoAvailable()
     editor.select_section(two.id)
@@ -93,6 +95,6 @@ def test_rejected_total_rich_budget_is_a_visible_draft_without_premature_ack(
         next(c for c in project.store.load().cards if c.id == card.id).section(three.id).content
         == previous
     )
-    app.session.discard_field_drafts(card.id)
-    assert not app.session.field_drafts and not editor.text_edit.toPlainText()
+    app.cards_service.discard_field_drafts(card.id)
+    assert not app.cards_service.field_drafts and not editor.text_edit.toPlainText()
     assert document.canonical_content == previous

@@ -1,0 +1,166 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="app.diagrams.net" agent="LODANDSY architecture AST + ownership audit" version="24.7.17">
+  <diagram id="Before" name="Before — be24ec2">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" page="1" pageWidth="1400" pageHeight="1000">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="root" value="AppController&#10;composition + Card registries + navigation" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#191919;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="380" y="40" width="470" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="mixed" value="ModuleController&#10;Maps + Tables + Dice + tiles/workers&#10;reads app.card_editors / editor._model" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#191919;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="50" y="220" width="540" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="session" value="ModuleSession&#10;Map + Table commands / Undo / drafts" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#191919;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="700" y="220" width="540" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="cards" value="ApplicationSession / CardImages&#10;Card commands/drafts + media + app access" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#191919;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="50" y="460" width="540" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="core" value="EntityCollection / SaveCoordinator&#10;SQLite S3 + assets" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#191919;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="700" y="460" width="540" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="note" value="Actual baseline import graph:66 modules /145 edges /0 cycles. Layers existed, functional ownership was mixed. No image assets in this diagram." style="rounded=1;whiteSpace=wrap;html=0;fillColor=#ffffff;strokeColor=#666666;fontColor=#191919;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="40" y="760" width="1230" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="e0" value="owns" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="root" target="mixed" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" value="owns" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="root" target="session" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" value="owns" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="root" target="cards" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" value="private Card widget traversal" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="mixed" target="cards" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" value="commands" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="mixed" target="session" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" value="canonical state" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="cards" target="core" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" value="canonical state" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="session" target="core" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="After" name="After — iteration6">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" page="1" pageWidth="1400" pageHeight="1000">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="root" value="AppController&#10;explicit composition + navigation" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#191919;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="370" y="30" width="530" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="cards" value="CardsController / CardsService&#10;Card documents/fields/crop&#10;CardMediaController" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#191919;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="40" y="180" width="270" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="tables" value="TablesController / TablesService&#10;Table drafts/UUID edits/projections&#10;standalone + embedded factory" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#191919;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="360" y="180" width="270" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="maps" value="MapsController / MapsService&#10;Viewer + Editor / Undo&#10;libvips worker + tiles + library" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#191919;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="680" y="180" width="270" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="dice" value="DiceController / DiceWidget&#10;single tool:dice runtime&#10;no Entity/project/SQL" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#191919;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="180" width="270" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="resources" value="ProjectResources / MediaService&#10;immutable assets + bounded decode&#10;generation/cancellation" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#191919;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="40" y="410" width="270" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="core" value="EntitySession / EntityCollection&#10;hierarchy/selection/transaction&#10;post-commit events + revision" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#191919;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="360" y="410" width="270" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="actions" value="ProjectActions&#10;Card+Token / delete cascade&#10;child inventory / Object Card" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#191919;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="680" y="410" width="270" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="windows" value="AppShell / WindowManager&#10;fixed sidebars + Qt ADS&#10;window lifecycle/placement" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#191919;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="1000" y="410" width="270" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="query" value="EntityQueries / ReferenceInfo&#10;public ID catalog + search&#10;reverse Table reference index" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#191919;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="40" y="610" width="270" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="store" value="ProjectController / SaveCoordinator&#10;one snapshot/revision writer&#10;SQLite13 + separate assets" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#191919;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="430" y="610" width="440" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="note" value="Actual AST:83 modules /174 edges /0 cycles. Full graphs are adjacent JSON files. Arrows show public ownership/dependencies, including injected callbacks; not every Python import.&#10;Domain contains no Qt/SQL/UI. No EventBus/locator/ORM/second store. Snapshot writer and synchronous4GiB backup remain explicit limits." style="rounded=1;whiteSpace=wrap;html=0;fillColor=#ffffff;strokeColor=#666666;fontColor=#191919;fontSize=14;" vertex="1" parent="1">
+          <mxGeometry x="40" y="760" width="1230" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="e0" value="wires" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="root" target="cards" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" value="wires" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="root" target="tables" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" value="wires" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="root" target="maps" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" value="wires" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="root" target="dice" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" value="transactional use cases" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="root" target="actions" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" value="injected public view factory" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="cards" target="tables" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" value="commands" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="cards" target="core" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" value="commands" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="tables" target="core" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e8" value="commands" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="maps" target="core" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e9" value="atomic" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="actions" target="core" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" value="media" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="cards" target="resources" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" value="assets" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="maps" target="resources" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" value="public Card DTO provider" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="query" target="cards" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e13" value="reference/projection queries" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="tables" target="query" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e14" value="Object Card catalog" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="maps" target="query" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e15" value="tool window" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="dice" target="windows" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e16" value="map windows" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="maps" target="windows" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e17" value="Card windows" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="cards" target="windows" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e18" value="Table windows" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="tables" target="windows" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e19" value="one committed event" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="core" target="store" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e20" value="assets inventory" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" source="store" target="resources" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="integration0" value="public commands" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;dashed=1;fontSize=11;" edge="1" source="actions" target="cards" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="integration1" value="public commands" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;dashed=1;fontSize=11;" edge="1" source="actions" target="tables" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="integration2" value="public commands" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;dashed=1;fontSize=11;" edge="1" source="actions" target="maps" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

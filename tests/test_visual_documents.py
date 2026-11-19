@@ -37,6 +37,7 @@ def test_new_card_visual_edit_format_undo_reopen_and_restart(project, tmp_path):
     editor.text_edit.selectAll()
     editor.format_toolbar.character(fontFamilies=["Georgia"], fontPointSize=18)
     editor.format_toolbar.align(1)
+    editor.flush_pending()
     content = app.cards.get(card.id).content
     assert "Georgia" in content and "18pt" in content and "align" in content
     document = editor.text_edit.document()
@@ -61,12 +62,12 @@ def test_visual_links_all_entities_broken_diagnostics_never_rewrite_document(pro
     project.create_project(tmp_path / "world")
     card = app.create_card("Source")
     target = app.create_card("Target")
-    table = app.modules.session.create_table("Table")
+    table = app.tables_service.create_table("Table")
     html = sanitize_html(
         f'<p><a href="lodandsy://entity/{target.id}">Independent</a></p>'
         f'<p><a href="lodandsy://entity/{table.id}">Table</a></p>'
     )[0]
-    app.session.update_card(card.id, content=html)
+    app.cards_service.update_card(card.id, content=html)
     editor = app.open_card_editor(card.id).widget()
     app.follow_link(QUrl(f"lodandsy://entity/{table.id}"), editor)
     assert app.window_manager.find_window(f"table:{table.id}") is not None
@@ -89,7 +90,7 @@ def test_visual_links_all_entities_broken_diagnostics_never_rewrite_document(pro
     ):
         app.follow_link(QUrl(url), editor)
         assert editor.link_status.text()
-    assert app.card_editors[card.id] is editor
+    assert app.card_views.editors[card.id] is editor
 
 
 def test_view_scale_read_mode_resize_and_image_ready_do_not_dirty_world(project, tmp_path, qtbot):
@@ -101,8 +102,8 @@ def test_view_scale_read_mode_resize_and_image_ready_do_not_dirty_world(project,
     image = QImage(700, 350, QImage.Format.Format_RGB32)
     image.fill(0xFF338899)
     image.save(str(source))
-    app.card_images.insert(editor, source, "Портрет [1]")
-    qtbot.waitUntil(lambda: not app.card_images.importing)
+    app.card_views.images.insert(editor, source, "Портрет [1]")
+    qtbot.waitUntil(lambda: not app.media.importing)
     asset = next(iter(project.assets.values()))
     doc = editor.text_edit.document()
     doc.image(asset.path)
@@ -135,6 +136,7 @@ def test_clipboard_offline_sentinel_and_sanitizer_limits(project, tmp_path):
         '<img src="https://bad.invalid/image"><a href="javascript:evil()">Link</a></p>'
     )
     editor.text_edit.insertFromMimeData(data)
+    editor.flush_pending()
     html = app.cards.get(card.id).content
     assert "Safe" in html and "Link" in html
     assert not any(value in html for value in ("evil()", "bad.invalid", "file:", "javascript:"))
@@ -180,6 +182,7 @@ def test_visual_shortcuts_affect_only_focused_card(project, qtbot):
     assert second.text_edit.currentCharFormat().fontWeight() == QFont.Weight.Bold
     first.text_edit.selectAll()
     assert not first.text_edit.currentCharFormat().font().bold()
+    second.flush_pending()
     assert "Second" in html_text(app.cards.get(b.id).content)
 
 
@@ -199,7 +202,7 @@ def test_current_document_semantic_roundtrip(project, tmp_path, fragment):
     app, project = project
     html = sanitize_html(fragment)[0]
     card = app.create_card("Corpus")
-    app.session.update_card(card.id, content=html)
+    app.cards_service.update_card(card.id, content=html)
     editor = app.open_card_editor(card.id).widget()
     document = editor.text_edit.document()
     before = document.toPlainText()
@@ -230,7 +233,7 @@ def test_only_entity_uri_and_http_activation_are_supported(project, monkeypatch)
         QDesktopServices, "openUrl", lambda url: calls.append(url.toString()) or True
     )
     html = sanitize_html('<p><a href="https://example.org">External</a></p>')[0]
-    app.session.update_card(card.id, content=html)
+    app.cards_service.update_card(card.id, content=html)
     editor.refresh_links()
     assert not calls
     app.follow_link(QUrl(f"lodandsy://card/{card.id}"), editor)

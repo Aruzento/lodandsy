@@ -13,7 +13,7 @@ class FixedPanelHost(QDockWidget):
         self.setTitleBarWidget(QWidget(self))
         self.setMinimumWidth(180)
         self.panel = panel
-        self.last_width = 240 if area == Qt.DockWidgetArea.LeftDockWidgetArea else 300
+        self.last_width = 224 if area == Qt.DockWidgetArea.LeftDockWidgetArea else 244
         self.setWidget(panel)
 
     def resizeEvent(self, event):

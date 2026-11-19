@@ -1,9 +1,9 @@
 from lodandsy.application.app_controller import AppController
-from lodandsy.application.application_session import (
-    ApplicationSession,
-)
 from lodandsy.application.card_inspector_binding import (
     CardInspectorBinding,
+)
+from lodandsy.application.cards_service import (
+    CardsService,
 )
 from lodandsy.domain.card_collection import CardCollection
 from lodandsy.ui.app_shell import AppShell
@@ -27,11 +27,9 @@ def test_binding_loads_card_and_filters_invalid_parents(
         parent_id=kingdom.id,
     )
 
-    characters = cards.create(
-        "Characters"
-    )
+    characters = cards.create("Characters")
 
-    session = ApplicationSession(cards)
+    session = CardsService(cards)
 
     inspector = InspectorPanel()
     qtbot.addWidget(inspector)
@@ -41,18 +39,13 @@ def test_binding_loads_card_and_filters_invalid_parents(
         inspector,
     )
 
-    session.select_card(
-        kingdom.id
-    )
+    session.select_card(kingdom.id)
 
     assert inspector.id_edit.text() == kingdom.id
     assert inspector.title_edit.text() == "Kingdom"
 
     option_ids = [
-        inspector.parent_combo.itemData(index)
-        for index in range(
-            inspector.parent_combo.count()
-        )
+        inspector.parent_combo.itemData(index) for index in range(inspector.parent_combo.count())
     ]
 
     assert None in option_ids
@@ -62,10 +55,7 @@ def test_binding_loads_card_and_filters_invalid_parents(
     assert kingdom.id not in option_ids
     assert city.id not in option_ids
 
-    assert (
-        inspector.parent_combo.currentData()
-        == world.id
-    )
+    assert inspector.parent_combo.currentData() == world.id
 
     assert binding.session is session
 
@@ -76,7 +66,7 @@ def test_binding_updates_title(
     cards = CardCollection()
     card = cards.create("Old title")
 
-    session = ApplicationSession(cards)
+    session = CardsService(cards)
 
     inspector = InspectorPanel()
     qtbot.addWidget(inspector)
@@ -95,9 +85,7 @@ def test_binding_updates_title(
     session.card_changed.connect(on_changed)
     session.select_card(card.id)
 
-    inspector.title_edit.setText(
-        "New title"
-    )
+    inspector.title_edit.setText("New title")
     inspector.title_edit.editingFinished.emit()
 
     assert cards.get(card.id).title == "New title"
@@ -113,7 +101,7 @@ def test_binding_updates_parent(
     world = cards.create("World")
     city = cards.create("City")
 
-    session = ApplicationSession(cards)
+    session = CardsService(cards)
 
     inspector = InspectorPanel()
     qtbot.addWidget(inspector)
@@ -127,23 +115,13 @@ def test_binding_updates_parent(
 
     world_index = next(
         index
-        for index in range(
-            inspector.parent_combo.count()
-        )
-        if (
-            inspector.parent_combo.itemData(index)
-            == world.id
-        )
+        for index in range(inspector.parent_combo.count())
+        if (inspector.parent_combo.itemData(index) == world.id)
     )
 
-    inspector.parent_combo.setCurrentIndex(
-        world_index
-    )
+    inspector.parent_combo.setCurrentIndex(world_index)
 
-    assert (
-        cards.get(city.id).parent_id
-        == world.id
-    )
+    assert cards.get(city.id).parent_id == world.id
 
     assert binding.session is session
 
@@ -168,13 +146,9 @@ def test_inspector_changes_refresh_tree(
         cards,
     )
 
-    controller.session.select_card(
-        city.id
-    )
+    controller.cards_service.select_card(city.id)
 
-    window.inspector_panel.title_edit.setText(
-        "Capital"
-    )
+    window.inspector_panel.title_edit.setText("Capital")
     window.inspector_panel.title_edit.editingFinished.emit()
 
     assert cards.get(city.id).title == "Capital"
@@ -193,20 +167,11 @@ def test_inspector_changes_refresh_tree(
 
     root_index = next(
         index
-        for index in range(
-            window.inspector_panel.parent_combo.count()
-        )
-        if (
-            window.inspector_panel.parent_combo.itemData(
-                index
-            )
-            is None
-        )
+        for index in range(window.inspector_panel.parent_combo.count())
+        if (window.inspector_panel.parent_combo.itemData(index) is None)
     )
 
-    window.inspector_panel.parent_combo.setCurrentIndex(
-        root_index
-    )
+    window.inspector_panel.parent_combo.setCurrentIndex(root_index)
 
     assert cards.get(city.id).parent_id is None
 

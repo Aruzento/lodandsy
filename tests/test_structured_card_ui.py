@@ -11,12 +11,13 @@ def test_one_field_model_from_header_and_inspector_and_invalid_draft(project, qt
     project.create_project(tmp_path / "world")
     card = app.create_card("Hero", card_type="character")
     editor = app.open_card_editor(card.id).widget()
-    app.session.select_card(card.id)
+    app.cards_service.select_card(card.id)
     inspector = app.window.inspector_panel
     editor.title_edit.setText("Renamed")
     editor.title_edit.textEdited.emit("Renamed")
-    assert app.session.entities.get(card.id).title == inspector.title_edit.text() == "Renamed"
-    app.session.update_card_fields(card.id, {"hp": 15, "summary": "Guardian"})
+    editor.title_edit.finish()
+    assert app.cards_service.entities.get(card.id).title == inspector.title_edit.text() == "Renamed"
+    app.cards_service.update_card_fields(card.id, {"hp": 15, "summary": "Guardian"})
     assert inspector.field_form.controls["hp"].text() == "15"
     hp = inspector.field_form.controls["hp"]
     hp.setText("0")
@@ -25,14 +26,14 @@ def test_one_field_model_from_header_and_inspector_and_invalid_draft(project, qt
     assert not hasattr(editor, "fields_form")
     hp.setText("nan")
     hp.editingFinished.emit()
-    assert app.cards.get(card.id).value("hp") == 0 and app.session.field_drafts
+    assert app.cards.get(card.id).value("hp") == 0 and app.cards_service.field_drafts
     assert project.save_current()
     assert editor.validation_status.text()
     app.window_manager.close_window(app.card_editor_window_key(card.id))
     editor = app.open_card_editor(card.id).widget()
     assert inspector.field_form.controls["hp"].text() == "nan"
     editor.discard_drafts_requested.emit()
-    assert not app.session.field_drafts and project.save_current()
+    assert not app.cards_service.field_drafts and project.save_current()
 
 
 def test_sections_preserve_independent_undo_selection_and_never_duplicate_description(
@@ -49,6 +50,7 @@ def test_sections_preserve_independent_undo_selection_and_never_duplicate_descri
     editor.select_section(notes_id)
     editor.text_edit.insertPlainText("Notes")
     notes = editor.text_edit.document()
+    editor.flush_pending()
     assert notes is not description
     assert html_text(app.cards.get(card.id).value("description")).strip() == "Description"
     assert html_text(app.cards.get(card.id).section(notes_id).content).strip() == "Notes"
@@ -66,6 +68,7 @@ def test_sections_preserve_independent_undo_selection_and_never_duplicate_descri
     editor.text_edit.undo()
     assert editor.text_edit.toPlainText() == "Notes"
     assert not editor.text_edit.textCursor().charFormat().font().bold()
+    editor.flush_pending()
     before = app.cards.get(card.id)
     editor.type_combo.setCurrentIndex(editor.type_combo.findData("article"))
     after = app.cards.get(card.id)
@@ -86,15 +89,17 @@ def test_compact_header_responsive_layout_and_inspector_has_no_rich_fields(proje
     preview.set_canonical(card)
     preview.resize(360, 640)
     preview.show()
-    qtbot.waitUntil(lambda: preview.hero_layout.direction() == QBoxLayout.Direction.TopToBottom)
+    qtbot.waitUntil(lambda: preview.portrait_panel.width() <= 132)
+    assert preview.hero_layout.direction() == QBoxLayout.Direction.LeftToRight
+    assert not hasattr(preview, "header_scroll")
     assert preview.minimumSizeHint().width() <= 400
     assert not hasattr(preview.portrait_panel, "caption")
     assert editor.format_toolbar.format_menu.actions()
-    app.session.select_card(card.id)
+    app.cards_service.select_card(card.id)
     assert not set(app.window.inspector_panel.field_form.controls) & {
         "notes",
         "description",
         "aliases",
         "tags",
     }
-    assert len(app.card_editors) == 1
+    assert len(app.card_views.editors) == 1

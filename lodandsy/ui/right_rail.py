@@ -10,6 +10,7 @@ class RightRail(QToolBar):
         super().__init__("Right Rail", parent)
 
         self.setObjectName("rightRail")
+        self.setFixedWidth(36)
         self.setMovable(False)
         self.setFloatable(False)
         self.setAllowedAreas(Qt.ToolBarArea.RightToolBarArea)

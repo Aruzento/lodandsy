@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
 from lodandsy.application.card_payload_codec import decode_card, encode_card
+from lodandsy.application.table_column_codec import decode_column, encode_settings
 from lodandsy.domain.card import Card, validate_card_id
 from lodandsy.domain.card_collection import CardCollection
 from lodandsy.domain.document_payloads import project_entities
@@ -24,10 +25,10 @@ from lodandsy.domain.map_document import (
     PlacedAssetObject,
     TokenInstance,
 )
-from lodandsy.domain.table_document import ColumnDefinition, RowRecord, TableDocument
+from lodandsy.domain.table_document import RowRecord, TableDocument
 
 DATABASE_NAME = "project.sqlite3"
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 MAX_BACKUP_BYTES = 4 * 1024**3
 
 
@@ -190,6 +191,7 @@ class SQLiteProjectStore:
                     CREATE TABLE table_column(
                       id TEXT PRIMARY KEY, table_id TEXT NOT NULL REFERENCES table_document(id),
                       name TEXT NOT NULL, data_type TEXT NOT NULL, position INTEGER NOT NULL,
+                      settings TEXT NOT NULL,
                       UNIQUE(table_id,id), UNIQUE(table_id,position));
                     CREATE TABLE table_row(
                       id TEXT PRIMARY KEY, table_id TEXT NOT NULL REFERENCES table_document(id),
@@ -323,11 +325,12 @@ class SQLiteProjectStore:
                     )
                 )
             columns, rows, cells = {}, {}, {}
-            for key, table_id, name, data_type, position in connection.execute(
-                "SELECT id,table_id,name,data_type,position FROM table_column ORDER BY position"
+            for key, table_id, name, data_type, position, settings in connection.execute(
+                "SELECT id,table_id,name,data_type,position,settings "
+                "FROM table_column ORDER BY position"
             ):
                 columns.setdefault(table_id, []).append(
-                    ColumnDefinition(name, data_type, position, key)
+                    decode_column(name, data_type, position, key, settings)
                 )
             for table_id, row_id, column_id, value in connection.execute(
                 "SELECT table_id,row_id,column_id,value FROM table_cell ORDER BY column_id"
@@ -343,7 +346,7 @@ class SQLiteProjectStore:
                 "SELECT t.id,e.title,t.payload_version FROM table_document t "
                 "JOIN entity e ON e.id=t.id ORDER BY e.position,e.id"
             ):
-                SQLiteProjectStore._require_version(version, 2, "Table")
+                SQLiteProjectStore._require_version(version, 3, "Table")
                 tables.append(
                     TableDocument(title, key, tuple(columns.get(key, ())), tuple(rows.get(key, ())))
                 )
@@ -428,12 +431,12 @@ class SQLiteProjectStore:
             )
             connection.executemany(
                 "INSERT INTO table_document VALUES(?,?)",
-                [(t.id, 2) for t in snapshot.tables],
+                [(t.id, 3) for t in snapshot.tables],
             )
             connection.executemany(
-                "INSERT INTO table_column VALUES(?,?,?,?,?)",
+                "INSERT INTO table_column VALUES(?,?,?,?,?,?)",
                 [
-                    (c.id, t.id, c.name, c.data_type, c.position)
+                    (c.id, t.id, c.name, c.data_type, c.position, encode_settings(c))
                     for t in snapshot.tables
                     for c in t.columns
                 ],

@@ -12,9 +12,10 @@ def test_late_close_signal_does_not_dispose_reopened_document(qtbot):
     previous.close()
     reopened = controller.open_card_editor(card.id)
     previous.closed.emit(previous)
-    assert controller.card_editors[card.id] is reopened.widget()
-    assert not controller.card_editor_bindings[card.id].is_disposed
+    assert controller.card_views.editors[card.id] is reopened.widget()
+    assert not controller.card_views.bindings[card.id].is_disposed
     reopened.widget().text_edit.insertPlainText("Still bound")
+    reopened.widget().flush_pending()
     assert html_text(controller.cards.get(card.id).content).strip() == "Still bound"
 
 
@@ -27,7 +28,7 @@ def test_focus_changes_active_document_without_changing_tree_selection(qtbot):
     second = controller.open_card_editor(b.id)
     controller.window_manager._on_focus_changed(None, first.widget().text_edit)
     assert controller.window_manager.active_window_key == first.key
-    assert controller.session.current_card_id == b.id
+    assert controller.cards_service.current_card_id == b.id
     assert window.inspector_panel.id_edit.text() == b.id
     first.close()
     assert controller.window_manager.active_window_key is None

@@ -60,7 +60,7 @@ def main():
                         for y in range(count)
                     ),
                 )
-                controller.session.entities.create(
+                controller.cards_service.entities.create(
                     "table",
                     table.title,
                     __import__(
@@ -68,7 +68,7 @@ def main():
                     ).module_payload(table),
                     id=table.id,
                 )
-                widget = controller.modules.open_table(table.id).widget()
+                widget = controller.tables.open_table(table.id).widget()
                 window.resize(1200, 800)
                 window.show()
                 app.processEvents()
@@ -98,7 +98,7 @@ def main():
                     assert widget.model.setData(widget.model.index(i % count, 0), f"Edit {i}")
                     times.append((time.perf_counter() - start) * 1000)
                     app.processEvents()
-                current = controller.modules.session.get_table(table.id)
+                current = controller.tables_service.get_table(table.id)
                 cold = tuple(replace(row) for row in current.rows)
                 start = time.perf_counter()
                 replace(current, rows=cold)
@@ -132,8 +132,7 @@ def main():
             print(json.dumps(output))
     finally:
         window.close_guard = None
-        controller.modules.shutdown()
-        controller.card_images.shutdown()
+        controller.shutdown_features()
         project.saver.shutdown()
         if project.store:
             project.store.close()

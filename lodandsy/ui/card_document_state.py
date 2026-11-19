@@ -34,10 +34,28 @@ class CardDocumentState:
         return self.sections[key]
 
     def existing(self, key):
-        return self if key == self.primary_id else self.sections.get(key)
+        return self if key is not None and key == self.primary_id else self.sections.get(key)
 
     def documents(self):
-        return (self.document, *(s.document for s in self.sections.values()))
+        return tuple(
+            d
+            for d in (self.document, *(s.document for s in self.sections.values()))
+            if d is not None
+        )
+
+    def prune(self, live_ids):
+        """Forget only removed sections. Surviving documents retain their native Undo stack."""
+        live_ids = set(live_ids)
+        for key in self.sections.keys() - live_ids:
+            self.sections.pop(key).delete()
+        self.section_preferences = {
+            key: value for key, value in self.section_preferences.items() if key in live_ids
+        }
+        if self.primary_id is not None and self.primary_id not in live_ids:
+            self.document.deleteLater()
+            self.document, self.primary_id = None, None
+        if self.active_section not in live_ids:
+            self.active_section = None
 
     def delete(self):
         for document in self.documents():
@@ -54,7 +72,10 @@ class CardDocumentState:
     def ui_values(self):
         values = self.position_values()
         values["active_section"] = self.active_section
-        values["sections"] = {key: state.position_values() for key, state in self.sections.items()}
+        values["sections"] = {
+            **self.section_preferences,
+            **{key: state.position_values() for key, state in self.sections.items()},
+        }
         return values
 
     def position_values(self):
@@ -104,6 +125,8 @@ class CardDocumentState:
         editor.text_edit.horizontalScrollBar().setValue(self.horizontal_scroll)
 
     def sync_content(self, content):
+        if self.document is None:
+            return
         pending = self.document.pending_content
         if self.document.canonical_content == content and pending is None:
             return

@@ -37,7 +37,7 @@ def test_independent_type_sections_edit_save_reopen(project, tmp_path, card_type
     )[0]
     editor = app.open_card_editor(first.id).widget()
     assert "##" not in editor.text_edit.toPlainText()
-    app.session.update_card(first.id, content=content)
+    app.cards_service.update_card(first.id, content=content)
     assert app.cards.get(second.id).content == second.content
     assert project.save_current()
     project.create_project(tmp_path / "two", preserve_current=False)

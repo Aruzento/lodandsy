@@ -57,12 +57,8 @@ def main():
     for folder in ["lodandsy", "build_support", "tests", "docs", "prototypes"]:
         for path in (ROOT / folder).rglob("*"):
             if path.is_file() and (
-                path.suffix in {".py", ".md", ".spec", ".ps1", ".json", ".txt"}
+                path.suffix in {".py", ".md", ".spec", ".ps1", ".json", ".txt", ".drawio"}
                 or path.is_relative_to(ROOT / "build_support/licenses")
-                or (
-                    path.is_relative_to(ROOT / "docs/iterations/2026-11-19-iteration-5/references")
-                    and path.suffix == ".png"
-                )
             ):
                 target = source / path.relative_to(ROOT)
                 target.parent.mkdir(parents=True, exist_ok=True)

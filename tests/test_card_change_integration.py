@@ -30,7 +30,7 @@ def test_tree_keeps_selection_and_collapsed_branches_after_all_commands(qtbot):
     view.collapse(model.index_for_node("card:" + b.id))
     view.setCurrentIndex(model.index_for_node("card:" + child.id))
     selection_events = []
-    controller.session.current_card_changed.connect(selection_events.append)
+    controller.cards_service.current_card_changed.connect(selection_events.append)
     for operation in [
         lambda: controller.rename_card(child.id, "Renamed"),
         lambda: controller.create_card("New", a.id),
@@ -39,19 +39,19 @@ def test_tree_keeps_selection_and_collapsed_branches_after_all_commands(qtbot):
     ]:
         operation()
         assert view.currentIndex().data(NODE_ID_ROLE) == child.id
-        assert controller.session.current_card_id == child.id
+        assert controller.cards_service.current_card_id == child.id
         assert not view.isExpanded(model.index_for_node("card:" + b.id))
         assert controller.window.inspector_panel.id_edit.text() == child.id
     assert selection_events == []
     controller.delete_card(b.id)
-    assert controller.session.current_card_id is None
+    assert controller.cards_service.current_card_id is None
     assert not view.currentIndex().isValid()
     assert selection_events == [None]
 
 
 def test_session_changes_update_views_once_and_skip_noops_and_failures(qtbot):
     controller, a, child, b = make_controller(qtbot)
-    session = controller.session
+    session = controller.cards_service
     session.select_card(child.id)
     editor = CardEditorWidget()
     qtbot.addWidget(editor)
@@ -80,7 +80,7 @@ def test_session_changes_update_views_once_and_skip_noops_and_failures(qtbot):
 
 def test_two_views_synchronize_without_resetting_origin_undo_or_cursor(qtbot):
     controller, a, child, b = make_controller(qtbot)
-    session = controller.session
+    session = controller.cards_service
     session.select_card(child.id)
     editors = [CardEditorWidget(), CardEditorWidget()]
     bindings = []
@@ -90,16 +90,19 @@ def test_two_views_synchronize_without_resetting_origin_undo_or_cursor(qtbot):
     resets = []
     controller.window.tree_panel.tree_model.modelReset.connect(lambda: resets.append(True))
     editors[0].text_edit.insertPlainText("Hello")
+    editors[0].flush_pending()
     assert html_text(session.cards.get(child.id).content).strip() == "Hello"
     assert editors[1].text_edit.toPlainText() == "Hello"
     assert editors[0].text_edit.textCursor().position() == 5
     assert editors[0].text_edit.document().isUndoAvailable()
     session.update_card(child.id, title="Renamed")
     editors[0].text_edit.undo()
+    editors[0].flush_pending()
     assert html_text(session.cards.get(child.id).content).strip() == ""
     assert editors[1].text_edit.toPlainText() == ""
     assert resets == []
     bindings[1].dispose()
     editors[0].text_edit.moveCursor(QTextCursor.MoveOperation.End)
     editors[0].text_edit.insertPlainText("Again")
+    editors[0].flush_pending()
     assert editors[1].text_edit.toPlainText() == ""

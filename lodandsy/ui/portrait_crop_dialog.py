@@ -20,18 +20,25 @@ class CropCanvas(QWidget):
     def __init__(self, image, crop, parent=None):
         super().__init__(parent)
         self.image = image
+        self._original_crop = crop
+        self._modified = False
         self.center = QPointF(
             (crop[0] + crop[2] / 2) * image.width(), (crop[1] + crop[3] / 2) * image.height()
         )
-        self.zoom = max(1.0, min(8.0, max(1 / crop[2], 1 / crop[3])))
+        # Inverse of square-frame cover: visible source side = min(W,H) / zoom.
+        self.zoom = max(
+            1.0,
+            min(image.width(), image.height())
+            / min(crop[2] * image.width(), crop[3] * image.height()),
+        )
         self.setMinimumSize(360, 320)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setAccessibleName("Кадрирование: перетащите изображение, колесо — масштаб")
         self._drag = None
 
     def frame_rect(self):
-        height = max(40, min(self.height() - 64, (self.width() - 64) / 0.75))
-        width = height * 0.75
+        height = max(40, min(self.height() - 64, self.width() - 64))
+        width = height
         return QRectF((self.width() - width) / 2, (self.height() - height) / 2, width, height)
 
     def scale_value(self):
@@ -49,6 +56,8 @@ class CropCanvas(QWidget):
         self.center.setY(max(half_y, min(self.image.height() - half_y, self.center.y())))
 
     def crop(self):
+        if not self._modified:
+            return self._original_crop
         self.clamp()
         frame = self.frame_rect()
         scale = self.scale_value()
@@ -61,6 +70,7 @@ class CropCanvas(QWidget):
         return x, y, width, height
 
     def set_zoom(self, value):
+        self._modified = True
         self.zoom = max(1.0, min(8.0, value / 100))
         self.clamp()
         self.update()
@@ -73,7 +83,7 @@ class CropCanvas(QWidget):
     def paintEvent(self, event):
         self.clamp()
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor("#0b111a"))
+        p.fillRect(self.rect(), QColor("#191919"))
         frame = self.frame_rect()
         scale = self.scale_value()
         target = QRectF(
@@ -83,12 +93,29 @@ class CropCanvas(QWidget):
             self.image.height() * scale,
         )
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        p.drawImage(target, self.image)
+        if self._modified:
+            p.drawImage(target, self.image)
+        else:
+            x, y, w, h = self._original_crop
+            source = QRectF(
+                x * self.image.width(),
+                y * self.image.height(),
+                w * self.image.width(),
+                h * self.image.height(),
+            )
+            size = source.size().scaled(frame.size(), Qt.AspectRatioMode.KeepAspectRatio)
+            fitted = QRectF(
+                frame.center().x() - size.width() / 2,
+                frame.center().y() - size.height() / 2,
+                size.width(),
+                size.height(),
+            )
+            p.drawImage(fitted, self.image, source)
         shade = QPainterPath()
         shade.addRect(QRectF(self.rect()))
         shade.addRect(frame)
         p.fillPath(shade, QColor(0, 0, 0, 170))
-        pen = QPen(QColor("#e8edf4"), 1)
+        pen = QPen(QColor("#e5e5e3"), 1)
         pen.setCosmetic(True)
         p.setPen(pen)
         p.drawRect(frame)
@@ -100,6 +127,7 @@ class CropCanvas(QWidget):
 
     def mouseMoveEvent(self, event):
         if self._drag is not None:
+            self._modified = True
             delta = event.position() - self._drag
             self.center -= delta / self.scale_value()
             self._drag = event.position()
@@ -123,6 +151,7 @@ class CropCanvas(QWidget):
             Qt.Key.Key_Down: QPointF(0, 8),
         }.get(event.key())
         if delta is not None:
+            self._modified = True
             self.center += delta / self.scale_value()
             self.clamp()
             self.update()
@@ -139,7 +168,7 @@ class PortraitCropDialog(QDialog):
         self.resize(720, 540)
         self.canvas = CropCanvas(image, crop, self)
         self.preview = QLabel()
-        self.preview.setFixedSize(140, 187)
+        self.preview.setFixedSize(140, 140)
         self.preview.setAccessibleName("Предварительный просмотр портрета")
         self.zoom = QSlider(Qt.Orientation.Horizontal)
         self.zoom.setRange(100, 800)

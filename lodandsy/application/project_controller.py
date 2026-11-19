@@ -38,22 +38,22 @@ class ProjectController(QObject):
     def __init__(self, controller: "AppController"):
         super().__init__(controller.window)
         self.controller = controller
-        controller.project_controller = self
+        controller.attach_project(self)
+        self.resources = controller.resources
         self.window = controller.window
         self.store: SQLiteProjectStore | None = None
         self.assets: dict[str, AssetRecord] = {}
         self._ui_restore_failed = False
         self.saver = SaveCoordinator(self._snapshot, self)
-        session = controller.session
-        session.entity_changed.connect(self.saver.mark_dirty)
-        session.card_created.connect(self.saver.mark_dirty)
-        session.entity_created.connect(self.saver.mark_dirty)
-        session.card_changed.connect(self.saver.mark_dirty)
-        session.field_draft_changed.connect(self._update_status)
-        session.cards_deleted.connect(self.saver.mark_dirty)
-        controller.modules.session.changed.connect(self.saver.mark_dirty)
-        controller.modules.busy_changed.connect(self._update_status)
-        controller.card_images.busy_changed.connect(self._update_status)
+        controller.core.committed.connect(self.saver.mark_dirty)
+        controller.cards_service.field_draft_changed.connect(self._update_status)
+        controller.cards_service.field_edits.pending_changed.connect(self._update_status)
+        controller.card_views.pending_changed.connect(self._update_status)
+        controller.tables_service.pending_changed.connect(self._update_status)
+        controller.actions.title_edits.pending_changed.connect(self._update_status)
+        controller.tables_service.draft_changed.connect(self._update_status)
+        controller.maps.busy_changed.connect(self._update_status)
+        controller.media.busy_changed.connect(self._update_status)
         self.saver.state_changed.connect(self._update_status)
         self.status = QLabel()
         self.retry = QPushButton("Повторить сохранение")
@@ -63,6 +63,7 @@ class ProjectController(QObject):
         from lodandsy.application.mow_import_controller import MowImportController
 
         self.mow_importer = MowImportController(self)
+        self.mow_importer.busy_changed.connect(self._update_status)
         self._build_menu()
         self.window.close_guard = self.can_close
         if self.controller.cards.all():
@@ -101,38 +102,58 @@ class ProjectController(QObject):
             self.mow_actions.append(action)
         tools = self.window.menuBar().addMenu("Инструменты")
         dice = tools.addAction("Кубики")
-        dice.triggered.connect(self.controller.modules.open_dice)
+        dice.triggered.connect(self.controller.dice.open)
+
+    @property
+    def store(self):
+        return self.resources.store
+
+    @store.setter
+    def store(self, value):
+        self.resources.select_store(value)
+
+    @property
+    def assets(self):
+        return self.resources.assets
+
+    @assets.setter
+    def assets(self, value):
+        self.resources.assets = value
+
+    @property
+    def busy(self):
+        return (
+            self.controller.maps.importing
+            or self.controller.media.importing
+            or (hasattr(self, "mow_importer") and self.mow_importer.importing)
+        )
 
     def _snapshot(self, revision):
-        modules = self.controller.modules.session
         return ProjectSnapshot(
             self.controller.cards.all(),
             revision,
             tuple(self.assets.values()),
-            tuple(modules.maps.values()),
-            tuple(modules.tables.values()),
-            self.controller.session.entities.summaries(),
+            tuple(self.controller.maps_service.maps.values()),
+            tuple(self.controller.tables_service.tables.values()),
+            self.controller.core.entities.summaries(),
         )
 
     @property
     def draft_count(self):
-        return len(self.controller.session.field_drafts) + sum(
-            len(values) for values in self.controller.modules._table_drafts.values()
+        return (
+            len(self.controller.cards_service.field_drafts)
+            + self.controller.tables_service.draft_count
+            + len(self.controller.actions.title_edits.drafts)
         )
 
     def discard_drafts(self):
-        session = self.controller.session
+        session = self.controller.cards_service
         for key in {key for key, field in session.field_drafts}:
             session.discard_field_drafts(key)
-        for key, values in self.controller.modules._table_drafts.items():
-            if values:
-                for widget in tuple(self.controller.modules._table_views.get(key, ())):
-                    from shiboken6 import isValid
-
-                    if isValid(widget):
-                        widget.revert_active_editor()
-                values.clear()
-                self.controller.modules._table_draft_changed(key)
+        for key in self.controller.tables_service.draft_table_ids:
+            self.controller.tables.discard_drafts(key)
+        self.controller.tables_service.discard_orphans()
+        self.controller.actions.title_edits.discard()
         self._update_status()
 
     def _confirm_drafts(self):
@@ -150,7 +171,7 @@ class ProjectController(QObject):
         dialog.addButton(QMessageBox.StandardButton.Cancel)
         dialog.exec()
         if dialog.clickedButton() is fix:
-            session = self.controller.session
+            session = self.controller.cards_service
             if session.field_drafts:
                 key, field = next(iter(session.field_drafts))
                 editor = self.controller.open_card_editor(key).widget()
@@ -164,11 +185,15 @@ class ProjectController(QObject):
                     widget = self.window.inspector_panel.field_form.controls.get(field)
                     if widget:
                         widget.setFocus()
+            elif self.controller.tables_service.draft_table_ids:
+                key = self.controller.tables_service.draft_table_ids[0]
+                self.controller.tables.open_table(key)
+            elif self.controller.actions.title_edits.drafts:
+                key, field = next(iter(self.controller.actions.title_edits.drafts))
+                self.controller.core.select(key)
+                self.window.inspector_panel.title_edit.setFocus()
             else:
-                key = next(
-                    key for key, values in self.controller.modules._table_drafts.items() if values
-                )
-                self.controller.modules.open_table(key)
+                self.controller.tables.show_orphan_drafts()
             return False
         if dialog.clickedButton() is not discard:
             return False
@@ -192,6 +217,14 @@ class ProjectController(QObject):
             text += f": {self.saver.last_error}"
         if self.draft_count:
             text += f" · Ошибочный ввод не сохранён: {self.draft_count}"
+        pending = (
+            self.controller.tables_service.pending_count
+            + self.controller.cards_service.field_edits.pending_count
+            + self.controller.card_views.pending_count
+            + self.controller.actions.title_edits.pending_count
+        )
+        if pending:
+            text += f" · Незавершённый ввод: {pending}"
         self.status.setText(text)
         color = (
             "#f19a9a"
@@ -208,16 +241,14 @@ class ProjectController(QObject):
             self.restore_action,
             *self.mow_actions,
         ]:
-            action.setEnabled(
-                not self.saver.saving
-                and not self.controller.modules.importing
-                and not self.controller.card_images.importing
-            )
+            action.setEnabled(not self.saver.saving and not self.busy)
         self.window.setWindowTitle(f"LODANDSY — {name}" + (" *" if self.saver.dirty else ""))
 
     def create_project(self, folder: Path, *, preserve_current=True, discard=False):
-        self.controller.card_images.wait_import()
-        self.controller.modules.wait_import()
+        self.controller.flush_edits()
+        self.controller.media.wait_import()
+        self.controller.maps.wait_import()
+        self.mow_importer.wait_import()
         self.saver.wait_current()
         if (self.draft_count or (self.saver.dirty and self.store is not None)) and not discard:
             raise ProjectError("Save the current project before creating another")
@@ -234,14 +265,13 @@ class ProjectController(QObject):
         self.controller.set_project_root(store.root)
         if not preserve_current:
             self.controller.replace_cards(CardCollection())
-            self.controller.modules.reset()
             self.assets.clear()
         self.saver.reset(0, store.save)
         if (
             self.controller.cards.all()
             or self.assets
-            or self.controller.modules.session.maps
-            or self.controller.modules.session.tables
+            or self.controller.maps_service.maps
+            or self.controller.tables_service.tables
         ):
             self.saver.mark_dirty()
             if not self.saver.save():
@@ -255,8 +285,10 @@ class ProjectController(QObject):
         return True
 
     def open_project(self, folder: Path, *, discard=False):
-        self.controller.card_images.wait_import()
-        self.controller.modules.wait_import()
+        self.controller.flush_edits()
+        self.controller.media.wait_import()
+        self.controller.maps.wait_import()
+        self.mow_importer.wait_import()
         self.saver.wait_current()
         if self.store is not None and self.store.root == Path(folder).resolve():
             return
@@ -277,7 +309,6 @@ class ProjectController(QObject):
                 store.close()
                 raise
         self.controller.replace_cards(cards)
-        self.controller.modules.reset()
         self.store = store
         self.controller.set_project_root(store.root)
         self.assets = {asset.id: asset for asset in snapshot.assets}
@@ -295,7 +326,8 @@ class ProjectController(QObject):
             self._show_error(error)
 
     def save_current(self) -> bool:
-        self.controller.card_images.wait_import()
+        self.controller.flush_edits()
+        self.controller.media.wait_import()
         if self.store is None:
             folder = QFileDialog.getExistingDirectory(self.window, "Пустая папка нового проекта")
             if not folder:
@@ -305,15 +337,13 @@ class ProjectController(QObject):
             except (OSError, ValueError) as error:
                 self._show_error(error)
                 return False
-        self.window.setEnabled(False)
-        try:
-            return self.saver.save()
-        finally:
-            self.window.setEnabled(True)
+        return self.saver.save()
 
     def _confirm_changes(self) -> bool:
-        self.controller.card_images.wait_import()
-        self.controller.modules.wait_import()
+        self.controller.flush_edits()
+        self.controller.media.wait_import()
+        self.controller.maps.wait_import()
+        self.mow_importer.wait_import()
         self.saver.wait_current()
         if not self._confirm_drafts():
             return False
@@ -341,8 +371,8 @@ class ProjectController(QObject):
             self._show_error(error)
             return False
         self.saver.shutdown()
-        self.controller.modules.shutdown()
-        self.controller.card_images.shutdown()
+        self.controller.shutdown_features()
+        self.mow_importer.shutdown()
         if self.store is not None:
             self.store.close()
         return True

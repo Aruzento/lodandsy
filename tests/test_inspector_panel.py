@@ -108,22 +108,20 @@ def test_inspector_emits_parent_change(
     ]
 
 
-def test_inspector_rejects_empty_title(
-    qtbot,
-) -> None:
+def test_inspector_empty_title_reaches_application_as_a_visible_draft(qtbot):
+    from lodandsy.application.card_inspector_binding import CardInspectorBinding
+    from lodandsy.application.cards_service import CardsService
+
+    session = CardsService()
+    card = session.create_card("City")
+    session.select_card(card.id)
     panel = InspectorPanel()
     qtbot.addWidget(panel)
-
-    panel.set_card(
-        card_id="card-1",
-        title="City",
-        parent_id=None,
-        parent_options=[
-            (None, "Root"),
-        ],
-    )
-
+    binding = CardInspectorBinding(session, panel)
     panel.title_edit.setText("   ")
     panel.title_edit.editingFinished.emit()
-
-    assert panel.title_edit.text() == "City"
+    assert binding.session is session
+    assert session.cards.get(card.id).title == "City"
+    assert panel.title_edit.text() == "   "
+    assert session.field_drafts[(card.id, "title")] == "   "
+    assert panel.validation_notice.text()

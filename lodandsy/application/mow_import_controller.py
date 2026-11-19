@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEventLoop, QObject, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from lodandsy.application.background_tasks import BackgroundTasks
 from lodandsy.application.mow_import import (
     apply_import,
     cleanup_assets,
@@ -20,16 +21,35 @@ from lodandsy.application.mow_import import (
 )
 
 
-class MowImportController:
+class MowImportController(QObject):
+    busy_changed = Signal()
+    finished = Signal()
+
     def __init__(self, project):
+        super().__init__(project.window)
         self.project = project
         self.app = project.controller
         self.progress = None
+        self.importing = False
+        self.tasks = BackgroundTasks(self, name="mow-import")
+
+    def wait_import(self):
+        if self.importing:
+            loop = QEventLoop()
+            self.finished.connect(loop.quit)
+            try:
+                if self.importing:
+                    loop.exec()
+            finally:
+                self.finished.disconnect(loop.quit)
+
+    def shutdown(self):
+        self.wait_import()
+        self.tasks.shutdown()
 
     def _run(self, operation, callback):
-        modules = self.app.modules
-        modules.importing = True
-        modules.busy_changed.emit()
+        self.importing = True
+        self.busy_changed.emit()
         self.progress = QProgressDialog("Импорт MOW…", "", 0, 0, self.app.window)
         self.progress.setCancelButton(None)
         self.progress.setWindowModality(Qt.WindowModality.ApplicationModal)
@@ -40,18 +60,18 @@ class MowImportController:
             self.progress.close()
             self.progress.deleteLater()
             self.progress = None
-            modules.importing = False
-            modules.busy_changed.emit()
-            modules.import_finished.emit()
+            self.importing = False
+            self.busy_changed.emit()
+            self.finished.emit()
             if error:
                 self.app.window.show_notice(error)
             else:
                 callback(result)
 
-        modules._run(operation, complete)
+        self.tasks.run(operation, complete)
 
     def request(self, directory=False):
-        if self.app.modules.importing or self.app.card_images.importing:
+        if self.project.busy:
             return
         if self.project.store is None and not self.project.save_current():
             return
@@ -67,8 +87,8 @@ class MowImportController:
         dialog.setWindowTitle("Импорт MOW · предварительная проверка")
         dialog.resize(760, 540)
         layout = QVBoxLayout(dialog)
-        parent = self.app.session.current_entity_id
-        parent_name = self.app.session.entities.get(parent).title if parent else "корень проекта"
+        parent = self.app.core.selected_id
+        parent_name = self.app.core.entities.get(parent).title if parent else "корень проекта"
         layout.addWidget(QLabel("Место импорта: " + parent_name))
         report = QPlainTextEdit()
         report.setReadOnly(True)
@@ -99,14 +119,13 @@ class MowImportController:
 
         def prepared(result):
             try:
-                apply_import(self.app.session, result)
+                with self.app.core.transaction():
+                    apply_import(self.app.cards_service, result)
+                    self.project.assets.update((a.id, a) for a in result.assets)
             except Exception as error:
                 cleanup_assets(store, result.assets)
                 self.app.window.show_notice("Импорт отменён: " + str(error))
                 return
-            self.project.assets.update((a.id, a) for a in result.assets)
-            if result.cards:
-                self.project.saver.mark_dirty()
             report = QDialog(self.app.window)
             report.setWindowTitle("MOW · результат импорта")
             report.resize(760, 500)

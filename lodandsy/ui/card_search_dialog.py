@@ -46,17 +46,11 @@ class CardSearchDialog(QDialog):
         self.results.clear()
         for card in self.session.entities.summaries():
             payload = self.session.entities.payload(card.id)
-            content = (
-                getattr(payload, "content", "")
-                or " ".join(
-                    str(value)
-                    for row in getattr(payload, "rows", ())
-                    for _, value in row.cells
-                    if value is not None
-                )
-                or " ".join(
-                    p.name + " " + p.config.expression() for p in getattr(payload, "presets", ())
-                )
+            content = getattr(payload, "content", "") or " ".join(
+                str(value)
+                for row in getattr(payload, "rows", ())
+                for _, value in row.cells
+                if value is not None
             )
             if card.kind == "card":
                 from lodandsy.domain.card_schema import field_definition

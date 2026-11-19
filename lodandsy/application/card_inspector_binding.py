@@ -1,15 +1,38 @@
-from lodandsy.application.application_session import ApplicationSession
+from lodandsy.application.cards_service import CardsService
 from lodandsy.ui.inspector_panel import InspectorPanel
 
 
 class CardInspectorBinding:
     def __init__(
         self,
-        session: ApplicationSession,
+        session: CardsService,
         inspector: InspectorPanel,
+        update_entity=None,
+        title_edits=None,
     ) -> None:
         self.session = session
         self.inspector = inspector
+        self.update_entity = update_entity or session.core.update
+        self.title_edits = title_edits
+        self._field_owners = {}
+        self._title_owner = None
+        self._title_manager = None
+        form = inspector.field_form
+        form.edit_active = lambda field: session.field_edits.has(self._field_owners.get(field))
+        inspector.title_active = lambda: (
+            self._title_manager is not None and self._title_manager.has(self._title_owner)
+        )
+        form.edit_started.connect(self._begin_field)
+        form.buffer_changed.connect(self._buffer_field)
+        form.commit_requested.connect(self._commit_field)
+        form.cancel_requested.connect(self._cancel_field)
+        inspector.title_edit.edit_started.connect(self._begin_title)
+        inspector.title_edit.buffer_changed.connect(self._buffer_title)
+        inspector.title_edit.cancel_requested.connect(self._cancel_title)
+        if title_edits is not None:
+            title_edits.changed.connect(
+                lambda key: self.refresh() if key[0] == session.current_entity_id else None
+            )
 
         self.inspector.title_changed.connect(self._on_title_changed)
         self.inspector.parent_changed.connect(self._on_parent_changed)
@@ -21,7 +44,6 @@ class CardInspectorBinding:
         self.session.card_changed.connect(self._on_card_changed)
         self.session.cards_replaced.connect(self.refresh)
         self.inspector.fields_changed.connect(self._on_fields)
-        self.inspector.field_draft_changed.connect(self.session.set_field_draft)
         self.inspector.add_field_requested.connect(self._add_field)
         self.inspector.discard_drafts_requested.connect(self._discard)
         self.session.field_draft_changed.connect(self._on_card_changed)
@@ -42,6 +64,65 @@ class CardInspectorBinding:
             parent_options=self._build_parent_options(card.id),
         )
         self._metadata()
+        if card.kind != "card" and self.title_edits is not None:
+            raw = self.title_edits.drafts.get((card.id, "title"), card.title)
+            self.inspector.title_edit.set_value(raw, force=not self.inspector.title_active())
+        errors = (
+            self.session.field_edits.errors
+            if card.kind == "card"
+            else self.title_edits.errors
+            if self.title_edits
+            else {}
+        )
+        text = next((message for (key, field), message in errors.items() if key == card.id), "")
+        self.inspector.validation_notice.setText(text)
+        self.inspector.validation_notice.setVisible(bool(text))
+
+    def _begin_field(self, field):
+        key = self.session.current_card_id
+        if key and not self.session.field_edits.has(self._field_owners.get(field)):
+            self._field_owners[field] = self.session.field_edits.begin((key, field))
+
+    def _buffer_field(self, field, raw):
+        self._begin_field(field)
+        self.session.field_edits.text(self._field_owners.get(field), raw)
+
+    def _commit_field(self, field, raw):
+        self._buffer_field(field, raw)
+        self.session.field_edits.commit(self._field_owners.pop(field, None), finish=True)
+        self._metadata()
+
+    def _cancel_field(self, field):
+        self.session.field_edits.cancel(self._field_owners.pop(field, None))
+        self._metadata()
+
+    def _begin_title(self):
+        entity = self.session.current_entity
+        if entity is None:
+            return
+        manager = self.session.field_edits if entity.kind == "card" else self.title_edits
+        if manager is not None and not manager.has(self._title_owner):
+            self._title_manager = manager
+            self._title_owner = manager.begin((entity.id, "title"))
+
+    def _buffer_title(self, raw):
+        self._begin_title()
+        if self._title_manager:
+            self._title_manager.text(self._title_owner, raw)
+
+    def _cancel_title(self):
+        if self._title_manager:
+            self._title_manager.cancel(self._title_owner)
+        self._title_owner = None
+        self.refresh()
+
+    def finish_edits(self):
+        for owner in tuple(self._field_owners.values()):
+            self.session.field_edits.commit(owner, finish=True)
+        self._field_owners.clear()
+        if self._title_manager:
+            self._title_manager.commit(self._title_owner, finish=True)
+        self._title_owner = None
 
     def _metadata(self):
         entity = self.session.current_entity
@@ -55,6 +136,9 @@ class CardInspectorBinding:
     def _discard(self):
         if self.session.current_card_id:
             self.session.discard_field_drafts(self.session.current_card_id)
+        elif self.session.current_entity_id and self.title_edits:
+            self.title_edits.discard({self.session.current_entity_id})
+        self.refresh()
 
     def _add_field(self):
         from PySide6.QtWidgets import QInputDialog
@@ -88,6 +172,7 @@ class CardInspectorBinding:
         self,
         _card_id: object,
     ) -> None:
+        self.finish_edits()
         self.refresh()
 
     def _on_title_changed(
@@ -98,10 +183,13 @@ class CardInspectorBinding:
         if card_id != self.session.current_entity_id:
             return
 
-        if self.session.current_entity.kind == "card":
-            self._on_fields(card_id, {"title": title})
+        self._buffer_title(title)
+        if self._title_manager:
+            self._title_manager.commit(self._title_owner, finish=True)
         else:
-            self.session.update_entity(card_id, title=title)
+            self.update_entity(card_id, title=title)
+        self._title_owner = None
+        self.refresh()
 
     def _on_parent_changed(
         self,
@@ -113,7 +201,7 @@ class CardInspectorBinding:
 
         resolved_parent_id = self._optional_card_id(parent_id)
 
-        self.session.update_entity(card_id, parent_id=resolved_parent_id)
+        self.update_entity(card_id, parent_id=resolved_parent_id)
 
     def _on_structure_changed(self, _ids: object) -> None:
         self.refresh()

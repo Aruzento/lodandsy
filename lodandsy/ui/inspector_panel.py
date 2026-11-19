@@ -6,23 +6,28 @@ from PySide6.QtWidgets import (
     QDockWidget,
     QFormLayout,
     QFrame,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
     QScrollArea,
     QStackedWidget,
+    QToolButton,
     QWidget,
 )
 
+from lodandsy.application.clipboard import copy_text
 from lodandsy.domain.card_schema import CARD_TYPES
 from lodandsy.ui.card_fields import CardFieldsForm
+from lodandsy.ui.icons import icon
+from lodandsy.ui.semantic_edits import SemanticLineEdit
 
 
 class InspectorPanel(QDockWidget):
     title_changed = Signal(str, str)
     parent_changed = Signal(str, object)
     fields_changed = Signal(str, object)
-    field_draft_changed = Signal(str, str, object)
     add_field_requested = Signal()
     discard_drafts_requested = Signal()
 
@@ -45,25 +50,45 @@ class InspectorPanel(QDockWidget):
         self.id_edit.setObjectName("inspectorId")
         self.id_edit.setReadOnly(True)
 
-        self.title_edit = QLineEdit(content)
+        self.title_edit = SemanticLineEdit(content)
+        self.title_active = lambda: False
         self.title_edit.setObjectName("inspectorTitle")
 
         self.parent_combo = QComboBox(content)
         self.parent_combo.setObjectName("inspectorParent")
 
         form = QFormLayout(content)
-        form.addRow("ID", self.id_edit)
-        form.addRow("Название", self.title_edit)
-        form.addRow("Родитель", self.parent_combo)
+        form.setContentsMargins(16, 12, 16, 16)
+        form.setSpacing(10)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        self.id_edit.hide()
+        title_row = QHBoxLayout()
+        title_row.addWidget(self.title_edit, 1)
+        details = QToolButton()
+        details.setIcon(icon("more"))
+        details.setToolTip("Идентификатор документа")
+        menu = QMenu(details)
+        menu.addAction("Копировать UUID", lambda: copy_text(self.id_edit.text()))
+        details.setMenu(menu)
+        details.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        title_row.addWidget(details)
+        form.addRow(title_row)
+        self.type_label = QLabel()
+        self.type_label.setObjectName("mutedCaption")
+        form.addRow(self.type_label)
+        self.validation_notice = QLabel()
+        self.validation_notice.setTextFormat(Qt.TextFormat.PlainText)
+        self.validation_notice.setWordWrap(True)
+        self.validation_notice.setObjectName("errorNotice")
+        self.validation_notice.hide()
+        form.addRow(self.validation_notice)
+        self.fields_caption = QLabel("ХАРАКТЕРИСТИКИ")
+        self.fields_caption.setObjectName("sectionCaption")
+        form.addRow(self.fields_caption)
         self.field_form = CardFieldsForm()
         self.field_form.edited.connect(
             lambda changes: (
                 self.fields_changed.emit(self._card_id, changes) if self._card_id else None
-            )
-        )
-        self.field_form.draft_changed.connect(
-            lambda key, raw: (
-                self.field_draft_changed.emit(self._card_id, key, raw) if self._card_id else None
             )
         )
         form.addRow(self.field_form)
@@ -73,6 +98,10 @@ class InspectorPanel(QDockWidget):
         self.discard.clicked.connect(self.discard_drafts_requested)
         form.addRow(self.add_field)
         form.addRow(self.discard)
+        organization = QLabel("ОРГАНИЗАЦИЯ")
+        organization.setObjectName("sectionCaption")
+        form.addRow(organization)
+        form.addRow("Родитель", self.parent_combo)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -86,7 +115,7 @@ class InspectorPanel(QDockWidget):
         self.pages.addWidget(empty)
         self.setWidget(self.pages)
 
-        self.title_edit.editingFinished.connect(self._on_title_editing_finished)
+        self.title_edit.commit_requested.connect(lambda raw: self._on_title_editing_finished())
         self.parent_combo.currentIndexChanged.connect(self._on_parent_index_changed)
 
         self.clear_card()
@@ -102,16 +131,20 @@ class InspectorPanel(QDockWidget):
             and key not in {"summary", "aliases"}
         ]
         self.field_form.set_card(card, tuple(dict.fromkeys(keys)), drafts)
+        self.type_label.setText(CARD_TYPES[card.card_type].title)
+        self.fields_caption.setVisible(bool(keys))
         self.field_form.show()
         self.add_field.show()
         self.discard.setVisible(any(key[0] == card.id for key in drafts))
         raw = drafts.get((card.id, "title"))
-        if raw is not None and self.title_edit.text() != raw:
+        if raw is not None:
             blocker = QSignalBlocker(self.title_edit)
-            self.title_edit.setText(raw)
+            self.title_edit.set_value(raw, force=not self.title_active())
             del blocker
 
     def clear_metadata(self):
+        self.type_label.clear()
+        self.fields_caption.hide()
         self.field_form.hide()
         self.add_field.hide()
         self.discard.hide()
@@ -133,8 +166,7 @@ class InspectorPanel(QDockWidget):
         parent_blocker = QSignalBlocker(self.parent_combo)
 
         self.id_edit.setText(card_id)
-        if self.title_edit.text() != title:
-            self.title_edit.setText(title)
+        self.title_edit.set_value(title, force=not self.title_active())
 
         self.parent_combo.clear()
 
@@ -194,18 +226,7 @@ class InspectorPanel(QDockWidget):
         if self._card_id is None:
             return
 
-        new_title = self.title_edit.text().strip()
-
-        if not new_title:
-            blocker = QSignalBlocker(self.title_edit)
-            self.title_edit.setText(self._title)
-            del blocker
-            return
-
-        if new_title == self._title:
-            return
-
-        self._title = new_title
+        new_title = self.title_edit.text()
 
         self.title_changed.emit(
             self._card_id,

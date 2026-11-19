@@ -9,7 +9,6 @@ from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication, QInputDialog, QLineEdit
 
 from lodandsy.application.map_pyramid import ensure_pyramid
-from lodandsy.application.module_session import ModuleSession
 from lodandsy.application.rich_html import html_text
 from lodandsy.application.sqlite_project_store import (
     ProjectError,
@@ -20,7 +19,7 @@ from lodandsy.application.sqlite_project_store import (
 from lodandsy.domain.card import Card
 from lodandsy.domain.dice import roll_dice
 from lodandsy.domain.map_document import MapDocument, TokenInstance
-from tests.project_fixture import record_rows, text_table, text_values
+from tests.project_fixture import map_services, record_rows, text_table, text_values
 
 pytest_plugins = ["tests.project_fixture"]
 
@@ -35,9 +34,9 @@ def test_dice_details_total_and_repeatable_randomness():
 
 
 def test_map_validation_undo_noops_and_immutable_state(qapp):
-    session = ModuleSession()
+    session, actions, tables, cards_service = map_services()
     document = session.create_map("Map", str(uuid4()))
-    pin = session.add_card_placement(Card("Point"), document.id, 0.2, 0.3)
+    pin = actions.add_card_placement(Card("Point"), document.id, 0.2, 0.3)
     session.edit_token(document.id, pin.id, x=0.7, label_override="Local")
     session.undo_stack(document.id).undo()
     assert session.get_map(document.id).tokens == (pin,)
@@ -67,9 +66,9 @@ def test_real_map_table_card_workflow_and_project_roundtrip(project, tmp_path, q
     image = QImage(400, 200, QImage.Format.Format_RGB32)
     image.fill(Qt.GlobalColor.darkGreen)
     assert image.save(str(image_path))
-    app.modules.import_map(image_path, "World map")
-    qtbot.waitUntil(lambda: not app.modules.importing)
-    document = next(iter(app.modules.session.maps.values()))
+    app.maps.import_map(image_path, "World map")
+    qtbot.waitUntil(lambda: not app.maps.importing)
+    document = next(iter(app.maps_service.maps.values()))
     map_window = app.window_manager.find_window(f"map:{document.id}")
     first = app.create_card("First")
     second = app.create_card("Second")
@@ -77,18 +76,18 @@ def test_real_map_table_card_workflow_and_project_roundtrip(project, tmp_path, q
     second_editor = app.open_card_editor(second.id).widget()
     first_editor.text_edit.insertPlainText("First content")
     second_editor.text_edit.insertPlainText("Second content")
-    one = app.modules.session.add_token(document.id, first.id, 0.1, 0.2)
-    app.modules.session.add_token(document.id, first.id, 0.8, 0.5)
-    app.modules._token_action(document.id, one.id, "open")
+    one = app.maps_service.add_token(document.id, first.id, 0.1, 0.2)
+    app.maps_service.add_token(document.id, first.id, 0.8, 0.5)
+    app.maps._token_action(document.id, one.id, "open")
     assert app.open_card_editor(first.id).widget() is first_editor
-    table = app.modules.session.create_table("Encounters")
-    table_window = app.modules.open_table(table.id)
+    table = app.tables_service.create_table("Encounters")
+    table_window = app.tables.open_table(table.id)
     widget = table_window.widget()
     widget.model.apply(replace(table, rows=record_rows(table, ("Goblin", "Dragon"))))
     widget.table.selectRow(1)
     widget.copy_selection()
     assert QApplication.clipboard().text() == "Dragon"
-    dice = app.modules.open_dice().widget()
+    dice = app.dice.open().widget()
     dice.counts[20].setValue(0)
     dice.counts[4].setValue(1)
     dice.modifier.setValue(3)
@@ -100,7 +99,7 @@ def test_real_map_table_card_workflow_and_project_roundtrip(project, tmp_path, q
     revision = project.store.load().revision
     project._save_ui_state()
     app.delete_card(first.id)
-    assert not app.modules.session.get_map(document.id).tokens
+    assert not app.maps_service.get_map(document.id).tokens
     assert not map_window.widget().view._tokens
     assert project.save_current()
     assert project.store.load().revision > revision
@@ -109,13 +108,13 @@ def test_real_map_table_card_workflow_and_project_roundtrip(project, tmp_path, q
     another = SQLiteProjectStore.create(tmp_path / "other")
     another.close()
     project.open_project(tmp_path / "other")
-    assert not app.modules.session.maps and not app.modules.session.tables
+    assert not app.maps_service.maps and not app.tables_service.tables
     project.open_project(root)
-    assert tuple(app.modules.session.maps.values()) == before.maps
-    assert tuple(app.modules.session.tables.values()) == before.tables
+    assert tuple(app.maps_service.maps.values()) == before.maps
+    assert tuple(app.tables_service.tables.values()) == before.tables
     assert html_text(app.cards.get(second.id).content).strip() == "Second content"
-    qtbot.waitUntil(lambda: "Колесо" in app.modules.open_map(document.id).widget().message.text())
-    assert app.modules.open_map(document.id).widget().view.map_width == 400
+    qtbot.waitUntil(lambda: "Колесо" in app.maps.open_map(document.id).widget().message.text())
+    assert app.maps.open_map(document.id).widget().view.map_width == 400
     assert not project.saver.dirty
 
 
@@ -123,9 +122,9 @@ def test_live_table_editor_is_in_ctrl_s_snapshot(project, tmp_path, qtbot):
     app, project = project
     app.window.show()
     project.create_project(tmp_path / "world")
-    table = app.modules.session.create_table("Table")
-    app.modules.session.edit_table(table.id, rows=record_rows(table, ("Original",)))
-    widget = app.modules.open_table(table.id).widget()
+    table = app.tables_service.create_table("Table")
+    app.tables_service.edit_table(table.id, rows=record_rows(table, ("Original",)))
+    widget = app.tables.open_table(table.id).widget()
     widget.table.edit(widget.model.index(0, 0))
     editor = widget.table.findChild(QLineEdit)
     assert editor is not None
@@ -137,9 +136,9 @@ def test_live_table_editor_is_in_ctrl_s_snapshot(project, tmp_path, qtbot):
 
 def test_table_display_and_clipboard_preserve_literal_markup(project):
     app, project = project
-    table = app.modules.session.create_table("Literal text")
-    app.modules.session.edit_table(table.id, rows=record_rows(table, ("<b>Text</b>",)))
-    widget = app.modules.open_table(table.id).widget()
+    table = app.tables_service.create_table("Literal text")
+    app.tables_service.edit_table(table.id, rows=record_rows(table, ("<b>Text</b>",)))
+    widget = app.tables.open_table(table.id).widget()
     assert widget.model.data(widget.model.index(0, 0)) == "<b>Text</b>"
     widget.table.selectRow(0)
     widget.copy_selection()
@@ -155,10 +154,10 @@ def test_missing_map_image_remains_editable_and_keeps_links(project, tmp_path, q
     image.save(str(source))
     asset = project.store.import_asset(source)
     project.assets[asset.id] = asset
-    document = app.modules.session.create_map("Map", asset.id)
-    app.modules.session.edit_map(document.id, tokens=(TokenInstance(str(uuid4()), 0.5, 0.5),))
+    document = app.maps_service.create_map("Map", asset.id)
+    app.maps_service.edit_map(document.id, tokens=(TokenInstance(str(uuid4()), 0.5, 0.5),))
     (project.store.root / asset.path).unlink()
-    widget = app.modules.open_map(document.id).widget()
+    widget = app.maps.open_map(document.id).widget()
     qtbot.waitUntil(lambda: "недоступно" in widget.message.text())
     assert len(widget.view._tokens) == 1
     assert "Разорванная" in widget.view._tokens[0].toolTip()
@@ -179,20 +178,20 @@ def test_map_image_policy_rejects_svg_in_production_decoder(tmp_path):
 
 def test_card_placement_rename_move_delete_undo_and_cascade(project, tmp_path, monkeypatch):
     app, project = project
-    session = app.modules.session
+    session = app.maps_service
     document = session.create_map("Map", str(uuid4()))
     card = app.create_card("Canonical")
     pin = session.add_token(document.id, card.id, 0.2, 0.3)
     other = session.create_map("Other", document.asset_id)
     second = session.add_token(other.id, card.id, 0.7, 0.8)
     monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("Renamed", True))
-    app.modules._token_action(document.id, pin.id, "rename")
+    app.maps._token_action(document.id, pin.id, "rename")
     assert app.cards.get(card.id).title == "Renamed"
     assert session.get_map(other.id).tokens == (second,)
     session.edit_token(document.id, pin.id, label_override="Local", x=0.6)
     session.undo_stack(document.id).undo()
     assert session.get_map(document.id).tokens == (pin,)
-    app.modules._token_action(document.id, pin.id, "delete")
+    app.maps._token_action(document.id, pin.id, "delete")
     assert app.cards.get(card.id) and not session.get_map(document.id).tokens
     session.undo_stack(document.id).undo()
     assert session.placement_count({card.id}) == 2
@@ -211,10 +210,10 @@ def test_failed_image_import_does_not_publish_map_or_asset(project, tmp_path, qt
     bad = tmp_path / "not-image.png"
     bad.write_bytes(b"not an image")
     errors = []
-    monkeypatch.setattr(app.modules, "_error", errors.append)
-    app.modules.import_map(bad, "Rejected")
-    qtbot.waitUntil(lambda: not app.modules.importing)
-    assert errors and not app.modules.session.maps and not project.assets
+    monkeypatch.setattr(app.maps, "_error", errors.append)
+    app.maps.import_map(bad, "Rejected")
+    qtbot.waitUntil(lambda: not app.maps.importing)
+    assert errors and not app.maps_service.maps and not project.assets
     assert not project.saver.dirty
 
 

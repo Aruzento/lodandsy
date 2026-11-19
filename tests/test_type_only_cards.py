@@ -2,8 +2,8 @@ from dataclasses import replace
 
 import pytest
 
-from lodandsy.application.application_session import ApplicationSession
 from lodandsy.application.card_payload_codec import decode_card, encode_card
+from lodandsy.application.cards_service import CardsService
 from lodandsy.domain.card import Card, Portrait
 from lodandsy.domain.card_collection import CardCollection
 from lodandsy.domain.card_schema import CARD_TYPES, FIELD_DEFINITIONS, available_fields
@@ -18,8 +18,8 @@ def test_real_inspector_add_offers_only_absent_allowed_fields_and_type_hides_old
 
     app, _ = project
     card = app.create_card("Character", card_type="character")
-    app.session.select_card(card.id)
-    app.session.update_card_fields(card.id, {"hp": 15})
+    app.cards_service.select_card(card.id)
+    app.cards_service.update_card_fields(card.id, {"hp": 15})
     labels = []
 
     def select(parent, title, label, items, *args):
@@ -30,7 +30,7 @@ def test_real_inspector_add_offers_only_absent_allowed_fields_and_type_hides_old
     app.window.inspector_panel.add_field.click()
     assert "HP" not in labels and "AC" in labels and "Редкость" not in labels
     assert app.cards.get(card.id).value("hp") == 15
-    app.session.update_card(card.id, card_type="article")
+    app.cards_service.update_card(card.id, card_type="article")
     assert "hp" not in app.window.inspector_panel.field_form.controls
     assert app.cards.get(card.id).value("hp") == 15
 
@@ -51,7 +51,7 @@ def test_type_only_fields_roundtrip_and_no_loss():
 
 
 def test_repeated_add_field_is_rejected_in_domain_and_session(qapp):
-    session = ApplicationSession(CardCollection())
+    session = CardsService(CardCollection())
     card = session.create_card("Character", card_type="character")
     session.add_card_field(card.id, "hp")
     session.update_card_fields(card.id, {"hp": 15})

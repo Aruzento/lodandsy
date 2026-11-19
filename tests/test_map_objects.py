@@ -2,15 +2,15 @@ from uuid import uuid4
 
 import pytest
 
-from lodandsy.application.module_session import ModuleSession
 from lodandsy.application.sqlite_project_store import SQLiteProjectStore
+from tests.project_fixture import map_services
 from tests.test_map_tokens_grid import open_map
 
 pytest_plugins = ["tests.project_fixture"]
 
 
 def test_layer_objects_undo_and_validation(qapp):
-    session = ModuleSession()
+    session, actions, tables, cards_service = map_services()
     document = session.create_map("Map", str(uuid4()))
     first = session.add_layer(document.id, "Terrain")
     second = session.add_layer(document.id, "Houses")
@@ -42,7 +42,7 @@ def test_layer_objects_undo_and_validation(qapp):
 def test_object_views_modes_shared_asset_and_backup(project, qtbot, tmp_path):
     app, project = project
     document, widget = open_map(app, project, tmp_path, qtbot)
-    session = app.modules.session
+    session = app.maps_service
     first = session.add_layer(document.id, "Decor")
     second = session.add_layer(document.id, "Upper")
     one = session.add_object(document.id, first.id, document.asset_id, 30, 40, 100, 120)
@@ -53,7 +53,7 @@ def test_object_views_modes_shared_asset_and_backup(project, qtbot, tmp_path):
         not widget.view._objects[one.id].flags()
         & widget.view._objects[one.id].GraphicsItemFlag.ItemIsMovable
     )
-    editor = app.modules.open_map_editor(document.id).widget()
+    editor = app.maps.open_map_editor(document.id).widget()
     assert (
         editor.view._objects[one.id].flags()
         & editor.view._objects[one.id].GraphicsItemFlag.ItemIsMovable

@@ -56,9 +56,9 @@ def test_invalid_field_patch_cannot_publish_partial_change(project, key, value):
     app, _ = project
     card = app.create_card("Before", card_type="character")
     changes = []
-    app.session.card_changed.connect(lambda *args: changes.append(args))
+    app.cards_service.card_changed.connect(lambda *args: changes.append(args))
     with pytest.raises(ValueError):
-        app.session.update_card_fields(card.id, {"title": "After", key: value})
+        app.cards_service.update_card_fields(card.id, {"title": "After", key: value})
     assert app.cards.get(card.id) == card and not changes
 
 
@@ -67,8 +67,8 @@ def test_session_addressed_events_search_and_backup(project, tmp_path, qtbot):
     project.create_project(tmp_path / "world")
     card = app.create_card("Character", card_type="character")
     events = []
-    app.session.card_changed.connect(lambda *args: events.append(args))
-    app.session.update_card_fields(
+    app.cards_service.card_changed.connect(lambda *args: events.append(args))
+    app.cards_service.update_card_fields(
         card.id,
         {
             "summary": "River guardian",
@@ -77,9 +77,9 @@ def test_session_addressed_events_search_and_backup(project, tmp_path, qtbot):
     )
     assert events[-1] == (card.id, frozenset({"summary", "hp"}))
     notes = card.sections[-1]
-    app.session.update_section(card.id, notes.id, content=text_document("A quiet hero"))
+    app.cards_service.update_section(card.id, notes.id, content=text_document("A quiet hero"))
     assert notes.id in events[-1][1]
-    search = CardSearchDialog(app.session)
+    search = CardSearchDialog(app.cards_service)
     qtbot.addWidget(search)
     search.query.setText("guardian")
     search.refresh()
@@ -92,7 +92,7 @@ def test_session_addressed_events_search_and_backup(project, tmp_path, qtbot):
     restored = SQLiteProjectStore.restore(backup, tmp_path / "restored")
     assert restored.load() == snapshot
     restored.close()
-    app.session.update_card(card.id, card_type="note")
+    app.cards_service.update_card(card.id, card_type="note")
     assert app.cards.get(card.id).value("hp") == 0
 
 
@@ -129,14 +129,20 @@ def test_unknown_duplicate_or_unsafe_card_payload_refuses():
 
 
 def test_card_title_constraint_is_enforced_on_creation_and_generic_entity_rename(qapp):
-    from lodandsy.application.application_session import ApplicationSession
+    from lodandsy.application.cards_service import CardsService
     from lodandsy.domain.card_collection import CardCollection
 
-    session = ApplicationSession(CardCollection())
+    session = CardsService(CardCollection())
     with pytest.raises(ValueError):
         session.create_card("x" * 2001)
     card = session.create_card("Preserved")
     before = session.entities.summaries()
     with pytest.raises(ValueError):
-        session.update_entity(card.id, title="x" * 2001)
+        from lodandsy.application.maps_service import MapsService
+        from lodandsy.application.project_actions import ProjectActions
+        from lodandsy.application.tables_service import TablesService
+
+        ProjectActions(
+            session.core, session, TablesService(session.core), MapsService(session.core)
+        ).update_entity(card.id, title="x" * 2001)
     assert session.entities.summaries() == before and session.cards.get(card.id) == card

@@ -10,9 +10,9 @@ from dataclasses import replace
 from pathlib import Path
 
 import PySide6
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QImage
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QEvent, Qt
+from PySide6.QtGui import QImage, QKeyEvent
+from PySide6.QtWidgets import QApplication, QLineEdit
 
 from lodandsy.application.app_controller import AppController
 from lodandsy.application.project_controller import ProjectController
@@ -51,8 +51,7 @@ def main():
             ExitStack() as cleanup,
         ):
             cleanup.callback(lambda: project.store.close() if project.store else None)
-            cleanup.callback(controller.modules.shutdown)
-            cleanup.callback(controller.card_images.shutdown)
+            cleanup.callback(controller.maps.shutdown)
             cleanup.callback(project.saver.shutdown)
             cleanup.callback(setattr, window, "close_guard", None)
             root = Path(temporary).resolve()
@@ -67,66 +66,92 @@ def main():
             image.fill(Qt.GlobalColor.darkGreen)
             source = root / "Карта.png"
             assert image.save(str(source))
-            controller.card_images.insert(first.widget(), source, "Изображение города")
-            wait(app, lambda: not controller.card_images.importing)
+            controller.card_views.images.insert(first.widget(), source, "Изображение города")
+            wait(app, lambda: not controller.media.importing)
             assert "assets/" in controller.cards.get(a.id).content
-            controller.card_images.portrait(second.widget(), source)
-            wait(app, lambda: not controller.card_images.importing)
+            controller.card_views.images.portrait(second.widget(), source)
+            wait(app, lambda: not controller.media.importing)
             assert controller.cards.get(b.id).portrait.asset_id in project.assets
             portrait = controller.cards.get(b.id).portrait
             second.widget().portrait_panel.changed.emit(
                 replace(portrait, crop=(0.2, 0.1, 0.4, 0.8))
             )
-            notes = controller.session.add_section(a.id, "Путевые заметки")
+            notes = controller.cards_service.add_section(a.id, "Путевые заметки")
             first.widget().select_section(notes.id)
             first.widget().text_edit.insertPlainText("Независимый раздел")
             inventory = next(
                 s for s in controller.cards.get(b.id).sections if s.purpose == "inventory"
             )
-            inventory_table = controller.session.section_table(b.id, inventory.id)
-            assert controller.session.section_table(b.id, inventory.id).id == inventory_table.id
+            inventory_table = controller.actions.section_table(b.id, inventory.id)
+            assert controller.actions.section_table(b.id, inventory.id).id == inventory_table.id
             second.widget().select_section(inventory.id)
+            embedded_inventory = second.widget()._embedded_tables[inventory.id]
+            inventory_view = controller.tables.open_table(inventory_table.id).widget()
+            inventory_view.add_row()
+            item_card = controller.create_card("Стальной меч", card_type="item")
+            controller.cards_service.update_card_fields(
+                item_card.id, {"cost": 0, "summary": "Сталь"}
+            )
+            assert inventory_view.model.setData(inventory_view.model.index(0, 0), item_card.id)
+            assert embedded_inventory.model.data(embedded_inventory.model.index(0, 3)) == "0"
+            controller.cards_service.update_card_fields(item_card.id, {"cost": 9})
+            assert embedded_inventory.model.data(embedded_inventory.model.index(0, 3)) == "9"
+            assert len(controller.tables_service.get_table(inventory_table.id).rows[0].cells) == 2
+            controller.window_manager.close_window(f"table:{inventory_table.id}")
             progress = []
-            controller.modules.import_progress.connect(progress.append)
-            controller.modules.import_map(args.large_map_image or source, "Область")
-            wait(app, lambda: not controller.modules.importing, timeout=120)
+            controller.maps.import_progress.connect(progress.append)
+            controller.maps.import_map(args.large_map_image or source, "Область")
+            wait(app, lambda: not controller.maps.importing, timeout=120)
             assert any(0 < value < 100 for value in progress), "Worker progress pipe missing"
-            document = next(iter(controller.modules.session.maps.values()))
-            controller.session.update_entity(document.id, parent_id=b.id)
-            map_widget = controller.modules.open_map(document.id).widget()
+            document = next(iter(controller.maps_service.maps.values()))
+            controller.actions.update_entity(document.id, parent_id=b.id)
+            map_widget = controller.maps.open_map(document.id).widget()
             wait(app, lambda: map_widget.view._background is not None, timeout=120)
             grid = MapGrid(True, 50, 10, 10, 0.5)
-            controller.modules.session.edit_map(document.id, grid=grid)
-            token = controller.modules.session.add_token(document.id, a.id, 120, 130)
-            item_token = controller.modules.session.add_token(
+            controller.maps_service.edit_map(document.id, grid=grid)
+            token = controller.maps_service.add_token(document.id, a.id, 120, 130)
+            item_token = controller.maps_service.add_token(
                 document.id, b.id, 220, 230, kind_override="item", cells_w=2, cells_h=2
             )
             assert item_token.card_id == b.id
-            controller.session.update_card_fields(a.id, {"hp": 0, "summary": "Canonical summary"})
+            controller.cards_service.update_card_fields(
+                a.id, {"hp": 0, "summary": "Canonical summary"}
+            )
             assert map_widget.view._tokens[0].presentation.summary == "Canonical summary · HP: 0"
-            layer = controller.modules.session.add_layer(document.id, "Decor")
-            other_layer = controller.modules.session.add_layer(document.id, "Upper")
-            controller.modules.session.add_object(
+            layer = controller.maps_service.add_layer(document.id, "Decor")
+            other_layer = controller.maps_service.add_layer(document.id, "Upper")
+            controller.maps_service.add_object(
                 document.id, layer.id, document.asset_id, 10, 20, 100, 80
             )
-            controller.modules.session.add_object(
+            controller.maps_service.add_object(
                 document.id, other_layer.id, document.asset_id, 110, 120, 100, 80
             )
-            map_editor = controller.modules.open_map_editor(document.id).widget()
+            map_editor = controller.maps.open_map_editor(document.id).widget()
             assert map_editor is not map_widget and len(map_editor.view._objects) == 2
-            controller.modules.session.edit_layer(document.id, other_layer.id, visible=False)
-            controller.modules.session.move_token(document.id, token.id, 190, 190)
-            assert controller.modules.session.get_map(document.id).tokens[0].x == 190
-            controller.modules.session.undo_stack(document.id).undo()
-            assert controller.modules.session.get_map(document.id).tokens[0].x == token.x
-            table = controller.modules.session.create_table("Встречи")
-            controller.session.update_entity(table.id, parent_id=document.id)
+            object_card = controller.actions.create_object_card("Декорация", portrait.asset_id)
+            map_editor.select_library_card(object_card.id)
+            assert object_card.id in map_editor.library_model.ids
+            controller.maps._editor_place(document.id, layer.id, object_card.id, 300, 300)
+            decor = controller.maps_service.get_map(document.id).objects[-1]
+            assert decor.width == 128 and abs(decor.height - 128 * 800 / 1200) < 1e-6
+            controller.cards_service.update_card_fields(
+                object_card.id, {"title": "Объект переименован"}
+            )
+            assert map_editor.assets.currentIndex().data(Qt.ItemDataRole.UserRole) == object_card.id
+            assert map_editor.layers.item(0).data(Qt.ItemDataRole.UserRole) == other_layer.id
+            controller.maps_service.edit_layer(document.id, other_layer.id, visible=False)
+            controller.maps_service.move_token(document.id, token.id, 190, 190)
+            assert controller.maps_service.get_map(document.id).tokens[0].x == 190
+            controller.maps_service.undo_stack(document.id).undo()
+            assert controller.maps_service.get_map(document.id).tokens[0].x == token.x
+            table = controller.tables_service.create_table("Встречи")
+            controller.actions.update_entity(table.id, parent_id=document.id)
             columns = (
                 ColumnDefinition("Событие"),
                 ColumnDefinition("Количество", "number", 1),
                 ColumnDefinition("Есть", "bool", 2),
             )
-            controller.modules.session.edit_table(
+            controller.tables_service.edit_table(
                 table.id,
                 columns=columns,
                 rows=(
@@ -136,8 +161,26 @@ def main():
                     RowRecord(1),
                 ),
             )
-            table_widget = controller.modules.open_table(table.id).widget()
-            assert table_widget.model.setData(table_widget.model.index(0, 0), "Дракон")
+            table_widget = controller.tables.open_table(table.id).widget()
+            table_widget.table.setCurrentIndex(table_widget.model.index(0, 0))
+            table_widget.table.edit(table_widget.model.index(0, 0))
+            app.processEvents()
+            control = next(e for e in table_widget.table.findChildren(QLineEdit) if e.isVisible())
+            control.selectAll()
+            for character in "Дракон":
+                QApplication.sendEvent(
+                    control,
+                    QKeyEvent(QEvent.Type.KeyPress, 0, Qt.KeyboardModifier.NoModifier, character),
+                )
+            assert control.text() == "Дракон"
+            assert project.save_current()
+            assert control.isUndoAvailable()
+            QApplication.sendEvent(
+                control,
+                QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Return, Qt.KeyboardModifier.NoModifier),
+            )
+            app.processEvents()
+            assert table_widget.model.data(table_widget.model.index(0, 0)) == "Дракон"
             table_widget.table.selectRow(0)
             table_widget.copy_selection()
             assert QApplication.clipboard().text() == "Дракон\t0\tfalse"
@@ -151,7 +194,7 @@ def main():
                 == 0
             )
             project.discard_drafts()
-            dice = controller.modules.open_dice().widget()
+            dice = controller.dice.open().widget()
             dice.counts[20].setValue(0)
             dice.counts[6].setValue(3)
             dice.counts[100].setValue(1)
@@ -187,7 +230,7 @@ def main():
                 controller.cards.all(),
                 tuple(project.assets.values()),
             )
-            apply_import(controller.session, imported)
+            apply_import(controller.cards_service, imported)
             assert imported.cards[0].card_type == "folder"
             assert "runtime" not in imported.cards[0].content
             assert project.save_current()
@@ -200,15 +243,15 @@ def main():
             assert restored.load() == expected
             restored.close()
             project.open_project(root / "Восстановлено")
-            restored_map = controller.modules.open_map(document.id).widget()
+            restored_map = controller.maps.open_map(document.id).widget()
             wait(app, lambda: restored_map.view._background is not None, timeout=120)
             project.open_project(root / "Мир с кириллицей")
-            reopened_map = controller.modules.open_map(document.id).widget()
+            reopened_map = controller.maps.open_map(document.id).widget()
             wait(app, lambda: reopened_map.view._background is not None, timeout=120)
             wait(app, lambda: len(controller.window_manager.window_keys()) == 6)
             assert project.store.load() == expected
             controller.delete_card(a.id)
-            assert len(controller.modules.session.get_map(document.id).tokens) == 1
+            assert len(controller.maps_service.get_map(document.id).tokens) == 1
             assert controller.cards.get(b.id)
             assert project.save_current()
             result = {
@@ -227,6 +270,10 @@ def main():
                 "mow_synthetic_import": True,
                 "unicode_paths": True,
                 "uuid_sections_child_inventory_crop": True,
+                "reference_inventory_projections_no_copies": True,
+                "semantic_native_keyboard_flush": True,
+                "object_card_library_original_aspect": True,
+                "front_layer_at_top": True,
                 "independent_map_editor_free_tokens": True,
                 "typed_table_and_nonblocking_drafts": True,
                 "application_dice_tool": True,

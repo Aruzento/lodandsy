@@ -138,24 +138,13 @@ class TokenItem(QGraphicsItem):
             painter.setClipPath(self.shape())
         image = self.provider(self.root, self.asset_path) if self.asset_path else None
         if image is not None and not image.isNull():
-            if character:
-                x, y, w, h = self.presentation.crop
-                source = QRectF(
-                    x * image.width(), y * image.height(), w * image.width(), h * image.height()
-                )
-                size = min(source.width(), source.height())
-                source = QRectF(
-                    source.center().x() - size / 2, source.center().y() - size / 2, size, size
-                )
-                painter.drawImage(rect, image, source)
-            else:
-                x, y, w, h = self.presentation.crop
-                source = QRectF(
-                    x * image.width(), y * image.height(), w * image.width(), h * image.height()
-                )
-                scale = min(rect.width() / source.width(), rect.height() / source.height())
-                width, height = source.width() * scale, source.height() * scale
-                painter.drawImage(QRectF(-width / 2, -height / 2, width, height), image, source)
+            x, y, w, h = self.presentation.crop
+            source = QRectF(
+                x * image.width(), y * image.height(), w * image.width(), h * image.height()
+            )
+            scale = min(rect.width() / source.width(), rect.height() / source.height())
+            width, height = source.width() * scale, source.height() * scale
+            painter.drawImage(QRectF(-width / 2, -height / 2, width, height), image, source)
             self.setToolTip("<qt>" + escape(self.base_tip) + "</qt>")
         else:
             message = self.base_tip + (
@@ -172,7 +161,7 @@ class TokenItem(QGraphicsItem):
         if not character and not self.isSelected():
             return
         pen = QPen(
-            QColor("#ffe0a0" if self.isSelected() else "#ffffff"), 3 if self.isSelected() else 2
+            QColor("#e5e5e3" if self.isSelected() else "#ffffff"), 3 if self.isSelected() else 2
         )
         pen.setCosmetic(True)
         painter.setPen(pen)
@@ -274,7 +263,7 @@ class RasterObjectItem(QGraphicsItem):
                 else "Ресурс отсутствует или повреждён"
             )
         if self.isSelected():
-            pen = QPen(QColor("#ffe0a0"), 1)
+            pen = QPen(QColor("#e5e5e3"), 1)
             pen.setCosmetic(True)
             painter.setPen(pen)
             painter.drawRect(rect)

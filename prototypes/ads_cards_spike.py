@@ -56,16 +56,23 @@ def make_window():
 
 
 def capture_layout(window, controller, manager):
-    return {"version": 1, "open_cards": list(controller.card_editors),
-            "ads": base64.b64encode(bytes(manager.workspace.saveState(1))).decode("ascii"),
-            "geometry": base64.b64encode(bytes(window.saveGeometry())).decode("ascii")}
+    return {
+        "version": 1,
+        "open_cards": list(controller.card_views.editors),
+        "ads": base64.b64encode(bytes(manager.workspace.saveState(1))).decode("ascii"),
+        "geometry": base64.b64encode(bytes(window.saveGeometry())).decode("ascii"),
+    }
 
 
 def restore_layout_data(window, controller, manager, data):
-    if (not isinstance(data, dict) or data.get("version") != 1
-            or not isinstance(data.get("open_cards"), list)
-            or not all(isinstance(card_id, str) for card_id in data["open_cards"])
-            or not isinstance(data.get("ads"), str) or not isinstance(data.get("geometry"), str)):
+    if (
+        not isinstance(data, dict)
+        or data.get("version") != 1
+        or not isinstance(data.get("open_cards"), list)
+        or not all(isinstance(card_id, str) for card_id in data["open_cards"])
+        or not isinstance(data.get("ads"), str)
+        or not isinstance(data.get("geometry"), str)
+    ):
         raise ValueError("Unsupported test layout")
     state = base64.b64decode(data["ads"], validate=True)
     geometry = base64.b64decode(data["geometry"], validate=True)
@@ -81,8 +88,10 @@ def restore_layout_data(window, controller, manager, data):
     for floating in [window, *manager.workspace.floatingWidgets()]:
         maximized = floating.isMaximized()
         rect = floating.normalGeometry() if maximized else floating.geometry()
-        screen = next((s for s in screens if s.availableGeometry().contains(rect.center())),
-                      QApplication.primaryScreen())
+        screen = next(
+            (s for s in screens if s.availableGeometry().contains(rect.center())),
+            QApplication.primaryScreen(),
+        )
         area = screen.availableGeometry()
         width, height = min(rect.width(), area.width()), min(rect.height(), area.height())
         x = max(area.left(), min(rect.x(), area.right() - width + 1))
@@ -102,8 +111,13 @@ def self_test(app, window, controller, manager, project):
     app.processEvents()
     assert first.widget().card_id == a.id and second.widget().card_id == b.id
     assert controller.open_card_editor(a.id) is first
-    for area in [ads.RightDockWidgetArea, ads.BottomDockWidgetArea,
-                 ads.LeftDockWidgetArea, ads.TopDockWidgetArea, ads.CenterDockWidgetArea]:
+    for area in [
+        ads.RightDockWidgetArea,
+        ads.BottomDockWidgetArea,
+        ads.LeftDockWidgetArea,
+        ads.TopDockWidgetArea,
+        ads.CenterDockWidgetArea,
+    ]:
         manager.workspace.addDockWidget(area, second.dock, first.dock.dockAreaWidget())
         app.processEvents()
         assert controller.cards.get(a.id).content == "A edited"
@@ -119,8 +133,10 @@ def self_test(app, window, controller, manager, project):
     floating.move(100_000, 100_000)
     outside_layout = capture_layout(window, controller, manager)
     restore_layout_data(window, controller, manager, outside_layout)
-    assert any(screen.availableGeometry().contains(floating.geometry().topLeft())
-               for screen in app.screens())
+    assert any(
+        screen.availableGeometry().contains(floating.geometry().topLeft())
+        for screen in app.screens()
+    )
     manager.workspace.addDockWidget(
         ads.RightDockWidgetArea, second.dock, first.dock.dockAreaWidget()
     )
@@ -134,8 +150,8 @@ def self_test(app, window, controller, manager, project):
         manager.close_window(key)
     app.processEvents()
     restore_layout_data(window, controller, manager, layout)
-    assert set(controller.card_editors) == {a.id, b.id}
-    assert controller.card_editors[b.id].text_edit.toPlainText() == "B edited"
+    assert set(controller.card_views.editors) == {a.id, b.id}
+    assert controller.card_views.editors[b.id].text_edit.toPlainText() == "B edited"
     assert project.save_current()
     saved_cards = project.store.load().cards
     assert any(card.id == b.id and card.content == "B edited" for card in saved_cards)
@@ -149,17 +165,29 @@ def self_test(app, window, controller, manager, project):
     reopened.widget().text_edit.undo()
     assert controller.cards.get(a.id).content == ""
     assert controller.cards.get(b.id).content == "B edited"
-    return {"cards_independent": True, "programmatic_docking_directions": True,
-            "float_maximize_redock": True, "layout_roundtrip": True,
-            "fixed_panels": True, "reopen_undo": True, "sqlite_save": True,
-            "offscreen_restore_clamped": True,
-            "frozen": bool(getattr(sys, "frozen", False)),
-            "runtime_prefix": sys.prefix,
-            "platform": app.platformName(),
-            "screens": [{"width": s.geometry().width(), "height": s.geometry().height(),
-                         "dpr": s.devicePixelRatio(), "dpi": s.logicalDotsPerInch()}
-                        for s in app.screens()],
-            "manual_acceptance": "not performed"}
+    return {
+        "cards_independent": True,
+        "programmatic_docking_directions": True,
+        "float_maximize_redock": True,
+        "layout_roundtrip": True,
+        "fixed_panels": True,
+        "reopen_undo": True,
+        "sqlite_save": True,
+        "offscreen_restore_clamped": True,
+        "frozen": bool(getattr(sys, "frozen", False)),
+        "runtime_prefix": sys.prefix,
+        "platform": app.platformName(),
+        "screens": [
+            {
+                "width": s.geometry().width(),
+                "height": s.geometry().height(),
+                "dpr": s.devicePixelRatio(),
+                "dpi": s.logicalDotsPerInch(),
+            }
+            for s in app.screens()
+        ],
+        "manual_acceptance": "not performed",
+    }
 
 
 def main():
@@ -181,7 +209,7 @@ def main():
                 result = self_test(app, window, controller, manager, project)
             finally:
                 project.saver.shutdown()
-                controller.modules.shutdown()
+                controller.shutdown_features()
                 project.store.close()
                 window.close_guard = None
         status = 0

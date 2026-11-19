@@ -21,10 +21,12 @@ def test_new_inventory_integrity_checksum_limits_and_disk_error(
     app, project = project
     doc, widget = open_map(app, project, tmp_path, qtbot)
     card = app.create_card("Imported metadata")
-    app.session.update_card_fields(card.id, {"mow_id": card.id, "mow_type": "creature", "hp": 0})
-    layer = app.modules.session.add_layer(doc.id, "Objects")
-    app.modules.session.add_object(doc.id, layer.id, doc.asset_id, 10, 20)
-    app.modules.session.add_token(doc.id, card.id, 30, 40)
+    app.cards_service.update_card_fields(
+        card.id, {"mow_id": card.id, "mow_type": "creature", "hp": 0}
+    )
+    layer = app.maps_service.add_layer(doc.id, "Objects")
+    app.maps_service.add_object(doc.id, layer.id, doc.asset_id, 10, 20)
+    app.maps_service.add_token(doc.id, card.id, 30, 40)
     assert project.save_current()
     assert MAX_BACKUP_BYTES == 4 * 1024**3
     backup = tmp_path / "copy.lodbackup"

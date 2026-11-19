@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 
-from lodandsy.application.card_images import read_card_image
+from lodandsy.application.media_service import read_card_image
 from lodandsy.application.rich_html import html_text, sanitize_html
 from lodandsy.domain.card import Card, Portrait
 from lodandsy.domain.card_schema import CARD_TYPES
@@ -441,7 +441,7 @@ def cleanup_assets(store, assets):
 
 def apply_import(session, prepared):
     pending = list(prepared.cards)
-    with session.entities.atomic():
+    with session.core.transaction():
         while pending:
             ready = [
                 c
@@ -455,6 +455,9 @@ def apply_import(session, prepared):
                     "card", card.title, card.payload(), card.parent_id, id=card.id
                 )
                 pending.remove(card)
-    for card in prepared.cards:
-        session.card_created.emit(card.id)
+        for card in prepared.cards:
+            session.core.after_commit(lambda key=card.id: session.core.entity_created.emit(key))
+            session.core.after_commit(lambda key=card.id: session.card_created.emit(key))
+        if prepared.cards:
+            session.core.mark_changed()
     return tuple(c.id for c in prepared.cards)

@@ -12,12 +12,12 @@ pytest_plugins = ["tests.project_fixture"]
 
 def test_dice_tool_without_project_singleton_and_world_lifecycle(project, tmp_path):
     app, project = project
-    window = app.modules.open_dice()
-    assert app.modules.open_dice() is window
+    window = app.dice.open()
+    assert app.dice.open() is window
     assert app.window_manager.window_keys() == ("tool:dice",) or set(
         app.window_manager.window_keys()
     ) == {"tool:dice"}
-    assert not app.session.entities.summaries() and not project.saver.dirty
+    assert not app.cards_service.entities.summaries() and not project.saver.dirty
     widget = window.widget()
     widget.counts[20].setValue(0)
     widget.counts[6].setValue(3)
@@ -26,7 +26,7 @@ def test_dice_tool_without_project_singleton_and_world_lifecycle(project, tmp_pa
     assert "d6:" in widget.result.toPlainText() and "Итог =" in widget.result.toPlainText()
     assert not hasattr(widget, "presets") and not project.saver.dirty
     project.create_project(tmp_path / "one", preserve_current=False)
-    assert app.modules.open_dice() is window and widget.runtime["history"]
+    assert app.dice.open() is window and widget.runtime["history"]
     with closing(connect_database(project.store.path, readonly=True)) as connection:
         assert (
             connection.execute(
@@ -39,7 +39,7 @@ def test_dice_tool_without_project_singleton_and_world_lifecycle(project, tmp_pa
     restore_workspace(app, state)
     assert len([k for k in app.window_manager.window_keys() if k == "tool:dice"]) == 1
     project.create_project(tmp_path / "two", preserve_current=False)
-    assert app.modules.open_dice() is window
+    assert app.dice.open() is window
     for i in range(55):
         widget.throw()
     assert len(widget.runtime["history"]) == 50

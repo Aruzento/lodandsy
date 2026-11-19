@@ -1,4 +1,5 @@
 import math
+import re
 from dataclasses import dataclass, field, replace
 from uuid import uuid4
 
@@ -11,14 +12,77 @@ class ColumnDefinition:
     data_type: str = "text"
     position: int = 0
     id: str = field(default_factory=lambda: str(uuid4()))
+    key: str | None = None
+    ref_kind: str | None = None
+    ref_card_type: str | None = None
+    source_column_id: str | None = None
+    field_key: str | None = None
+    integer: bool = False
+    minimum: float | None = None
+    maximum: float | None = None
+    required: bool = False
+    default: object = None
 
     def __post_init__(self):
         validate_id(self.id)
         object.__setattr__(self, "name", validate_title(self.name))
-        if self.data_type not in {"text", "number", "bool"}:
+        if self.data_type not in {"text", "number", "bool", "entity_ref", "projection"}:
             raise ValueError("Unsupported column type")
         if type(self.position) is not int or self.position < 0:
             raise ValueError("Invalid column position")
+        for value in (self.key, self.ref_card_type, self.field_key):
+            if value is not None and (
+                not isinstance(value, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", value)
+            ):
+                raise ValueError("Invalid stable column/field key")
+        if type(self.integer) is not bool or type(self.required) is not bool:
+            raise ValueError("Invalid column constraint")
+        for value in (self.minimum, self.maximum):
+            if value is not None and (type(value) not in (int, float) or not math.isfinite(value)):
+                raise ValueError("Invalid number bound")
+        if self.minimum is not None and self.maximum is not None and self.minimum > self.maximum:
+            raise ValueError("Invalid number range")
+        if self.data_type != "number" and (
+            self.integer or self.minimum is not None or self.maximum is not None
+        ):
+            raise ValueError("Number constraints require number column")
+        if self.data_type == "entity_ref":
+            if self.ref_kind not in {None, "card", "map", "table"} or (
+                self.ref_card_type and self.ref_kind != "card"
+            ):
+                raise ValueError("Invalid reference constraint")
+        elif self.ref_kind is not None or self.ref_card_type is not None:
+            raise ValueError("Reference constraint requires entity_ref")
+        if self.data_type == "projection":
+            validate_id(self.source_column_id)
+            if (
+                self.source_column_id == self.id
+                or self.field_key is None
+                or self.default is not None
+            ):
+                raise ValueError("Invalid read-only projection")
+        elif self.source_column_id is not None or self.field_key is not None:
+            raise ValueError("Projection metadata requires projection column")
+        if self.default is not None:
+            self.validate(self.default)
+
+    def validate(self, value):
+        if self.data_type == "projection":
+            raise ValueError("Вычисляемый столбец доступен только для чтения")
+        validate_value(value, self.data_type)
+        if value is None:
+            if self.required:
+                raise ValueError("Обязательное значение не заполнено")
+            return
+        if self.data_type == "number" and (
+            self.integer
+            and type(value) is not int
+            or self.minimum is not None
+            and value < self.minimum
+            or self.maximum is not None
+            and value > self.maximum
+        ):
+            raise ValueError("Число не соответствует ограничениям столбца")
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,6 +114,9 @@ class RowRecord:
 def validate_value(value, data_type):
     if value is None:
         return
+    if data_type == "entity_ref":
+        validate_id(value)
+        return
     valid = (
         (
             data_type == "text"
@@ -78,6 +145,11 @@ def parse_cell(text, data_type):
         if str(text).casefold() not in {"true", "false", "1", "0", "да", "нет"}:
             raise ValueError("Введите true/false или 1/0")
         value = str(text).casefold() in {"true", "1", "да"}
+    elif data_type == "entity_ref":
+        value = str(text).strip()
+        validate_id(value)
+    elif data_type == "projection":
+        raise ValueError("Вычисляемый столбец доступен только для чтения")
     else:
         try:
             value = float(text)
@@ -116,14 +188,27 @@ class TableDocument:
             if tuple(v.position for v in values) != tuple(range(len(values))):
                 raise ValueError("Invalid table order")
         columns = {c.id: c for c in self.columns}
-        signature = tuple((c.id, c.data_type) for c in self.columns)
+        keys = [c.key for c in self.columns if c.key is not None]
+        if len(keys) != len(set(keys)):
+            raise ValueError("Duplicate stable column key")
+        for column in self.columns:
+            if (
+                column.data_type == "projection"
+                and (source := columns.get(column.source_column_id)) is not None
+                and source.data_type != "entity_ref"
+            ):
+                raise ValueError("Projection source must be entity_ref")
+        signature = self.columns
         for row in self.rows:
             if row._validated_columns == signature:
                 continue
             for key, value in row.cells:
                 if key not in columns:
                     raise ValueError("Cell refers to unknown column")
-                validate_value(value, columns[key].data_type)
+                columns[key].validate(value)
+            for column in self.columns:
+                if column.required and row.value(column.id) is None:
+                    raise ValueError("Обязательное значение не заполнено")
             # Derived proof cache: cells and column definitions are immutable validated scalars.
             object.__setattr__(row, "_validated_columns", signature)
 
@@ -131,7 +216,7 @@ class TableDocument:
         column = next((c for c in self.columns if c.id == column_id), None)
         if column is None or not any(r.id == row_id for r in self.rows):
             raise ValueError("Unknown cell ID")
-        validate_value(value, column.data_type)
+        column.validate(value)
         rows = tuple(
             replace(
                 r,
@@ -143,6 +228,11 @@ class TableDocument:
             for r in self.rows
         )
         return replace(self, rows=rows)
+
+    def new_row(self):
+        return RowRecord(
+            len(self.rows), tuple((c.id, c.default) for c in self.columns if c.default is not None)
+        )
 
 
 def display_value(value):
@@ -157,4 +247,34 @@ def display_value(value):
 class TablePayload:
     columns: tuple
     rows: tuple
-    version: int = field(default=2, init=False)
+    version: int = field(default=3, init=False)
+
+
+def inventory_columns():
+    item = ColumnDefinition(
+        "Предмет", "entity_ref", key="item", ref_kind="card", ref_card_type="item"
+    )
+    return (
+        item,
+        ColumnDefinition(
+            "Количество",
+            "number",
+            1,
+            key="quantity",
+            integer=True,
+            minimum=1,
+            required=True,
+            default=1,
+        ),
+        ColumnDefinition(
+            "Описание",
+            "projection",
+            2,
+            key="description",
+            source_column_id=item.id,
+            field_key="description_preview",
+        ),
+        ColumnDefinition(
+            "Стоимость", "projection", 3, key="cost", source_column_id=item.id, field_key="cost"
+        ),
+    )

@@ -11,7 +11,7 @@ def test_app_shell_starts(qtbot) -> None:
 
     assert window.isVisible()
     assert window.windowTitle() == "LODANDSY"
-    assert window.size() == QSize(1280, 800)
+    assert window.size() == QSize(1440, 960)
 
     window.close()
 

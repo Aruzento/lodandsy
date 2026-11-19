@@ -1,0 +1,14 @@
+{
+  "native_screenshot": false,
+  "capture_attempts": 2,
+  "error": "window capture timed out: timed out waiting on channel",
+  "accessibility": true,
+  "blank_candidate_launch_close": true,
+  "physical_dpi": false,
+  "clean_windows_without_python": false,
+  "qt_render_is_manual_capture": false,
+  "windows_font_families": 185,
+  "open_dialog_via_ctrl_o": true,
+  "project_open_via_automation": false,
+  "input_limitation": "Alt+D did not change observed focus; set_value returned Cannot set a value for an element that is not settable"
+}

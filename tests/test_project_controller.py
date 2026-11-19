@@ -32,7 +32,7 @@ def test_create_edit_autosave_and_reopen_restores_real_views(project, tmp_path, 
     child = controller.create_card("Город", root.id)
     editor = controller.open_card_editor(child.id).widget()
     editor.text_edit.insertPlainText("# Город\n\nИстория")
-    qtbot.waitUntil(lambda: project.saver.state == SaveState.CLEAN)
+    qtbot.waitUntil(lambda: not editor.pending_input and project.saver.state == SaveState.CLEAN)
     before = project.store.load()
     assert len(before.cards) == 2
     assert project.status.text().endswith("Сохранено")
@@ -40,7 +40,7 @@ def test_create_edit_autosave_and_reopen_restores_real_views(project, tmp_path, 
     other.close()
     project.open_project(tmp_path / "Другой")
     assert controller.cards.all() == ()
-    assert controller.card_editors == {}
+    assert controller.card_views.editors == {}
     project.open_project(folder)
     assert controller.cards.all() == before.cards
     assert (
@@ -129,5 +129,5 @@ def test_failed_open_keeps_current_project_and_documents(project, tmp_path):
     assert project.save_current()
     with pytest.raises(ProjectError, match="No project"):
         project.open_project(tmp_path / "missing")
-    assert controller.card_editors[card.id] is dock.widget()
+    assert controller.card_views.editors[card.id] is dock.widget()
     assert project.store.root == (tmp_path / "world").resolve()

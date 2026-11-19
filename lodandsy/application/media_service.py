@@ -7,8 +7,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from PySide6.QtCore import QEventLoop, QObject, QSize, Qt, Signal
-from PySide6.QtGui import QImage, QImageReader, QTextCursor
-from PySide6.QtWidgets import QFileDialog, QInputDialog
+from PySide6.QtGui import QImage, QImageIOHandler, QImageReader
 
 from lodandsy.application.resource_paths import resolve_asset_image
 
@@ -54,17 +53,18 @@ def _decode_card_image(reader):
     )
 
 
-class CardImages(QObject):
+class MediaService(QObject):
     ready = Signal(object, str)
     busy_changed = Signal()
     finished = Signal()
     _result = Signal(object)
 
-    def __init__(self, app):
-        super().__init__(app.window)
-        self.app = app
+    def __init__(self, resources, parent=None, notice=lambda text: None):
+        super().__init__(parent)
+        self.resources = resources
+        self.notice = notice
         self.importing = False
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="card-images")
+        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="media-images")
         self._cache = OrderedDict()
         self._lookup = OrderedDict()
         self._pending = set()
@@ -142,11 +142,15 @@ class CardImages(QObject):
         try:
             stat = path.stat()
             key = (str(path), stat.st_mtime_ns, stat.st_size)
+            if key in self._cache and self._cache[key].isNull():
+                return None
             if key in self._sizes:
                 self._sizes.move_to_end(key)
                 return self._sizes[key]
             reader = QImageReader(str(path))
             size = reader.size()
+            if reader.transformation() & QImageIOHandler.Transformation.TransformationRotate90:
+                size.transpose()
             supported = bytes(reader.format()).lower() in {b"png", b"jpeg", b"webp", b"bmp", b"gif"}
             if reader.device() is not None:
                 reader.device().close()
@@ -181,77 +185,16 @@ class CardImages(QObject):
                 return None
         return self.preview(root, name)
 
-    def request(self, editor, source=None):
-        if self.importing or editor.text_edit.isReadOnly():
-            return
-        project = getattr(self.app, "project_controller", None)
-        if project is None:
-            return
-        if project.store is None and not project.save_current():
-            return
-        if source is None:
-            name, _ = QFileDialog.getOpenFileName(
-                editor,
-                "Вставить изображение",
-                "",
-                "Изображения (*.png *.jpg *.jpeg *.webp *.bmp *.gif)",
-            )
-            if not name:
-                return
-            source = Path(name)
-        alt, accepted = QInputDialog.getText(
-            editor, "Изображение", "Описание (alt):", text="Изображение"
-        )
-        if accepted:
-            self.insert(editor, source, alt)
-
-    def insert(self, editor, source, alt):
-        project = self.app.project_controller
-        if self.importing or project.store is None or editor.card_id is None:
-            raise ValueError("Дождитесь импорта и выберите проект и карточку")
-        card_id = editor.card_id
-        section_key = editor.current_section
-        cursor = QTextCursor(editor.text_edit.textCursor())
-        # Insertion survives intervening edits without replacing unrelated text.
-        cursor.setPosition(cursor.selectionEnd())
-        cursor.setKeepPositionOnInsert(True)
-
-        def publish(asset, error):
-            if error:
-                self.app.window.show_notice(error)
-                return False
-            if not any(item.id == card_id for item in self.app.cards.all()):
-                return False
-            try:
-                self.app.cards.get(card_id).section(section_key)
-            except ValueError:
-                return False
-            cursor.beginEditBlock()
-            editor.insert_asset(cursor, asset.path, alt)
-            cursor.endEditBlock()
-            from lodandsy.application.rich_text_codec import serialize_document
-
-            content = serialize_document(cursor.document())
-            cursor.document().pending_content = content
-            try:
-                self.app.session.update_section(card_id, section_key, content=content)
-            except ValueError as error:
-                self.app.session.set_field_draft(card_id, section_key, content)
-                self.app.window.show_notice(str(error))
-            return True
-
-        self.import_image(source, publish)
-
     def import_image(self, source, publish):
         """Shared immutable resource path for Card images and graphical map tokens."""
-        project = self.app.project_controller
+        project = self.resources
         if self.importing or project.store is None:
             raise ValueError("Дождитесь импорта и выберите проект")
         store = project.store
+        generation = (project.core.generation, project.generation)
         known = tuple(project.assets.values())
         self.importing = True
         self.busy_changed.emit()
-        self.app.window.statusBar().showMessage("Импорт изображения…")
 
         def operation():
             with TemporaryDirectory(prefix="lodandsy-card-") as folder:
@@ -270,56 +213,38 @@ class CardImages(QObject):
 
         def complete(asset, error):
             try:
-                if project.store is store:
-                    previous = project.assets.get(asset.id) if asset is not None else None
-                    if asset is not None:
-                        project.assets[asset.id] = asset
-                    if publish(asset, error) and asset is not None:
-                        project.saver.mark_dirty()
-                    elif asset is not None and previous is None:
-                        project.assets.pop(asset.id, None)
+                with project.core.transaction():
+                    self._publish_import(project, store, asset, error, publish, generation)
             except (ValueError, RuntimeError) as failure:
-                self.app.window.show_notice(str(failure))
+                self.notice(str(failure))
             finally:
                 self.importing = False
                 self.busy_changed.emit()
                 self.finished.emit()
-                self.app.window.statusBar().clearMessage()
 
         self._submit(operation, complete)
 
-    def portrait(self, editor, source=None):
-        from dataclasses import replace
-
-        from lodandsy.domain.card import Portrait
-
-        project = self.app.project_controller
-        if self.importing or editor.card_id is None:
+    def _publish_import(self, project, store, asset, error, publish, generation):
+        if project.store is not store or generation != (
+            project.core.generation,
+            project.generation,
+        ):
             return
-        if project.store is None and not project.save_current():
-            return
-        key = editor.card_id
-        if source is None:
-            name, _ = QFileDialog.getOpenFileName(
-                editor, "Портрет", "", "Изображения (*.png *.jpg *.jpeg *.webp *.bmp *.gif)"
-            )
-            if not name:
-                return
-            source = Path(name)
-
-        def publish(asset, error):
-            if error:
-                self.app.window.show_notice(error)
-                return False
-            if not any(card.id == key for card in self.app.cards.all()):
-                return False
-            previous = self.app.cards.get(key).portrait or Portrait()
-            self.app.session.update_card(
-                key, portrait=replace(previous, asset_id=asset.id, crop=(0.0, 0.0, 1.0, 1.0))
-            )
-            return True
-
-        self.import_image(source, publish)
+        previous = project.assets.get(asset.id) if asset is not None else None
+        if asset is not None:
+            project.assets[asset.id] = asset
+        accepted = False
+        try:
+            accepted = publish(asset, error)
+        finally:
+            if not accepted and asset is not None:
+                if previous is None:
+                    project.assets.pop(asset.id, None)
+                else:
+                    project.assets[asset.id] = previous
+        if accepted and asset is not None:
+            project.core.after_commit(lambda: project.asset_changed.emit(asset.id))
+            project.core.mark_changed()
 
     def wait_import(self):
         if self.importing:

@@ -84,31 +84,31 @@ def test_large_map_import_multiple_windows_tokens_and_reopen(project, qtbot, tmp
     project.create_project(tmp_path / "world")
     # Real encoded PNG, 25MP > former 16MP barrier, exercised by production child worker.
     source = source_image(tmp_path / "25mp.png", (5000, 5000))
-    app.modules.import_map(source, "Large")
-    qtbot.waitUntil(lambda: not app.modules.importing, timeout=30000)
-    document = next(iter(app.modules.session.maps.values()))
-    widget = app.modules.open_map(document.id).widget()
+    app.maps.import_map(source, "Large")
+    qtbot.waitUntil(lambda: not app.maps.importing, timeout=30000)
+    document = next(iter(app.maps_service.maps.values()))
+    widget = app.maps.open_map(document.id).widget()
     qtbot.waitUntil(lambda: widget.view.map_width == 5000, timeout=30000)
     card = app.create_card("Place")
-    app.modules.session.add_token(document.id, card.id, 1850, 3050)
-    app.modules.import_map(source, "Second")
-    qtbot.waitUntil(lambda: not app.modules.importing, timeout=30000)
-    second = next(item for item in app.modules.session.maps.values() if item.id != document.id)
+    app.maps_service.add_token(document.id, card.id, 1850, 3050)
+    app.maps.import_map(source, "Second")
+    qtbot.waitUntil(lambda: not app.maps.importing, timeout=30000)
+    second = next(item for item in app.maps_service.maps.values() if item.id != document.id)
     assert second.asset_id == document.asset_id and len(project.assets) == 1
-    other = app.modules.open_map(second.id).widget()
+    other = app.maps.open_map(second.id).widget()
     qtbot.waitUntil(lambda: other.view.map_width == 5000, timeout=30000)
     assert widget.view._tokens[0].pos().x() == 1850
-    assert app.modules.tiles.bytes <= app.modules.tiles.budget
+    assert app.maps.tiles.bytes <= app.maps.tiles.budget
     assert project.save_current()
     original = project.store.load()
     project._save_ui_state()
     project.create_project(tmp_path / "other", preserve_current=False)
     project.open_project(tmp_path / "world")
     qtbot.waitUntil(
-        lambda: app.modules.open_map(document.id).widget().view.map_width == 5000, timeout=30000
+        lambda: app.maps.open_map(document.id).widget().view.map_width == 5000, timeout=30000
     )
     assert project.store.load().maps == original.maps
-    assert app.modules.session.get_map(document.id).tokens[0].x == 1850
+    assert app.maps_service.get_map(document.id).tokens[0].x == 1850
 
 
 def test_tile_renderer_lod_memory_and_corrupt_cache(qtbot, tmp_path):
@@ -228,8 +228,8 @@ def test_unloaded_map_camera_is_not_guessed_and_closed_preferences_survive(proje
     from lodandsy.application.workspace_state import capture_workspace
 
     app, _ = project
-    document = app.modules.session.create_map("Pending background", str(uuid4()))
-    widget = app.modules.open_map(document.id).widget()
+    document = app.maps_service.create_map("Pending background", str(uuid4()))
+    widget = app.maps.open_map(document.id).widget()
     assert document.id not in capture_workspace(app)["maps"]
     camera = {"x": 0.4, "y": 0.6, "zoom": 0.0005}
     widget.restore_camera_state(camera)
@@ -243,10 +243,10 @@ def test_loaded_map_camera_restore_does_not_mask_later_pan_zoom(project, qtbot, 
 
     app, project = project
     project.create_project(tmp_path / "world")
-    app.modules.import_map(source_image(tmp_path / "map.png"), "Map")
-    qtbot.waitUntil(lambda: not app.modules.importing)
-    document = next(iter(app.modules.session.maps.values()))
-    widget = app.modules.open_map(document.id).widget()
+    app.maps.import_map(source_image(tmp_path / "map.png"), "Map")
+    qtbot.waitUntil(lambda: not app.maps.importing)
+    document = next(iter(app.maps_service.maps.values()))
+    widget = app.maps.open_map(document.id).widget()
     qtbot.waitUntil(lambda: widget.view._background is not None)
     data = capture_workspace(app)
     data["maps"][document.id] = {"x": 0.4, "y": 0.5, "zoom": 0.5}

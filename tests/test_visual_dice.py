@@ -46,7 +46,7 @@ def test_mixed_rng_bounds_d100_zero():
 def test_roll_clean_runtime_bounded_reopen_and_backup(project, tmp_path):
     app, project = project
     project.create_project(tmp_path / "world")
-    widget = app.modules.open_dice().widget()
+    widget = app.dice.open().widget()
     widget.counts[6].setValue(2)
     widget.modifier.setValue(-3)
     config = widget.runtime["config"]
@@ -59,7 +59,7 @@ def test_roll_clean_runtime_bounded_reopen_and_backup(project, tmp_path):
     widget.copy.click()
     assert QApplication.clipboard().text() == widget.runtime["last"]
     app.window_manager.close_window("tool:dice")
-    widget = app.modules.open_dice().widget()
+    widget = app.dice.open().widget()
     assert len(widget.runtime["history"]) == 50
     before = project.store.load()
     archive = tmp_path / "backup.zip"
@@ -68,7 +68,7 @@ def test_roll_clean_runtime_bounded_reopen_and_backup(project, tmp_path):
     assert restored.load() == before
     restored.close()
     project.open_project(tmp_path / "restored")
-    assert app.modules.open_dice().widget() is widget
+    assert app.dice.open().widget() is widget
     assert widget.runtime["config"] == config
     widget.clear_counts()
     assert not sum(widget.runtime["config"].counts)
@@ -78,7 +78,7 @@ def test_roll_clean_runtime_bounded_reopen_and_backup(project, tmp_path):
 
 def test_invalid_count_edits_never_escape_ui(project):
     app, _ = project
-    widget = app.modules.open_dice().widget()
+    widget = app.dice.open().widget()
     widget.counts[20].setValue(1000)
     widget.counts[6].setValue(1)
     assert sum(widget.runtime["config"].counts) == 1000

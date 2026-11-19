@@ -95,11 +95,11 @@ def test_create_map_and_table_from_plus_menu_without_top_navigation(
     panel = app.window.tree_panel
     action(panel.create_menu, "create-map").trigger()
     assert not action(panel.create_menu, "create-map").isEnabled()
-    qtbot.waitUntil(lambda: not app.modules.importing)
-    document = next(iter(app.modules.session.maps.values()))
+    qtbot.waitUntil(lambda: not app.maps.importing)
+    document = next(iter(app.maps_service.maps.values()))
     assert panel.tree_model.index_for_node(f"map:{document.id}").data() == "From tree"
     action(panel.create_menu, "create-table").trigger()
-    table = next(iter(app.modules.session.tables.values()))
+    table = next(iter(app.tables_service.tables.values()))
     assert panel.tree_model.index_for_node(f"table:{table.id}").data() == "From tree"
     assert not app.cards.all()
     assert not {"Карточки", "Карты"}.intersection(
@@ -162,18 +162,18 @@ def test_enter_opens_dice_and_table_and_selection_does_not_retarget_cards(projec
     card = app.create_card("Card")
     editor = app.open_card_editor(card.id).widget()
     editor.text_edit.insertPlainText("Keep")
-    table = app.modules.session.create_table("Table")
+    table = app.tables_service.create_table("Table")
     panel = app.window.tree_panel
     panel.tree_view.setCurrentIndex(panel.tree_model.index_for_node(f"table:{table.id}"))
     panel.tree_view.setFocus()
     qtbot.keyClick(panel.tree_view, Qt.Key.Key_Return)
     assert app.window_manager.find_window(f"table:{table.id}") is not None
-    assert app.session.current_card_id is None
+    assert app.cards_service.current_card_id is None
     assert app.window.inspector_panel.title_edit.text() == "Table"
     assert not app.window.inspector_panel.title_edit.isReadOnly()
-    assert app.session.current_entity_id == table.id
+    assert app.cards_service.current_entity_id == table.id
     assert editor.card_id == card.id and editor.text_edit.toPlainText() == "Keep"
-    dice = app.modules.open_dice()
+    dice = app.dice.open()
     assert app.window_manager.find_window("tool:dice") is dice
     assert app.window.inspector_panel.id_edit.text() == table.id
 
@@ -182,8 +182,8 @@ def test_module_rename_delete_updates_summary_and_closes_only_its_document(proje
     app, project = project
     card = app.create_card("Card")
     editor = app.open_card_editor(card.id)
-    table = app.modules.session.create_table("Table")
-    app.modules.open_table(table.id)
+    table = app.tables_service.create_table("Table")
+    app.tables.open_table(table.id)
     panel = app.window.tree_panel
     index = panel.tree_model.index_for_node(f"table:{table.id}")
     panel.tree_view.setCurrentIndex(index)
@@ -205,7 +205,7 @@ def test_navigator_selection_and_expansion_roundtrip_separate_from_active_docume
     app, project = project
     card = app.create_card("Card")
     app.open_card_editor(card.id)
-    document = app.modules.session.create_map("Map", str(uuid4()))
+    document = app.maps_service.create_map("Map", str(uuid4()))
     panel = app.window.tree_panel
     panel.tree_view.setCurrentIndex(panel.tree_model.index_for_node(f"map:{document.id}"))
     panel.tree_view.setExpanded(panel.tree_model.index_for_node("card:" + card.id), False)
@@ -215,7 +215,7 @@ def test_navigator_selection_and_expansion_roundtrip_separate_from_active_docume
     restore_workspace(app, data)
     assert panel.current_node_key() == f"map:{document.id}"
     assert app.navigator_selection == f"map:{document.id}"
-    assert app.session.current_card_id is None
+    assert app.cards_service.current_card_id is None
     assert not panel.tree_view.isExpanded(panel.tree_model.index_for_node("card:" + card.id))
     assert app.window_manager.active_window_key == f"card-editor:{card.id}"
     assert not project.store
@@ -232,15 +232,15 @@ def test_obsolete_workspace_state_is_rejected_without_creating_documents(project
     data["documents"].append("dice")
     with pytest.raises(ValueError, match="версия раскладки"):
         restore_workspace(app, data)
-    assert not hasattr(app.modules.session, "dice")
+    assert not hasattr(app.maps_service, "dice")
     assert set(app.window_manager.window_keys()) == {f"card-editor:{card.id}"}
 
 
 def test_collapsed_modules_stay_collapsed_when_title_or_cards_change(project):
     app, project = project
-    table = app.modules.session.create_table("Table")
+    table = app.tables_service.create_table("Table")
     panel = app.window.tree_panel
     panel.tree_view.setExpanded(panel.tree_model.index_for_node(f"table:{table.id}"), False)
-    app.modules.session.edit_table(table.id, title="Renamed")
+    app.tables_service.edit_table(table.id, title="Renamed")
     app.create_card("New")
     assert not panel.tree_view.isExpanded(panel.tree_model.index_for_node(f"table:{table.id}"))

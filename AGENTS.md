@@ -37,21 +37,25 @@ LODANDSY — нативное локальное Windows-приложение д
 
 ## Рабочий цикл
 
-Активна утверждённая итерация 5: docs/iterations/2026-11-19-iteration-5/CODEX-ITERATION-5.md.
-A–G непрерывно и последовательно, без промежуточных согласований/финальных отчётов.
-Текущий контракт: docs/MVP.md, ADR-023…026. Исторические ADR не сохраняют отменённый runtime.
-Git-действия только после итоговой проверки и разрешения владельца.
+Активна утверждённая итерация6-rev3: docs/iterations/2026-11-19-iteration-6-rev3/CODEX-ITERATION-6.md.
+Выполнять A→E непрерывно; сначала независимость модулей ARU-84, затем refs/inventory и
+структурный Qt layout. ADR-027 определяет владельцев. Никаких private widgets/worker
+соседних модулей и общих ModuleController/ModuleSession; composition root собирает
+Cards/Tables/Maps/Dice, общие Core/Resources/Media/navigation, transactional ProjectActions.
+Один canonical EntityCollection/SQLite writer и post-commit revision ACK. Настоящий UI
+ввод подтверждается semantic commit Enter/Tab/blur/Escape/Ctrl+S, а не событием каждой буквы;
+rich text остаётся непрерывным QTextDocument с coalescing, без reset/focus/Undo loss.
 
-SQLite12/Cardv4/Mapv5/Tablev2, UI state4. Дерево Card/Map/Table, Dice — singleton tool:dice.
-Только card_type, UUID CardSection rich_text/table_ref, характеристики только в Inspector.
-Templates/tags/snap/Dice Entity/random table mode удалены. Aliases — данные/import без UI.
-Portrait asset+normalized oriented crop, без caption/description. Map viewer и отдельный
-Map Editor — общие ModuleSession/Undo/tiles и разные камеры. Invalid drafts не блокируют
-save валидного канона; rich content получает application ACK прежде canonical_content.
-MOW — однонаправленный входной конвертер, не legacy runtime, без выдуманного инвентаря.
-Неподдерживаемые версии отклонять без записи, реальные папки не удалять. Full snapshot
-writer и sync backup4GiB — отдельные задачи. Native libvips tiles сохраняются.
-Целевые проверки после блоков, полный gate и сборка после стабилизации.
+Макеты design.html/PNG с portrait — только .prototype-deps/iteration6-rev3-reference,
+не public repo/production/release. Новый Qt дизайн нейтральный graphite #191919/#202020;
+navy/blue-gold отменён. Портрет слева square adaptive132–220, metadata справа, no header
+scroll конфликт; crop roundtrip идемпотентен. Inventory — обычная Table со ссылкой item,
+положительным integer count и живыми description/cost projections, без копий/игровых правил.
+Map palette только Object Cards; original alpha/aspect long-edge128; front layer сверху.
+Schema/payload версионировать по фактической реализации, без legacy/migration adapters.
+Full snapshot writer/sync backup4GiB и libvips tiles сохраняются, новые зависимости не нужны.
+Targeted batches после блоков, общий gate/build после стабилизации; отчёт/draw.io/checklist.
+Git-действия только в конце после проверки по последним указаниям владельца.
 
 ## Проверки и отчёт
 
@@ -69,3 +73,5 @@ GUI-тесты pytest-qt и offscreen не заменяют ручную про�
 Каждый отчёт о блоке: цель и ID Linear; изменения и затронутые файлы; команды и фактические результаты; что проверено и не проверено; риски и решение владельца (если нужно); состояние задач и следующий блок. Если есть блокер, укажи точную причину и условие продолжения. Продолжай до согласованного результата, а не до первой компилирующейся версии.
 
 Итерация5 отменяет templates/tags/snap/Dice entity/random table mode. Только card_type, UUID CardSection rich_text/table_ref, характеристики в Inspector, portrait crop, самостоятельный Map Editor и tool:dice. Invalid drafts не блокируют сохранение валидного канона. Целевые проверки по завершённым блокам; один полный gate и сборка после стабилизации.
+
+Фактический контракт6: SQLite13/Card4/Map5/Table3, UUID entity_ref/projection без stored derived cells. ADR-027/028/029 и docs/architecture/LODANDSY.drawio описывают действующие границы и UI. Ввод structured — semantic commit, rich coalescing250ms/max2s; generation/section UUID управляют временем жизни callbacks.

@@ -10,6 +10,7 @@ class LeftRail(QToolBar):
         super().__init__("Left Rail", parent)
 
         self.setObjectName("leftRail")
+        self.setFixedWidth(46)
         self.setMovable(False)
         self.setFloatable(False)
         self.setAllowedAreas(Qt.ToolBarArea.LeftToolBarArea)

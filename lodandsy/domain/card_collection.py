@@ -1,6 +1,6 @@
 from dataclasses import replace
 
-from lodandsy.domain.card import EMPTY_DOCUMENT, Card
+from lodandsy.domain.card import Card
 from lodandsy.domain.document_payloads import project_entities
 
 
@@ -51,7 +51,7 @@ class CardCollection:
         title,
         parent_id=None,
         *,
-        content=EMPTY_DOCUMENT,
+        content=None,
         portrait=None,
         card_type="note",
         sections=None,

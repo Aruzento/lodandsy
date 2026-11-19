@@ -1,11 +1,44 @@
 from dataclasses import replace
 
-from PySide6.QtCore import QEvent, QSize, Qt, Signal
-from PySide6.QtGui import QIcon, QPixmap
-from PySide6.QtWidgets import QDialog, QHBoxLayout, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtCore import QEvent, QRectF, QSize, Qt, Signal
+from PySide6.QtGui import QColor, QPainter
+from PySide6.QtWidgets import QDialog, QHBoxLayout, QSizePolicy, QToolButton, QVBoxLayout, QWidget
 
 from lodandsy.ui.icons import icon
 from lodandsy.ui.portrait_crop_dialog import PortraitCropDialog
+
+
+class PortraitImage(QToolButton):
+    """Paint using the final content rectangle, independent of previous layout/pixmap sizes."""
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.source = None
+        self.crop = (0, 0, 1, 1)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self.source is None or self.source.isNull():
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        frame = QRectF(self.contentsRect()).adjusted(2, 2, -2, -2)
+        x, y, w, h = self.crop
+        source = QRectF(
+            x * self.source.width(),
+            y * self.source.height(),
+            w * self.source.width(),
+            h * self.source.height(),
+        )
+        size = source.size().scaled(frame.size(), Qt.AspectRatioMode.KeepAspectRatio)
+        target = QRectF(
+            frame.center().x() - size.width() / 2,
+            frame.center().y() - size.height() / 2,
+            size.width(),
+            size.height(),
+        )
+        painter.fillRect(frame, QColor("#191919"))
+        painter.drawImage(target, self.source, source)
 
 
 class PortraitPanel(QWidget):
@@ -15,17 +48,16 @@ class PortraitPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("cardPortrait")
-        self.setMaximumWidth(280)
-        self.setMinimumWidth(120)
+        self.setFixedSize(184, 184)
         self.portrait = None
         self._image = None
         self.image_provider = lambda key: None
-        self.image = QToolButton(self)
+        self.image = PortraitImage(self)
+        self.image.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.image.setObjectName("portraitImage")
         self.image.setAccessibleName("Портрет карточки — выбрать или заменить изображение")
         self.image.setToolTip("Выбрать или заменить портрет")
         self.image.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        self.image.setMinimumSize(120, 160)
         self.image.clicked.connect(self.image_requested)
         self.image.installEventFilter(self)
         self.actions = QWidget(self)
@@ -85,8 +117,9 @@ class PortraitPanel(QWidget):
 
     def _paint_image(self):
         image = self._image
-        self.image.setIcon(QIcon())
         available = image is not None and not image.isNull()
+        self.image.source = image
+        self.image.crop = self.portrait.crop if self.portrait else (0, 0, 1, 1)
         self.crop_button.setEnabled(available)
         if not available:
             self.image.setText(
@@ -98,17 +131,8 @@ class PortraitPanel(QWidget):
             )
             self.image.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
         else:
-            x, y, w, h = self.portrait.crop
-            cropped = image.copy(
-                round(x * image.width()),
-                round(y * image.height()),
-                max(1, round(w * image.width())),
-                max(1, round(h * image.height())),
-            )
             self.image.setText("")
-            self.image.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-            self.image.setIcon(QIcon(QPixmap.fromImage(cropped)))
-            self.image.setIconSize(self.image.size() - QSize(12, 12))
+        self.image.update()
 
     def edit_crop(self):
         if self._image is None or self._image.isNull() or not self.portrait:
@@ -119,9 +143,9 @@ class PortraitPanel(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        height = min(320, max(140, round(self.width() * 4 / 3)))
-        self.image.setFixedHeight(height)
         self.actions.adjustSize()
         self.actions.move(max(0, self.width() - self.actions.width() - 4), 4)
         self.actions.raise_()
-        self._paint_image()
+
+    def sizeHint(self):
+        return QSize(184, 184)

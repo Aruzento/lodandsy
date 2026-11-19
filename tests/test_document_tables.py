@@ -12,7 +12,7 @@ def test_real_header_append_controls_never_become_cells_and_empty_table(qtbot, m
     widget.resize(600, 400)
     widget.show()
     monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("Item", True))
-    monkeypatch.setattr(QInputDialog, "getItem", lambda *a, **k: ("text", True))
+    monkeypatch.setattr(QInputDialog, "getItem", lambda *a, **k: ("Текст", True))
     qtbot.mouseClick(widget.table.horizontalHeader().plus, Qt.MouseButton.LeftButton)
     assert widget.model.columnCount() == 1 and widget.model.rowCount() == 0
     qtbot.mouseClick(widget.table.verticalHeader().plus, Qt.MouseButton.LeftButton)

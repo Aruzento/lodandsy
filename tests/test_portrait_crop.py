@@ -23,7 +23,7 @@ def test_crop_apply_cancel_reset_and_shared_token_presentation(project, qtbot, t
     asset = project.store.import_asset(source)
     project.assets[asset.id] = asset
     original = source.read_bytes()
-    app.session.update_card(card.id, portrait=Portrait(asset.id))
+    app.cards_service.update_card(card.id, portrait=Portrait(asset.id))
     editor = app.open_card_editor(card.id).widget()
     panel = editor.portrait_panel
     qtbot.waitUntil(lambda: panel._image is not None and not panel._image.isNull())

@@ -3,38 +3,40 @@
 Локальное Windows-приложение ведущего: независимые документы, общее дерево и инструменты.
 Python3.14 / PySide6 6.11.2 / Qt ADS5.1.1. ADS размещает окна, WindowManager управляет жизнью.
 
-Итерация5: [MVP](docs/MVP.md), [пакет A–G](docs/iterations/2026-11-19-iteration-5/CODEX-ITERATION-5.md),
-[фактические проверки](docs/validation/2026-11-19-iteration-5.md),
-[визуальный контракт](docs/design/iteration-5-layout.md). План и статусы — Linear.
+Итерация6-rev3: [MVP](docs/MVP.md),
+[пакет A–E](docs/iterations/2026-11-19-iteration-6-rev3/CODEX-ITERATION-6.md),
+[проверки и ограничения](docs/validation/2026-11-19-iteration-6.md),
+[архитектура draw.io](docs/architecture/LODANDSY.drawio), ADR-027/028/029. План — Linear.
 
-Дерево Card/Map/Table. «+» раскрывает создание, поиск под кнопкой/Ctrl+F, дочерние через
-контекст. Card имеет только тип и UUID-вкладки: визуальный текст либо ссылка на дочернюю
-Table. Инвентарь персонажа — одна настоящая дочерняя таблица. Характеристики только в
-Inspector. Hero/портрет с crop, отдельный Undo каждой rich-вкладки, scoped hotkeys.
-Ширины боковых областей меняются native разделителями и сохраняются с раскладкой.
+Cards/Tables/Maps/Dice имеют отдельных владельцев; composition root связывает общие
+Core/Resources/Media/Navigation и атомарные ProjectActions. Один канон EntityCollection/
+SQLite13/Card4/Map5/Table3, assets отдельно, UI state4. Прежние смешанные controllers/
+sessions удалены. Домен без Qt/SQL. Legacy/старые тестовые форматы не адаптируются и
+не перезаписываются. Реальные миры автоматически не удаляются.
 
-Map viewer и самостоятельный Map Editor — два окна одного канона/Undo/tiles с разными
-камерами. Viewer управляет токенами Card, editor — слоями/raster objects и преобразованиями.
-Свободное движение без snap; grid в общих world coords. Большие карты — libvips worker и
-перестраиваемая пирамида, без полного background QPixmap в GUI. Source≤2GiB,
-cache≤4GiB/32768tiles, worker≤512MiB/900s, tileLRU64MiB, BMP/GIF≤16MP (ADR-011).
+Tree Card/Map/Table, «+» с меню, поиск под кнопкой/Ctrl+F, дочерние через контекст.
+Graphite Qt Widgets: square portrait слева/metadata справа, breadcrumb/copy, prose≤760,
+Table full width, сгруппированный Inspector, без отдельной прокрутки шапки. UUID-вкладки
+rich text/child Table сохраняют независимый Undo; удалённые ресурсы очищаются адресно.
+Crop идемпотентен, asset неизменяем, символы URI только lodandsy://entity/UUID.
 
-Table: text/number/bool, [+] после заголовков, контекст/drag порядка, atomic TSV и copy,
-общие данные/drafts между окнами. «Инструменты → Кубики» — один tool:dice без Entity,
-доступный без проекта: d4…d100, modifier, каждый результат/сумма/copy/history50 в сессии.
+Инвентарь — обычная дочерняя Table: item UUID/положительное quantity/живые read-only
+описание и единичная стоимость. Проекции не копируются в SQLite. Reference picker с
+title/aliases/path/UUID; недоступный item сохраняет ссылку/количество. Универсальные
+Table types text/number/bool/entity_ref/projection, UUID headers, atomic writable TSV.
+Semantic input commit Enter/Tab/blur, Escape, конфликт/draft без потери курсора/Undo;
+Ctrl+S flush, единый autosave writer. Invalid draft не блокирует валидное сохранение.
 
-SQLite S3 — единственный канон, assets отдельно. SQLite12/Card4/Map5/Table2, UI state4.
-Autosave/Ctrl+S — один revision writer. Invalid UI drafts помечаются отдельно и не мешают
-сохранению допустимых данных. Close/switch предлагает исправить/отбросить draft/отмену.
-Backup/restore≤4GiB пока синхронны; full snapshot writer сохраняется (отдельные работы).
-Legacy Markdown/templates/tags/snap/Dice entity/random table mode удалены без адаптеров.
-Неподдерживаемые проекты отклоняются без записи, тестовые разрешено пересоздавать.
+Viewer/Editor карты — самостоятельные окна с общим MapService/Undo/tiles. Editor tool
+rail/canvas/right layers/Object Card library/properties. Только Card(object) с main image;
+import создаёт Card, размещение original aspect/alpha long-edge128 без portrait crop.
+Front layer сверху, scoped Undo IconOnly. Card placements/cascade, свободный grid без snap.
+Libvips: source≤2GiB/cache≤4GiB/32768tiles/worker≤512MiB/900s/tileLRU64MiB (ADR-011).
 
-Qt HTML whitelist, единственный URI lodandsy://entity/UUID через application layer.
-HTTP(S) только по явному клику, network resources заблокированы, local images — только
-assets с защитой выхода из директории. Media≤64MiB/32MP, bounded thumbnails/working set.
-MOW v1 subset — read-only import preview → skip/remap → atomic apply, source metadata/
-aliases/безопасные тексты/media/links сохраняются, исключённые данные отражены в отчёте.
+Кубики singleton tool:dice без проекта/Entity:7типов+modifier/result/copy/history50.
+HTML/media security и read-only MOW import сохраняются. Backup≤4GiB пока синхронен,
+full snapshot writer не заменён. Clean Windows без Python и physical mixedDPI требуют
+отдельной приёмки новой сборки; прежний W2 preflight не покрывает новый UI.
 
 ## Подготовка и запуск
 
@@ -56,7 +58,7 @@ git diff --check
 ```
 
 Windows: requirements-build.lock, build_support/build_windows.ps1 и
-[сборка/чек-лист приёмки23 пунктов](build_support/README.md).
+[сборка/чек-лист приёмки итерации6](build_support/README.md).
 Прежняя приёмка не покрывает новый вид/поведение. Clean Windows без Python (ARU-64),
 физическая mixedDPI и визуальная приёмка владельца учитываются отдельно. Public release нет.
 Git-действия только после итоговой проверки и разрешения владельца.

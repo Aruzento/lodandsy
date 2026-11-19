@@ -86,10 +86,10 @@ def test_column_row_commands_reorder_rename_delete_cancel_and_type_rejection(qtb
     assert widget.model.document == before
     widget.table.setCurrentIndex(widget.model.index(0, 1))
     monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("Renamed", True))
-    monkeypatch.setattr(QInputDialog, "getItem", lambda *a, **k: ("number", True))
+    monkeypatch.setattr(QInputDialog, "getItem", lambda *a, **k: ("Число", True))
     widget.edit_column()
     assert widget.model.document == before and widget.error.text()
-    monkeypatch.setattr(QInputDialog, "getItem", lambda *a, **k: ("text", True))
+    monkeypatch.setattr(QInputDialog, "getItem", lambda *a, **k: ("Текст", True))
     widget.edit_column()
     assert widget.model.document.columns[1].name == "Renamed"
     monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.StandardButton.Yes)
@@ -102,15 +102,15 @@ def test_column_row_commands_reorder_rename_delete_cancel_and_type_rejection(qtb
 def test_live_invalid_draft_survives_close_saves_canon_and_can_be_fixed(project, qtbot, tmp_path):
     app, project = project
     project.create_project(tmp_path / "world")
-    table = app.modules.session.create_table("Table")
+    table = app.tables_service.create_table("Table")
     source = typed_table()
-    app.modules.session.edit_table(table.id, columns=source.columns, rows=source.rows)
-    widget = app.modules.open_table(table.id).widget()
+    app.tables_service.edit_table(table.id, columns=source.columns, rows=source.rows)
+    widget = app.tables.open_table(table.id).widget()
     assert not widget.model.setData(widget.model.index(0, 1), "bad")
     assert project.save_current()
     assert project.store.load().tables[0].rows[0].value(source.columns[1].id) is None
     app.window_manager.close_window(f"table:{table.id}")
-    widget = app.modules.open_table(table.id).widget()
+    widget = app.tables.open_table(table.id).widget()
     assert widget.model.data(widget.model.index(0, 1)) == "bad"
     assert widget.model.setData(widget.model.index(0, 1), "0")
     assert project.save_current()

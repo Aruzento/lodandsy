@@ -54,6 +54,10 @@ def main():
             "lodandsy.domain.card_templates",
             "lodandsy.domain.dice_document",
             "lodandsy.application.dice_payload_codec",
+            "lodandsy.application.application_session",
+            "lodandsy.application.module_session",
+            "lodandsy.application.module_controller",
+            "lodandsy.application.card_images",
         }
     ]
     result = {

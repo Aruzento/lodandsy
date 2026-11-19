@@ -28,7 +28,7 @@ root.mkdir()
 project.create_project(root / "Проверка итерации 5")
 a = controller.create_card("Эйрин · хранитель перевала", card_type="character")
 b = controller.create_card("Западный перевал", card_type="location")
-controller.session.update_card_fields(
+controller.cards_service.update_card_fields(
     a.id,
     dict(
         summary="Следопыт, знающий тайные тропы северных гор.",
@@ -49,29 +49,29 @@ source = root / "portrait.png"
 image.save(str(source))
 asset = project.store.import_asset(source)
 project.assets[asset.id] = asset
-controller.session.update_card(a.id, portrait=Portrait(asset.id))
+controller.cards_service.update_card(a.id, portrait=Portrait(asset.id))
 background = QImage(1200, 800, QImage.Format.Format_RGB32)
 background.fill(0xFF304B3A)
 map_source = root / "map.png"
 background.save(str(map_source))
-controller.modules.import_map(map_source, "Северные горы")
-controller.modules.wait_import()
-document = next(iter(controller.modules.session.maps.values()))
-controller.modules.session.add_token(document.id, a.id, 400, 350)
-controller.modules.session.add_token(document.id, a.id, 600, 450, cells_w=2, cells_h=2)
-layer = controller.modules.session.add_layer(document.id, "Декор")
-controller.modules.session.add_object(document.id, layer.id, asset.id, 100, 100, 128, 160)
+controller.maps.import_map(map_source, "Северные горы")
+controller.maps.wait_import()
+document = next(iter(controller.maps_service.maps.values()))
+controller.maps_service.add_token(document.id, a.id, 400, 350)
+controller.maps_service.add_token(document.id, a.id, 600, 450, cells_w=2, cells_h=2)
+layer = controller.maps_service.add_layer(document.id, "Декор")
+controller.maps_service.add_object(document.id, layer.id, asset.id, 100, 100, 128, 160)
 plan = inspect_source(
     Path("docs/iterations/2026-11-19-iteration-4/references/1790538099148-2682f598.md")
 )
 prepared = prepare_import(
     plan, project.store, controller.cards.all(), tuple(project.assets.values())
 )
-apply_import(controller.session, prepared)
+apply_import(controller.cards_service, prepared)
 inventory = next(s for s in controller.cards.get(a.id).sections if s.purpose == "inventory")
-controller.session.section_table(a.id, inventory.id)
-controller.modules.open_map_editor(document.id)
-controller.modules.open_dice()
+controller.actions.section_table(a.id, inventory.id)
+controller.maps.open_map_editor(document.id)
+controller.dice.open()
 controller.open_card_editor(b.id)
 controller.open_card_editor(a.id)
 window.resize(1400, 900)
@@ -83,8 +83,7 @@ try:
     if not args.prepare_only:
         app.exec()
 finally:
-    controller.modules.shutdown()
-    controller.card_images.shutdown()
+    controller.shutdown_features()
     project.saver.shutdown()
     if project.store:
         project.store.close()

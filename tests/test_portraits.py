@@ -29,19 +29,19 @@ def test_portrait_inline_replace_remove_reopen_backup(project, qtbot, tmp_path):
     assert card.portrait is None
     editor = app.open_card_editor(card.id).widget()
     source = image_file(tmp_path / "wide.png", 800, 200)
-    app.card_images.portrait(editor, source)
-    qtbot.waitUntil(lambda: not app.card_images.importing)
+    app.card_views.images.portrait(editor, source)
+    qtbot.waitUntil(lambda: not app.media.importing)
     portrait = app.cards.get(card.id).portrait
     assert portrait.asset_id in project.assets
-    app.card_images.insert(editor, source, "Inline")
-    qtbot.waitUntil(lambda: not app.card_images.importing)
+    app.card_views.images.insert(editor, source, "Inline")
+    qtbot.waitUntil(lambda: not app.media.importing)
     content = app.cards.get(card.id).content
     assert "<img" in content and len(project.assets) == 1
     editor.portrait_panel.changed.emit(replace(portrait, crop=(0.1, 0.2, 0.5, 0.6)))
     assert app.cards.get(card.id).portrait.crop == (0.1, 0.2, 0.5, 0.6)
     second = image_file(tmp_path / "second.png", 100, 100)
-    app.card_images.portrait(editor, second)
-    qtbot.waitUntil(lambda: not app.card_images.importing)
+    app.card_views.images.portrait(editor, second)
+    qtbot.waitUntil(lambda: not app.media.importing)
     updated = app.cards.get(card.id).portrait
     assert updated.asset_id != portrait.asset_id and len(project.assets) == 2
     assert updated.crop == (0, 0, 1, 1) and app.cards.get(card.id).content == content
@@ -63,7 +63,7 @@ def test_missing_portrait_never_changes_body_or_revision(project, qtbot, tmp_pat
     app, project = project
     project.create_project(tmp_path / "world")
     card = app.create_card("Person", card_type="character")
-    app.session.update_card(card.id, portrait=Portrait(str(uuid4())))
+    app.cards_service.update_card(card.id, portrait=Portrait(str(uuid4())))
     before = app.cards.get(card.id)
     editor = app.open_card_editor(card.id).widget()
     editor.resize(720, 600)
@@ -82,12 +82,12 @@ def test_import_survives_closed_editor_and_deleted_card(project, qtbot, tmp_path
     project.create_project(tmp_path / "world")
     card = app.create_card("Person", card_type="character")
     editor = app.open_card_editor(card.id).widget()
-    app.card_images.portrait(editor, image_file(tmp_path / "portrait.png"))
+    app.card_views.images.portrait(editor, image_file(tmp_path / "portrait.png"))
     app.window_manager.close_window(app.card_editor_window_key(card.id))
-    qtbot.waitUntil(lambda: not app.card_images.importing)
+    qtbot.waitUntil(lambda: not app.media.importing)
     assert app.cards.get(card.id).portrait.asset_id in project.assets
     editor = app.open_card_editor(card.id).widget()
-    app.card_images.portrait(editor, image_file(tmp_path / "removed.png", 70, 50))
+    app.card_views.images.portrait(editor, image_file(tmp_path / "removed.png", 70, 50))
     app.delete_card(card.id)
-    qtbot.waitUntil(lambda: not app.card_images.importing)
+    qtbot.waitUntil(lambda: not app.media.importing)
     assert len(project.assets) == 1
