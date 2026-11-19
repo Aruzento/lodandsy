@@ -76,7 +76,7 @@ def test_supported_formats_and_old_m1_bmp_gif(tmp_path, fmt, extension):
     store.close()
 
 
-def test_large_map_import_multiple_windows_pins_and_reopen(project, qtbot, tmp_path):
+def test_large_map_import_multiple_windows_tokens_and_reopen(project, qtbot, tmp_path):
     app, project = project
     project.create_project(tmp_path / "world")
     # Real encoded PNG, 25MP > former 16MP barrier, exercised by production child worker.
@@ -87,14 +87,14 @@ def test_large_map_import_multiple_windows_pins_and_reopen(project, qtbot, tmp_p
     widget = app.modules.open_map(document.id).widget()
     qtbot.waitUntil(lambda: widget.view.map_width == 5000, timeout=30000)
     card = app.create_card("Place")
-    app.modules.session.add_pin(document.id, "M1 pin", .37, .61, card.id)
+    app.modules.session.add_token(document.id, "Token", None, 1850, 3050, entity_id=card.id)
     app.modules.import_map(source, "Second")
     qtbot.waitUntil(lambda: not app.modules.importing, timeout=30000)
     second = next(item for item in app.modules.session.maps.values() if item.id != document.id)
     assert second.asset_id == document.asset_id and len(project.assets) == 1
     other = app.modules.open_map(second.id).widget()
     qtbot.waitUntil(lambda: other.view.map_width == 5000, timeout=30000)
-    assert widget.view._pins[0].pos().x() == 1850
+    assert widget.view._tokens[0].pos().x() == 1850
     assert app.modules.tiles.bytes <= app.modules.tiles.budget
     assert project.save_current()
     original = project.store.load()
@@ -104,7 +104,7 @@ def test_large_map_import_multiple_windows_pins_and_reopen(project, qtbot, tmp_p
     qtbot.waitUntil(lambda: app.modules.open_map(document.id).widget().view.map_width == 5000,
                     timeout=30000)
     assert project.store.load().maps == original.maps
-    assert app.modules.session.get_map(document.id).pins[0].x == .37
+    assert app.modules.session.get_map(document.id).tokens[0].x == 1850
 
 
 def test_tile_renderer_lod_memory_and_corrupt_cache(qtbot, tmp_path):

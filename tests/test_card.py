@@ -2,7 +2,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from lodandsy.domain.card import Card
+from lodandsy.domain.card import EMPTY_DOCUMENT, Card
 
 
 def test_card_has_default_state() -> None:
@@ -11,7 +11,7 @@ def test_card_has_default_state() -> None:
     assert card.id
     assert card.title == "First card"
     assert card.parent_id is None
-    assert card.content == ""
+    assert card.content == EMPTY_DOCUMENT
 
 
 @pytest.mark.parametrize("field", ["id", "title", "content", "parent_id"])

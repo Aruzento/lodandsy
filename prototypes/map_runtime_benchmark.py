@@ -85,7 +85,7 @@ def main():
                 tokens = tuple(MapToken(f"Token {i}", asset.id,
                     (i % columns + .5) / columns * widget.view.map_width,
                     (i // columns + .5) / rows * widget.view.map_height,
-                    width=100, height=100) for i in range(args.tokens))
+                    cells_w=1, cells_h=1) for i in range(args.tokens))
                 controller.modules.session.edit_map(document.id, tokens=tokens,
                     grid=MapGrid(True, 100))
             samples = []

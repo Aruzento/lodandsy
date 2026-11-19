@@ -45,6 +45,7 @@ class ProjectController(QObject):
         self._ui_restore_failed = False
         self.saver = SaveCoordinator(self._snapshot, self)
         session = controller.session
+        session.entity_changed.connect(self.saver.mark_dirty)
         session.card_created.connect(self.saver.mark_dirty)
         session.card_changed.connect(self.saver.mark_dirty)
         session.cards_deleted.connect(self.saver.mark_dirty)
@@ -78,18 +79,38 @@ class ProjectController(QObject):
         self.backup_action.triggered.connect(self._request_backup)
         self.restore_action = QAction("Восстановить резервную копию…", self)
         self.restore_action.triggered.connect(self._request_restore)
-        for action in [self.new_action, self.open_action, self.save_action,
-                       self.backup_action, self.restore_action]:
+        for action in [
+            self.new_action,
+            self.open_action,
+            self.save_action,
+            self.backup_action,
+            self.restore_action,
+        ]:
             menu.addAction(action)
 
     def _snapshot(self, revision):
+        if any(self.controller.modules._table_drafts.values()):
+            raise ProjectError(
+                "Исправьте ошибочные ячейки таблиц или отмените ввод перед сохранением"
+            )
         modules = self.controller.modules.session
-        return ProjectSnapshot(self.controller.cards.all(), revision, tuple(self.assets.values()),
-                               tuple(modules.maps.values()), tuple(modules.tables.values()))
+        return ProjectSnapshot(
+            self.controller.cards.all(),
+            revision,
+            tuple(self.assets.values()),
+            tuple(modules.maps.values()),
+            tuple(modules.tables.values()),
+            tuple(modules.dice.values()),
+            self.controller.session.entities.summaries(),
+        )
 
     def _update_status(self, *_args):
-        labels = {SaveState.CLEAN: "Сохранено", SaveState.DIRTY: "Есть несохранённые изменения",
-                  SaveState.SAVING: "Сохранение…", SaveState.ERROR: "Ошибка сохранения"}
+        labels = {
+            SaveState.CLEAN: "Сохранено",
+            SaveState.DIRTY: "Есть несохранённые изменения",
+            SaveState.SAVING: "Сохранение…",
+            SaveState.ERROR: "Ошибка сохранения",
+        }
         name = self.store.root.name if self.store else "Проект не выбран"
         text = f"{name} — {labels[self.saver.state]}"
         if self.store is None and self.saver.state == SaveState.CLEAN:
@@ -97,14 +118,20 @@ class ProjectController(QObject):
         if self.saver.last_error:
             text += f": {self.saver.last_error}"
         self.status.setText(text)
-        color = "#f19a9a" if self.saver.state == SaveState.ERROR else (
-            "#ceb075" if self.saver.dirty else "#aab7ca")
+        color = (
+            "#f19a9a"
+            if self.saver.state == SaveState.ERROR
+            else ("#ceb075" if self.saver.dirty else "#aab7ca")
+        )
         self.status.setStyleSheet(f"color: {color};")
         self.status.setToolTip(text)
         self.retry.setVisible(self.saver.state == SaveState.ERROR)
         for action in [self.new_action, self.open_action, self.backup_action, self.restore_action]:
-            action.setEnabled(not self.saver.saving and not self.controller.modules.importing
-                              and not self.controller.card_images.importing)
+            action.setEnabled(
+                not self.saver.saving
+                and not self.controller.modules.importing
+                and not self.controller.card_images.importing
+            )
         self.window.setWindowTitle(f"LODANDSY — {name}" + (" *" if self.saver.dirty else ""))
 
     def create_project(self, folder: Path, *, preserve_current=True, discard=False):
@@ -129,8 +156,13 @@ class ProjectController(QObject):
             self.controller.modules.reset()
             self.assets.clear()
         self.saver.reset(0, store.save)
-        if (self.controller.cards.all() or self.assets or self.controller.modules.session.maps
-                or self.controller.modules.session.tables):
+        if (
+            self.controller.cards.all()
+            or self.assets
+            or self.controller.modules.session.maps
+            or self.controller.modules.session.tables
+            or self.controller.modules.session.dice
+        ):
             self.saver.mark_dirty()
             if not self.saver.save():
                 # Keep the selected project and dirty in-memory data available for retry.
@@ -153,7 +185,7 @@ class ProjectController(QObject):
         store = SQLiteProjectStore.open(folder)
         try:
             snapshot = store.load()
-            cards = CardCollection(snapshot.cards)
+            cards = CardCollection(entities=snapshot.entity_collection())
         except Exception:
             store.close()
             raise
@@ -165,7 +197,7 @@ class ProjectController(QObject):
                 store.close()
                 raise
         self.controller.replace_cards(cards)
-        self.controller.modules.reset(snapshot.maps, snapshot.tables)
+        self.controller.modules.reset()
         self.store = store
         self.controller.set_project_root(store.root)
         self.assets = {asset.id: asset for asset in snapshot.assets}
@@ -206,9 +238,13 @@ class ProjectController(QObject):
         if not self.saver.dirty:
             return True
         choice = QMessageBox.warning(
-            self.window, "Несохранённые изменения", "Сохранить изменения текущего проекта?",
-            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard
-            | QMessageBox.StandardButton.Cancel, QMessageBox.StandardButton.Save,
+            self.window,
+            "Несохранённые изменения",
+            "Сохранить изменения текущего проекта?",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
         )
         if choice == QMessageBox.StandardButton.Save:
             return self.save_current()
@@ -233,8 +269,10 @@ class ProjectController(QObject):
         if self.store is None:
             return
         if self._ui_restore_failed and (self.store.root / UI_STATE_NAME).exists():
-            shutil.copy2(self.store.root / UI_STATE_NAME,
-                         self.store.root / f".ui-state-unreadable-{uuid4().hex}.json")
+            shutil.copy2(
+                self.store.root / UI_STATE_NAME,
+                self.store.root / f".ui-state-unreadable-{uuid4().hex}.json",
+            )
         save_workspace_file(self.store.root, capture_workspace(self.controller))
         self._ui_restore_failed = False
 

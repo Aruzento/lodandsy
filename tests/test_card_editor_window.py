@@ -2,6 +2,7 @@ import pytest
 from PySide6.QtGui import QTextCursor
 
 from lodandsy.application.app_controller import AppController
+from lodandsy.application.rich_html import html_text, text_document
 from lodandsy.domain.card_collection import CardCollection
 from lodandsy.ui.app_shell import AppShell
 
@@ -9,8 +10,8 @@ from lodandsy.ui.app_shell import AppShell
 def make_controller(qtbot):
     cards = CardCollection()
     a, b = cards.create("A"), cards.create("B")
-    cards.update_content(a.id, "A content")
-    cards.update_content(b.id, "B content")
+    cards.update_content(a.id, text_document("A content"))
+    cards.update_content(b.id, text_document("B content"))
     window = AppShell()
     qtbot.addWidget(window)
     controller = AppController(window, cards)
@@ -21,7 +22,8 @@ def make_controller(qtbot):
 def test_tree_open_request_opens_managed_card_editor(qtbot):
     controller, a, b = make_controller(qtbot)
     controller.window.tree_panel.request_open(
-        controller.window.tree_panel.tree_model.index_for_card(a.id))
+        controller.window.tree_panel.tree_model.index_for_node("card:" + a.id)
+    )
     dock = controller.window_manager.find_window(controller.card_editor_window_key(a.id))
     assert dock.widget() is controller.card_editors[a.id]
     assert dock.widget().card_id == a.id
@@ -41,7 +43,7 @@ def test_opening_another_card_creates_independent_document_and_same_id_reuses(qt
     assert first.widget().card_id == a.id
     assert second.widget().card_id == b.id
     first.widget().text_edit.insertPlainText("Edited ")
-    assert controller.cards.get(a.id).content == "Edited A content"
+    assert html_text(controller.cards.get(a.id).content).strip() == "Edited A content"
     assert second.widget().text_edit.toPlainText() == "B content"
     assert controller.open_card_editor(a.id) is first
     assert len(controller.card_editors) == 2
@@ -83,14 +85,16 @@ def test_close_reopen_preserves_document_undo_redo_and_cursor(qtbot):
     assert editor.text_edit.textCursor().position() == 5
     assert editor.text_edit.textCursor().anchor() == 2
     editor.text_edit.undo()
-    assert controller.cards.get(a.id).content == "A content"
+    assert html_text(controller.cards.get(a.id).content).strip() == "A content"
     editor.text_edit.redo()
-    assert controller.cards.get(a.id).content == "A content changed"
+    assert html_text(controller.cards.get(a.id).content).strip() == "A content changed"
 
 
 def test_close_reopen_preserves_scroll(qtbot):
     controller, a, b = make_controller(qtbot)
-    controller.session.update_card(a.id, content="\n".join(str(i) for i in range(500)))
+    controller.session.update_card(
+        a.id, content=text_document("\n".join(str(i) for i in range(500)))
+    )
     dock = controller.open_card_editor(a.id)
     qtbot.wait(20)
     bar = dock.widget().text_edit.verticalScrollBar()
@@ -111,7 +115,7 @@ def test_rename_updates_document_title_without_touching_undo(qtbot):
     controller.rename_card(a.id, "New title")
     assert dock.windowTitle() == "New title"
     dock.widget().text_edit.undo()
-    assert controller.cards.get(a.id).content == "A content"
+    assert html_text(controller.cards.get(a.id).content).strip() == "A content"
 
 
 def test_subtree_delete_closes_only_deleted_documents_and_drops_their_state(qtbot):
@@ -127,14 +131,16 @@ def test_subtree_delete_closes_only_deleted_documents_and_drops_their_state(qtbo
     assert survivor.text_edit.toPlainText() == "Keep B content"
     assert controller.session.current_card_id == b.id
     survivor.text_edit.undo()
-    assert controller.cards.get(b.id).content == "B content"
+    assert html_text(controller.cards.get(b.id).content).strip() == "B content"
 
 
 def test_failed_window_open_disposes_binding_and_can_retry(qtbot, monkeypatch):
     controller, a, b = make_controller(qtbot)
     original = controller.window.workspace.add_document
+
     def fail(*args):
         raise RuntimeError("Simulated placement failure")
+
     monkeypatch.setattr(controller.window.workspace, "add_document", fail)
     with pytest.raises(RuntimeError, match="placement failure"):
         controller.open_card_editor(a.id)
@@ -149,8 +155,8 @@ def test_external_content_update_while_closed_is_kept_on_reopen(qtbot):
     controller, a, b = make_controller(qtbot)
     controller.open_card_editor(a.id).close()
     qtbot.wait(10)
-    controller.session.update_card(a.id, content="External")
+    controller.session.update_card(a.id, content=text_document("External"))
     dock = controller.open_card_editor(a.id)
     assert dock.widget().text_edit.toPlainText() == "External"
     dock.widget().text_edit.undo()
-    assert controller.cards.get(a.id).content == "A content"
+    assert html_text(controller.cards.get(a.id).content).strip() == "A content"

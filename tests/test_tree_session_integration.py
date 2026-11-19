@@ -2,6 +2,7 @@ from lodandsy.application.app_controller import AppController
 from lodandsy.application.card_editor_binding import (
     CardEditorBinding,
 )
+from lodandsy.application.rich_html import text_document
 from lodandsy.domain.card_collection import CardCollection
 from lodandsy.ui.app_shell import AppShell
 from lodandsy.ui.card_editor import CardEditorWidget
@@ -29,7 +30,7 @@ def test_tree_selection_updates_session(
 
     model = window.tree_panel.tree_model
 
-    world_index = model.index_for_card(world.id)
+    world_index = model.index_for_node("card:" + world.id)
 
     city_index = model.index(
         0,
@@ -82,7 +83,7 @@ def test_tree_can_switch_session_selection(
 
     model = window.tree_panel.tree_model
 
-    world_index = model.index_for_card(world.id)
+    world_index = model.index_for_node("card:" + world.id)
 
     city_index = model.index(
         0,
@@ -115,13 +116,13 @@ def test_tree_selection_updates_editor_and_inspector(
     cards = CardCollection()
 
     world = cards.create("World")
-    world = cards.update(world.id, content="# World")
+    world = cards.update(world.id, content=text_document("# World"))
 
     city = cards.create(
         "City",
         parent_id=world.id,
     )
-    city = cards.update(city.id, content="# City")
+    city = cards.update(city.id, content=text_document("# City"))
 
     window = AppShell()
     qtbot.addWidget(window)
@@ -142,7 +143,7 @@ def test_tree_selection_updates_editor_and_inspector(
 
     model = window.tree_panel.tree_model
 
-    world_index = model.index_for_card(world.id)
+    world_index = model.index_for_node("card:" + world.id)
 
     city_index = model.index(
         0,
@@ -186,7 +187,7 @@ def test_deleting_selected_card_clears_session_and_views(
         "City",
         parent_id=world.id,
     )
-    city = cards.update(city.id, content="# City")
+    city = cards.update(city.id, content=text_document("# City"))
 
     window = AppShell()
     qtbot.addWidget(window)
@@ -207,7 +208,7 @@ def test_deleting_selected_card_clears_session_and_views(
 
     model = window.tree_panel.tree_model
 
-    world_index = model.index_for_card(world.id)
+    world_index = model.index_for_node("card:" + world.id)
 
     city_index = model.index(
         0,

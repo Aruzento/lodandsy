@@ -1,5 +1,6 @@
 import pytest
 
+from lodandsy.application.rich_html import text_document
 from lodandsy.domain.card_collection import CardCollection
 
 
@@ -114,7 +115,7 @@ def test_reparent_rejects_unknown_parent() -> None:
 
     with pytest.raises(
         ValueError,
-        match="Unknown card id",
+        match="Unknown entity id",
     ):
         cards.reparent(
             card.id,
@@ -203,8 +204,8 @@ def test_update_content() -> None:
 
     cards.update_content(
         card.id,
-        "# Heading\n\nSome text",
+        text_document("# Heading\n\nSome text"),
     )
 
-    assert cards.get(card.id).content == "# Heading\n\nSome text"
+    assert cards.get(card.id).content == text_document("# Heading\n\nSome text")
     

@@ -1,14 +1,17 @@
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import QDialog, QLabel, QLineEdit, QListWidget, QVBoxLayout
 
+from lodandsy.application.rich_html import html_text
+
 
 class CardSearchDialog(QDialog):
     card_open_requested = Signal(str)
+    entity_open_requested = Signal(str, str)
 
     def __init__(self, session, parent=None):
         super().__init__(parent)
         self.session = session
-        self.setWindowTitle("Найти карточку")
+        self.setWindowTitle("Найти документ")
         self.resize(520, 420)
         self.query = QLineEdit(self)
         self.query.setPlaceholderText("Заголовок или содержимое…")
@@ -24,8 +27,14 @@ class CardSearchDialog(QDialog):
         self._timer.timeout.connect(self.refresh)
         self.query.textChanged.connect(lambda _text: self._timer.start())
         self.results.itemActivated.connect(self._open)
-        for signal in [session.card_created, session.card_changed, session.cards_deleted,
-                       session.cards_replaced]:
+        for signal in [
+            session.card_created,
+            session.card_changed,
+            session.cards_deleted,
+            session.cards_replaced,
+            session.entity_changed,
+            session.entities_replaced,
+        ]:
             signal.connect(self._schedule)
         self.refresh()
 
@@ -35,21 +44,37 @@ class CardSearchDialog(QDialog):
     def refresh(self):
         needle = self.query.text().strip().casefold()
         self.results.clear()
-        for card in self.session.cards.all():
-            if (needle and needle not in card.title.casefold()
-                    and needle not in card.content.casefold()):
+        for card in self.session.entities.summaries():
+            payload = self.session.entities.payload(card.id)
+            content = (
+                getattr(payload, "content", "")
+                or " ".join(
+                    str(value)
+                    for row in getattr(payload, "rows", ())
+                    for _, value in row.cells
+                    if value is not None
+                )
+                or " ".join(
+                    p.name + " " + p.config.expression() for p in getattr(payload, "presets", ())
+                )
+            )
+            if card.kind == "card":
+                content = html_text(content)
+            if needle and needle not in card.title.casefold() and needle not in content.casefold():
                 continue
             self.results.addItem(card.title)
             item = self.results.item(self.results.count() - 1)
             item.setData(Qt.ItemDataRole.UserRole, card.id)
-            item.setToolTip(card.content[:200])
+            item.setToolTip(content[:200])
         self.count.setText(f"Найдено: {self.results.count()}")
 
     def _open(self, item):
         card_id = item.data(Qt.ItemDataRole.UserRole)
         try:
-            self.session.cards.get(card_id)
+            entity = self.session.entities.get(card_id)
         except ValueError:
             self.refresh()
             return
-        self.card_open_requested.emit(card_id)
+        self.entity_open_requested.emit(entity.kind, card_id)
+        if entity.kind == "card":
+            self.card_open_requested.emit(card_id)

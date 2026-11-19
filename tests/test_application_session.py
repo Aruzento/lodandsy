@@ -83,7 +83,7 @@ def test_selecting_unknown_card_is_rejected() -> None:
 
     with pytest.raises(
         ValueError,
-        match="Unknown card id",
+        match="Unknown entity id",
     ):
         session.select_card(
             "missing-card"

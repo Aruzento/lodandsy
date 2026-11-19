@@ -6,9 +6,11 @@ from PySide6.QtCore import QMimeData, Qt, QUrl
 from PySide6.QtGui import QImage, QTextDocument
 
 from lodandsy.application.card_images import read_card_image
+from lodandsy.application.rich_html import html_text, sanitize_html
 from lodandsy.application.sqlite_project_store import SQLiteProjectStore
-from lodandsy.ui.card_editor import MarkdownBrowser
-from lodandsy.ui.markdown_source_edit import MarkdownSourceEdit
+from lodandsy.domain.card import EMPTY_DOCUMENT
+from lodandsy.ui.card_editor import RichTextEdit
+from lodandsy.ui.rich_document import RichDocument
 
 pytest_plugins = ["tests.project_fixture"]
 
@@ -40,9 +42,9 @@ def test_insert_deduplicate_undo_save_move_and_backup(project, qtbot, tmp_path):
     app.card_images.insert(editor, path, "Место [1]")
     qtbot.waitUntil(lambda: not app.card_images.importing)
     content = app.cards.get(card.id).content
-    assert content.startswith(r"![Место \[1\]](assets/") and len(project.assets) == 1
+    assert "<img" in content and "assets/" in content and len(project.assets) == 1
     editor.text_edit.undo()
-    assert app.cards.get(card.id).content == ""
+    assert html_text(app.cards.get(card.id).content).strip() == ""
     assert len(project.assets) == 1
     editor.text_edit.redo()
     app.card_images.insert(editor, path, "Again")
@@ -77,36 +79,37 @@ def test_import_can_finish_after_editor_closed_but_not_deleted(project, qtbot, t
     assert len(project.assets) == 1
 
 
-def test_production_preview_async_fit_missing_corrupt_and_source(project, qtbot, tmp_path):
+def test_document_images_async_fit_missing_corrupt_and_content(project, qtbot, tmp_path):
     app, project = project
     project.create_project(tmp_path / "world")
     card = app.create_card("Card")
     asset = project.store.import_asset(image_file(tmp_path / "wide.png", 2400, 800))
     project.assets[asset.id] = asset
-    source = f"![alt]({asset.path})\n\n![no](https://example.com/x.png)"
+    source = sanitize_html(f'<p><img src="{asset.path}" alt="wide"></p>')[0]
     app.session.update_card(card.id, content=source)
     editor = app.open_card_editor(card.id).widget()
     editor.resize(420, 400)
-    editor.mode_combo.setCurrentIndex(1)
-    qtbot.waitUntil(lambda: editor.preview._images.get(asset.path) is not None)
-    document = editor.preview.document()
-    block = document.begin()
-    fmt = block.begin().fragment().charFormat().toImageFormat()
-    assert fmt.width() <= editor.preview.viewport().width()
-    assert "Удалённое изображение заблокировано" in editor.preview.toPlainText()
+    document = editor.text_edit.document()
+    document.image(asset.path)
+    qtbot.waitUntil(lambda: document.images.get(asset.path) is not None)
+    fmt = document.begin().begin().fragment().charFormat()
+    size = document._image_handler.intrinsicSize(document, 0, fmt)
+    assert size.width() <= max(40, document.textWidth())
     assert app.cards.get(card.id).content == source
-    (project.store.root / asset.path).write_bytes(b"corrupt")
-    editor.render_preview()
-    qtbot.waitUntil(lambda: not app.card_images._pending)
-    editor.render_preview()
-    assert "Изображение недоступно" in editor.preview.toPlainText()
-    (project.store.root / asset.path).unlink()
-    editor.render_preview()
-    assert "Изображение недоступно" in editor.preview.toPlainText()
+    assert project.save_current()
+    root = project.store.root
+    (root / asset.path).write_bytes(b"corrupt")
+    project.create_project(tmp_path / "other", preserve_current=False)
+    project.open_project(root)
+    document = app.open_card_editor(card.id).widget().text_edit.document()
+    document.image(asset.path)
+    qtbot.waitUntil(lambda: document.images.get(asset.path) is not None)
+    assert document.images[asset.path].isNull()
+    assert app.cards.get(card.id).content == source
 
 
 def test_paste_and_drop_image_share_import_signal_plain_text_stays_plain(qtbot, tmp_path):
-    edit = MarkdownSourceEdit()
+    edit = RichTextEdit()
     qtbot.addWidget(edit)
     mime = QMimeData()
     mime.setUrls([QUrl.fromLocalFile(str(image_file(tmp_path / "a.png")))])
@@ -131,15 +134,17 @@ def test_pending_preview_requests_respect_document_memory_budget(project, qtbot,
     assets = [project.store.import_asset(source) for _ in range(8)]
     project.assets.update((asset.id, asset) for asset in assets)
     card = app.create_card("Many pictures")
-    app.session.update_card(card.id, content="\n\n".join(
-        f"![image]({asset.path})" for asset in assets))
+    app.session.update_card(card.id, content=sanitize_html("".join(
+        f'<p><img src="{asset.path}"></p>' for asset in assets))[0])
     editor = app.open_card_editor(card.id).widget()
-    editor.mode_combo.setCurrentIndex(1)
+    document = editor.text_edit.document()
+    for asset in assets:
+        document.image(asset.path)
     assert len(app.card_images._pending) <= 2
     qtbot.waitUntil(lambda: not app.card_images._pending)
     qtbot.wait(250)
     assert len(app.card_images._cache) == 2
-    assert sum(image.sizeInBytes() for image in editor.preview._images.values()
+    assert sum(image.sizeInBytes() for image in document.images.values()
                if image is not None) <= 8 * 1024**2
 
 
@@ -151,11 +156,10 @@ def test_symlink_image_cannot_escape_assets(qtbot, tmp_path):
         link.symlink_to(outside)
     except OSError:
         pytest.skip("Windows account cannot create symlinks")
-    browser = MarkdownBrowser()
-    qtbot.addWidget(browser)
-    browser.project_root = tmp_path
-    browser.render_markdown("![no](assets/link.png)")
-    image = browser.document().resource(QTextDocument.ResourceType.ImageResource,
+    document = RichDocument(EMPTY_DOCUMENT)
+    document.configure_resources(tmp_path, lambda *a: pytest.fail("Escaped resource read"))
+    assert document.image("assets/link.png").isNull()
+    image = document.resource(QTextDocument.ResourceType.ImageResource,
                                        QUrl("assets/link.png"))
     assert image.width() == 1
 
@@ -170,11 +174,10 @@ def test_windows_junction_cannot_escape_assets_or_cache(qtbot, tmp_path):
     outside.mkdir()
     image_file(outside / "secret.png")
     native.CreateJunction(str(outside), str(root / "assets/link"))
-    browser = MarkdownBrowser()
-    qtbot.addWidget(browser)
-    browser.project_root = root
-    browser.render_markdown("![no](assets/link/secret.png)")
-    image = browser.document().resource(QTextDocument.ResourceType.ImageResource,
+    document = RichDocument(EMPTY_DOCUMENT)
+    document.configure_resources(root, lambda *a: pytest.fail("Escaped resource read"))
+    assert document.image("assets/link/secret.png").isNull()
+    image = document.resource(QTextDocument.ResourceType.ImageResource,
                                        QUrl("assets/link/secret.png"))
     assert image.width() == 1
     native.CreateJunction(str(outside), str(root / ".lodandsy-cache"))

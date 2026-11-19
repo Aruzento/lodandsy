@@ -1,4 +1,4 @@
-"""Bounded raster decoding and immutable asset publication for Markdown cards."""
+"""Bounded raster decoding and immutable asset publication for visual documents."""
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
@@ -9,7 +9,7 @@ from PySide6.QtCore import QEventLoop, QObject, QSize, Qt, Signal
 from PySide6.QtGui import QImage, QImageReader, QTextCursor
 from PySide6.QtWidgets import QFileDialog, QInputDialog
 
-from lodandsy.application.markdown_links import escape_markdown_label, resolve_asset_image
+from lodandsy.application.resource_paths import resolve_asset_image
 
 MAX_PIXELS = 32_000_000
 MAX_BYTES = 64 * 1024**2
@@ -128,7 +128,7 @@ class CardImages(QObject):
         return self.preview(root, name)
 
     def request(self, editor, source=None):
-        if self.importing or editor.mode_combo.currentIndex() == 1:
+        if self.importing or editor.text_edit.isReadOnly():
             return
         project = getattr(self.app, "project_controller", None)
         if project is None:
@@ -162,9 +162,11 @@ class CardImages(QObject):
             if not any(item.id == card_id for item in self.app.cards.all()):
                 return False
             cursor.beginEditBlock()
-            cursor.insertText(f"![{escape_markdown_label(alt)}]({asset.path})")
+            editor.insert_asset(cursor, asset.path, alt)
             cursor.endEditBlock()
-            self.app.session.update_card(card_id, content=cursor.document().toPlainText())
+            from lodandsy.application.rich_text_codec import serialize_document
+
+            self.app.session.update_card(card_id, content=serialize_document(cursor.document()))
             return True
         self.import_image(source, publish)
 
@@ -210,6 +212,34 @@ class CardImages(QObject):
                 self.finished.emit()
                 self.app.window.statusBar().clearMessage()
         self._submit(operation, complete)
+
+    def portrait(self, editor, source=None):
+        from dataclasses import replace
+
+        from lodandsy.domain.card import Portrait
+
+        project = self.app.project_controller
+        if self.importing or editor.card_id is None:
+            return
+        if project.store is None and not project.save_current():
+            return
+        key = editor.card_id
+        if source is None:
+            name, _ = QFileDialog.getOpenFileName(editor, "Портрет", "",
+                "Изображения (*.png *.jpg *.jpeg *.webp *.bmp *.gif)")
+            if not name:
+                return
+            source = Path(name)
+        def publish(asset, error):
+            if error:
+                self.app.window.show_notice(error)
+                return False
+            if not any(card.id == key for card in self.app.cards.all()):
+                return False
+            previous = self.app.cards.get(key).portrait or Portrait()
+            self.app.session.update_card(key, portrait=replace(previous, asset_id=asset.id))
+            return True
+        self.import_image(source, publish)
 
     def wait_import(self):
         if self.importing:

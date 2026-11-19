@@ -1,7 +1,8 @@
 from PySide6.QtWidgets import QMessageBox
 
 from lodandsy.domain.card import Card
-from lodandsy.ui.card_tree_model import CARD_ID_ROLE
+from lodandsy.domain.document_payloads import project_entities
+from lodandsy.ui.project_tree_model import NODE_ID_ROLE
 from lodandsy.ui.tree_panel import TreePanel
 
 
@@ -19,25 +20,25 @@ def test_tree_shows_card_hierarchy(qtbot) -> None:
     panel = TreePanel()
     qtbot.addWidget(panel)
 
-    panel.set_cards([city, world, kingdom])
+    panel.set_entities(project_entities([city, world, kingdom]).summaries())
 
     model = panel.tree_model
 
-    world_index = panel.tree_model.index_for_card(world.id)
+    world_index = panel.tree_model.index_for_node("card:" + world.id)
     kingdom_index = model.index(0, 0, world_index)
     city_index = model.index(0, 0, kingdom_index)
 
-    assert model.rowCount() == 4
-    assert model.rowCount(model.section_index("card")) == 1
+    assert model.rowCount() == 1
+    assert model.rowCount() == 1
 
     assert world_index.data() == "World"
-    assert world_index.data(CARD_ID_ROLE) == world.id
+    assert world_index.data(NODE_ID_ROLE) == world.id
 
     assert kingdom_index.data() == "Kingdom"
-    assert kingdom_index.data(CARD_ID_ROLE) == kingdom.id
+    assert kingdom_index.data(NODE_ID_ROLE) == kingdom.id
 
     assert city_index.data() == "City"
-    assert city_index.data(CARD_ID_ROLE) == city.id
+    assert city_index.data(NODE_ID_ROLE) == city.id
 
 
 def test_tree_emits_selected_card_id(qtbot) -> None:
@@ -51,18 +52,18 @@ def test_tree_emits_selected_card_id(qtbot) -> None:
     qtbot.addWidget(panel)
     panel.show()
 
-    panel.set_cards([world, city])
+    panel.set_entities(project_entities([world, city]).summaries())
 
-    world_index = panel.tree_model.index_for_card(world.id)
+    world_index = panel.tree_model.index_for_node("card:" + world.id)
     city_index = panel.tree_model.index(0, 0, world_index)
 
     with qtbot.waitSignal(
-        panel.card_selected,
+        panel.entity_selected,
         timeout=1000,
     ) as signal:
         panel.tree_view.setCurrentIndex(city_index)
 
-    assert signal.args == [city.id]
+    assert signal.args == ["card", city.id]
 
 
 def test_tree_emits_open_request(qtbot) -> None:
@@ -71,17 +72,17 @@ def test_tree_emits_open_request(qtbot) -> None:
     panel = TreePanel()
     qtbot.addWidget(panel)
 
-    panel.set_cards([card])
+    panel.set_entities(project_entities([card]).summaries())
 
-    card_index = panel.tree_model.index_for_card(card.id)
+    card_index = panel.tree_model.index_for_node("card:" + card.id)
 
     with qtbot.waitSignal(
-        panel.card_open_requested,
+        panel.entity_open_requested,
         timeout=1000,
     ) as signal:
         panel.tree_view.doubleClicked.emit(card_index)
 
-    assert signal.args == [card.id]
+    assert signal.args == ["card", card.id]
 
 
 def test_parent_card_can_be_deleted(
@@ -98,12 +99,12 @@ def test_parent_card_can_be_deleted(
     panel = TreePanel()
     qtbot.addWidget(panel)
 
-    panel.set_cards([
+    panel.set_entities(project_entities([
         world,
         city,
-    ])
+    ]).summaries())
 
-    world_index = panel.tree_model.index_for_card(world.id)
+    world_index = panel.tree_model.index_for_node("card:" + world.id)
 
     monkeypatch.setattr(
         QMessageBox,

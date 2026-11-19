@@ -181,7 +181,7 @@ def test_inspector_changes_refresh_tree(
 
     model = window.tree_panel.tree_model
 
-    world_index = model.index_for_card(world.id)
+    world_index = model.index_for_node("card:" + world.id)
 
     city_index = model.index(
         0,
@@ -210,4 +210,4 @@ def test_inspector_changes_refresh_tree(
 
     assert cards.get(city.id).parent_id is None
 
-    assert model.rowCount(model.section_index("card")) == 2
+    assert model.rowCount() == 2

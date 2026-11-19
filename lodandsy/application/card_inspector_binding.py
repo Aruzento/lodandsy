@@ -18,9 +18,10 @@ class CardInspectorBinding:
             self._on_parent_changed
         )
 
-        self.session.current_card_changed.connect(
+        self.session.current_entity_changed.connect(
             self._on_current_card_changed
         )
+        self.session.entity_changed.connect(self._on_card_changed)
         self.session.card_created.connect(self._on_structure_changed)
         self.session.cards_deleted.connect(self._on_structure_changed)
         self.session.card_changed.connect(self._on_card_changed)
@@ -29,7 +30,7 @@ class CardInspectorBinding:
         self.refresh()
 
     def refresh(self) -> None:
-        card = self.session.current_card
+        card = self.session.current_entity
 
         if card is None:
             self.inspector.clear_card()
@@ -55,24 +56,24 @@ class CardInspectorBinding:
         card_id: str,
         title: str,
     ) -> None:
-        if card_id != self.session.current_card_id:
+        if card_id != self.session.current_entity_id:
             return
 
-        self.session.update_card(card_id, title=title)
+        self.session.update_entity(card_id, title=title)
 
     def _on_parent_changed(
         self,
         card_id: str,
         parent_id: object,
     ) -> None:
-        if card_id != self.session.current_card_id:
+        if card_id != self.session.current_entity_id:
             return
 
         resolved_parent_id = self._optional_card_id(
             parent_id
         )
 
-        self.session.update_card(card_id, parent_id=resolved_parent_id)
+        self.session.update_entity(card_id, parent_id=resolved_parent_id)
 
     def _on_structure_changed(self, _ids: object) -> None:
         self.refresh()
@@ -87,14 +88,14 @@ class CardInspectorBinding:
     ) -> list[tuple[str | None, str]]:
         blocked_ids = {
             card_id,
-            *self.session.cards.descendant_ids(card_id),
+            *self.session.entities.descendant_ids(card_id),
         }
 
         options: list[tuple[str | None, str]] = [
-            (None, "Root")
+            (None, "Корень проекта")
         ]
 
-        for card in self.session.cards.all():
+        for card in self.session.entities.summaries():
             if card.id in blocked_ids:
                 continue
 

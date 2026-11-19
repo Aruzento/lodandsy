@@ -2,8 +2,9 @@ from PySide6.QtCore import QPoint
 from PySide6.QtGui import QContextMenuEvent
 
 from lodandsy.domain.card import Card
-from lodandsy.ui.card_tree_model import CardTreeModel
+from lodandsy.domain.document_payloads import project_entities
 from lodandsy.ui.card_tree_view import CardTreeView
+from lodandsy.ui.project_tree_model import ProjectTreeModel
 
 
 def test_context_menu_event_emits_clicked_index(
@@ -11,8 +12,8 @@ def test_context_menu_event_emits_clicked_index(
 ) -> None:
     card = Card(title="World")
 
-    model = CardTreeModel()
-    model.set_cards([card])
+    model = ProjectTreeModel()
+    model.set_entities(project_entities([card]).summaries())
 
     view = CardTreeView()
     qtbot.addWidget(view)

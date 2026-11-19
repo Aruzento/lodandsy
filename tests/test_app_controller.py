@@ -1,7 +1,7 @@
 from lodandsy.application.app_controller import AppController
 from lodandsy.domain.card_collection import CardCollection
 from lodandsy.ui.app_shell import AppShell
-from lodandsy.ui.card_tree_model import CARD_ID_ROLE
+from lodandsy.ui.project_tree_model import NODE_ID_ROLE
 
 
 def test_reparent_request_updates_data_and_tree(
@@ -41,7 +41,7 @@ def test_reparent_request_updates_data_and_tree(
 
     model = window.tree_panel.tree_model
 
-    world_index = model.index_for_card(world.id)
+    world_index = model.index_for_node("card:" + world.id)
 
     kingdom_index = model.index(
         0,
@@ -56,7 +56,7 @@ def test_reparent_request_updates_data_and_tree(
     )
 
     assert (
-        city_index.data(CARD_ID_ROLE)
+        city_index.data(NODE_ID_ROLE)
         == city.id
     )
 
@@ -101,7 +101,7 @@ def test_tree_commands_update_collection_and_tree(
 
     model = window.tree_panel.tree_model
 
-    world_index = model.index_for_card(world.id)
+    world_index = model.index_for_node("card:" + world.id)
     city_index = model.index(
         0,
         0,
@@ -110,7 +110,7 @@ def test_tree_commands_update_collection_and_tree(
 
     assert city_index.data() == "City"
     assert (
-        city_index.data(CARD_ID_ROLE)
+        city_index.data(NODE_ID_ROLE)
         == city.id
     )
 
@@ -121,7 +121,7 @@ def test_tree_commands_update_collection_and_tree(
 
     assert cards.get(city.id).title == "Capital"
 
-    world_index = model.index_for_card(world.id)
+    world_index = model.index_for_node("card:" + world.id)
     city_index = model.index(
         0,
         0,
@@ -136,7 +136,7 @@ def test_tree_commands_update_collection_and_tree(
 
     assert cards.all() == (world,)
 
-    world_index = model.index_for_card(world.id)
+    world_index = model.index_for_node("card:" + world.id)
 
     assert model.rowCount(world_index) == 0
     assert controller.cards is cards

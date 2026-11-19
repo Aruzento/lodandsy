@@ -3,6 +3,7 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from lodandsy.application.rich_html import text_document
 from lodandsy.domain.card import Card
 from lodandsy.domain.card_collection import CardCollection
 
@@ -12,7 +13,7 @@ def test_loaded_collection_rejects_duplicates_missing_parent_and_cycles():
     card = Card("A", id=first_id)
     with pytest.raises(ValueError, match="unique"):
         CardCollection([card, card])
-    with pytest.raises(ValueError, match="Unknown card"):
+    with pytest.raises(ValueError, match="Unknown entity"):
         CardCollection([Card("A", parent_id=second_id)])
     with pytest.raises(ValueError, match="cycle"):
         CardCollection([
@@ -27,12 +28,12 @@ def test_collection_exposes_only_immutable_snapshots():
     for card in [original, cards.get(original.id), *cards.all()]:
         with pytest.raises(FrozenInstanceError):
             card.parent_id = str(uuid4())
-    updated = cards.update(original.id, title="B", content="Text")
+    updated = cards.update(original.id, title="B", content=text_document("Text"))
     assert original.title == "A"
     assert cards.get(original.id) is updated
     assert updated.id == original.id
     assert updated.title == "B"
-    assert updated.content == "Text"
+    assert updated.content == text_document("Text")
 
 
 def test_rejected_updates_leave_payload_and_child_index_unchanged():
@@ -77,7 +78,7 @@ def test_deep_loaded_tree_traversal_and_delete_do_not_scan_or_recurse():
         def values(self):
             pytest.fail("Subtree operations must use the child index")
 
-    cards._cards = NoFullScan(cards._cards)
+    cards.entities._entities = NoFullScan(cards.entities._entities)
     assert cards.descendant_ids(ids[0]) == tuple(ids[1:])
     assert cards.delete(ids[0]) == tuple(ids)
     assert cards.child_ids(None) == ()

@@ -19,7 +19,7 @@ def test_project_roundtrip_separates_selection_active_document_and_ui(project, t
     second = controller.create_card("Second")
     editor = controller.open_card_editor(first.id).widget()
     controller.open_card_editor(second.id)
-    editor.mode_combo.setCurrentIndex(2)
+    editor.format_toolbar.scale.setValue(150)
     controller.session.select_card(first.id)
     assert project.save_current()
     revision = project.store.load().revision
@@ -31,7 +31,7 @@ def test_project_roundtrip_separates_selection_active_document_and_ui(project, t
     assert set(controller.card_editors) == {first.id, second.id}
     assert controller.session.current_card_id == first.id
     assert controller.window_manager.active_window_key == f"card-editor:{second.id}"
-    assert controller.card_editors[first.id].mode_combo.currentIndex() == 2
+    assert controller.card_editors[first.id].format_toolbar.scale.value() == 150
     assert project.store.load().revision == revision
     assert not project.saver.dirty
 

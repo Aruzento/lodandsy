@@ -1,3 +1,5 @@
+> Superseded: ADR-014/015. Только визуальный документ и entity/UUID; legacy/migration/archive отменены владельцем. Ниже историческое решение.
+
 # ADR-010 — встроенные Markdown templates
 
 19.11.2026, ARU-74. Card остаётся универсальным документом. Реестр domain

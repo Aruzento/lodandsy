@@ -13,32 +13,45 @@ UI_STATE_NAME = ".lodandsy-ui.json"
 def capture_workspace(controller):
     panel = controller.window.tree_panel
     current_ids = {card.id for card in controller.cards.all()}
-    states = {key: values for key, values in controller.saved_card_preferences.items()
-              if key in current_ids}
+    states = {
+        key: values
+        for key, values in controller.saved_card_preferences.items()
+        if key in current_ids
+    }
     for card_id, editor in controller.card_editors.items():
         state = controller.card_document_states[card_id]
         state.capture(editor)
     for card_id, state in controller.card_document_states.items():
         states[card_id] = state.ui_values()
-    cameras = {key: camera for key, camera in controller.modules._map_ui.items()
-               if key in controller.modules.session.maps}
+    cameras = {
+        key: camera
+        for key, camera in controller.modules._map_ui.items()
+        if key in controller.modules.session.maps
+    }
     for key in controller.window_manager.window_keys():
         if key.startswith("map:"):
             camera = controller.window_manager.find_window(key).widget().camera_state()
             if camera is not None:
                 cameras[key[4:]] = camera
+    tables = {key: value for key,value in controller.modules._table_ui.items()
+              if key in controller.modules.session.tables}
+    for key in controller.window_manager.window_keys():
+        if key.startswith("table:"):
+            tables[key[6:]] = controller.window_manager.find_window(key).widget().ui_state()
     return {
-        "version": 1,
+        "version": 3,
         "documents": list(controller.window_manager.window_keys()),
         "active": controller.window_manager.active_window_key,
-        "selected": controller.session.current_card_id,
+        "entity_selected": controller.session.current_entity_id,
         "navigator_selected": controller.window.tree_panel.current_node_key(),
         "navigator_expanded": panel.expanded_keys(),
         "navigator_scroll": panel.tree_view.verticalScrollBar().value(),
-        "expanded": [key for key in panel.tree_model.card_ids()
-                     if panel.tree_view.isExpanded(panel.tree_model.index_for_card(key))],
         "cards": states,
         "maps": cameras,
+        "tables": tables,
+        "dice_selected": {key: value.get("selected")
+                          for key,value in controller.modules._dice_runtime.items()
+                          if key in controller.modules.session.dice},
         "geometry": base64.b64encode(bytes(controller.window.saveGeometry())).decode("ascii"),
         "chrome": base64.b64encode(bytes(controller.window.saveState(1))).decode("ascii"),
         "layout": base64.b64encode(bytes(controller.window.workspace.saveState(1))).decode("ascii"),
@@ -46,7 +59,7 @@ def capture_workspace(controller):
 
 
 def restore_workspace(controller, data):
-    if not isinstance(data, dict) or data.get("version") != 1:
+    if not isinstance(data, dict) or data.get("version") != 3:
         raise ValueError("Неподдерживаемая версия раскладки")
     documents = data.get("documents")
     if not isinstance(documents, list) or not all(isinstance(key, str) for key in documents):
@@ -71,18 +84,43 @@ def restore_workspace(controller, data):
     controller.window.workspace.ensure_visible()
     cameras = data.get("maps", {})
     if isinstance(cameras, dict):
-        controller.modules._map_ui.update({key: camera for key, camera in cameras.items()
-            if key in controller.modules.session.maps and isinstance(camera, dict)})
+        controller.modules._map_ui.update(
+            {
+                key: camera
+                for key, camera in cameras.items()
+                if key in controller.modules.session.maps and isinstance(camera, dict)
+            }
+        )
         for key, camera in cameras.items():
             window = controller.window_manager.find_window(f"map:{key}")
             if window and isinstance(camera, dict):
                 window.widget().restore_camera_state(camera)
+    tables = data.get("tables", {})
+    if isinstance(tables, dict):
+        controller.modules._table_ui.update(
+            {
+                key: value
+                for key, value in tables.items()
+                if key in controller.modules.session.tables and isinstance(value, dict)
+            }
+        )
+        for key, value in tables.items():
+            window = controller.window_manager.find_window(f"table:{key}")
+            if window:
+                window.widget().restore_ui(value)
+    selected_dice = data.get("dice_selected", {})
+    if isinstance(selected_dice, dict):
+        for key,selected in selected_dice.items():
+            window = controller.window_manager.find_window(f"dice:{key}")
+            if window and isinstance(selected,str):
+                window.widget().select_preset(selected)
     saved = data.get("cards", {})
     if not isinstance(saved, dict):
         raise ValueError("Повреждён список настроек карточек")
     ids = {card.id for card in controller.cards.all()}
-    controller.saved_card_preferences = {key: values for key, values in saved.items()
-                                         if key in ids and isinstance(values, dict)}
+    controller.saved_card_preferences = {
+        key: values for key, values in saved.items() if key in ids and isinstance(values, dict)
+    }
     for card_id, editor in controller.card_editors.items():
         values = controller.saved_card_preferences.get(card_id)
         if values is not None:
@@ -90,26 +128,16 @@ def restore_workspace(controller, data):
             state.load_ui_values(values)
             state.restore(editor)
     panel = controller.window.tree_panel
-    expanded = data.get("expanded", [])
-    panel.tree_view.collapseAll()
-    if isinstance(expanded, list):
-        for key in expanded:
-            if isinstance(key, str):
-                panel.tree_view.setExpanded(panel.tree_model.index_for_card(key), True)
     navigator_expanded = data.get("navigator_expanded")
     if isinstance(navigator_expanded, list):
         panel.tree_view.collapseAll()
         for key in navigator_expanded:
             if isinstance(key, str):
                 panel.tree_view.setExpanded(panel.tree_model.index_for_node(key), True)
-    else:
-        # Old UI files only know Card IDs; their new section must remain reachable.
-        for kind in ("card", "map", "table"):
-            panel.tree_view.setExpanded(panel.tree_model.section_index(kind), True)
-    selected = data.get("selected")
+    selected = data.get("entity_selected")
     if isinstance(selected, str):
         try:
-            controller.session.select_card(selected)
+            controller.session.select_entity(selected)
         except ValueError:
             controller.session.clear_selection()
     else:

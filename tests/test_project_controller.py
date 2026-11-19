@@ -4,6 +4,7 @@ from PySide6.QtWidgets import QMessageBox
 
 from lodandsy.application.app_controller import AppController
 from lodandsy.application.project_controller import ProjectController
+from lodandsy.application.rich_html import html_text
 from lodandsy.application.save_coordinator import SaveState
 from lodandsy.application.sqlite_project_store import ProjectError, SQLiteProjectStore
 from lodandsy.ui.app_shell import AppShell
@@ -42,7 +43,9 @@ def test_create_edit_autosave_and_reopen_restores_real_views(project, tmp_path, 
     assert controller.card_editors == {}
     project.open_project(folder)
     assert controller.cards.all() == before.cards
-    assert controller.window.tree_panel.tree_model.index_for_card(child.id).data() == "Город"
+    assert (
+        controller.window.tree_panel.tree_model.index_for_node("card:" + child.id).data() == "Город"
+    )
     reopened_editor = controller.open_card_editor(child.id).widget()
     assert reopened_editor.text_edit.toPlainText() == "# Город\n\nИстория"
 
@@ -55,7 +58,7 @@ def test_ctrl_s_action_uses_same_pipeline_and_safe_close_releases_lock(project, 
     assert project.save_action.shortcut() == QKeySequence(QKeySequence.StandardKey.Save)
     project.save_action.trigger()
     assert not project.saver.dirty
-    assert project.store.load().cards[0].content == "Saved"
+    assert html_text(project.store.load().cards[0].content).strip() == "Saved"
     assert project.can_close()
     reopened = SQLiteProjectStore.open(tmp_path / "world")
     reopened.close()
@@ -67,8 +70,10 @@ def test_failed_write_is_visible_retry_works_and_close_can_be_cancelled(
     controller, project = project
     project.create_project(tmp_path / "world")
     persist = project.store.save
+
     def fail(snapshot):
         raise OSError("disk full")
+
     project.saver._persist = fail
     controller.create_card("Unwritten")
     assert not project.save_current()

@@ -12,13 +12,18 @@ from functools import wraps
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
+from lodandsy.application.card_payload_codec import decode_card, encode_card
+from lodandsy.application.dice_payload_codec import decode_dice, encode_dice
 from lodandsy.domain.card import Card, validate_card_id
 from lodandsy.domain.card_collection import CardCollection
-from lodandsy.domain.map_document import MapDocument, MapGrid, MapPin, MapToken
-from lodandsy.domain.tools import RandomTable
+from lodandsy.domain.dice_document import DiceDocument
+from lodandsy.domain.document_payloads import project_entities
+from lodandsy.domain.entity import Entity
+from lodandsy.domain.map_document import MapDocument, MapGrid, MapToken
+from lodandsy.domain.table_document import ColumnDefinition, RandomTable, RowRecord
 
 DATABASE_NAME = "project.sqlite3"
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 10
 MAX_BACKUP_BYTES = 4 * 1024**3
 
 
@@ -38,11 +43,19 @@ class AssetRecord:
         if not isinstance(self.path, str) or "\0" in self.path:
             raise ProjectError("Invalid asset path")
         parts = PurePosixPath(self.path).parts
-        if (len(parts) != 2 or parts[0] != "assets" or "\\" in self.path
-                or ":" in self.path or ".." in parts):
+        if (
+            len(parts) != 2
+            or parts[0] != "assets"
+            or "\\" in self.path
+            or ":" in self.path
+            or ".." in parts
+        ):
             raise ProjectError("Asset path must be relative to assets/")
-        if (not isinstance(self.sha256, str) or len(self.sha256) != 64
-                or any(c not in "0123456789abcdef" for c in self.sha256)):
+        if (
+            not isinstance(self.sha256, str)
+            or len(self.sha256) != 64
+            or any(c not in "0123456789abcdef" for c in self.sha256)
+        ):
             raise ProjectError("Invalid asset checksum")
         if type(self.size) is not int or self.size < 0:
             raise ProjectError("Invalid asset size")
@@ -55,6 +68,15 @@ class ProjectSnapshot:
     assets: tuple[AssetRecord, ...] = ()
     maps: tuple[MapDocument, ...] = ()
     tables: tuple[RandomTable, ...] = ()
+    dice: tuple[DiceDocument, ...] = ()
+    entities: tuple[Entity, ...] = ()
+
+    def entity_collection(self):
+        return project_entities(self.cards, self.maps, self.tables, self.dice, self.entities)
+
+    def __post_init__(self):
+        if not self.entities:
+            object.__setattr__(self, "entities", self.entity_collection().summaries())
 
 
 class ProjectLock:
@@ -84,8 +106,9 @@ class ProjectLock:
 
 
 def connect_database(path: Path, *, readonly=False):
-    connection = sqlite3.connect(path.as_uri() + ("?mode=ro" if readonly else "?mode=rw"),
-                                 uri=True, timeout=5)
+    connection = sqlite3.connect(
+        path.as_uri() + ("?mode=ro" if readonly else "?mode=rw"), uri=True, timeout=5
+    )
     connection.execute("PRAGMA foreign_keys=ON")
     connection.execute("PRAGMA trusted_schema=OFF")
     return connection
@@ -100,6 +123,7 @@ def project_operation(operation):
                 return operation(self, *args, **kwargs)
             except sqlite3.Error as error:
                 raise ProjectError(f"Project {operation.__name__} failed: {error}") from error
+
     return guarded
 
 
@@ -132,8 +156,7 @@ class SQLiteProjectStore:
                 connection.execute(
                     "CREATE TABLE entity(id TEXT PRIMARY KEY, kind TEXT NOT NULL, "
                     "title TEXT NOT NULL, parent_id TEXT REFERENCES entity(id) "
-                    "DEFERRABLE INITIALLY DEFERRED, position INTEGER NOT NULL CHECK(position>=0), "
-                    "payload_version INTEGER NOT NULL, content TEXT NOT NULL)"
+                    "DEFERRABLE INITIALLY DEFERRED, position INTEGER NOT NULL CHECK(position>=0))"
                 )
                 connection.execute(
                     "CREATE TABLE asset(id TEXT PRIMARY KEY, path TEXT UNIQUE NOT NULL, "
@@ -142,8 +165,42 @@ class SQLiteProjectStore:
                 connection.execute(
                     "CREATE INDEX entity_parent_position ON entity(parent_id,position)"
                 )
-                cls._upgrade_v2(connection)
-                cls._upgrade_v3(connection)
+                connection.execute(
+                    "CREATE TABLE card_content(id TEXT PRIMARY KEY "
+                    "REFERENCES entity(id) ON DELETE CASCADE, "
+                    "payload_version INTEGER NOT NULL, content TEXT NOT NULL)"
+                )
+                connection.execute(
+                    "CREATE TABLE map_document(id TEXT PRIMARY KEY "
+                    "REFERENCES entity(id) ON DELETE CASCADE, asset_id TEXT NOT NULL "
+                    "REFERENCES asset(id) DEFERRABLE INITIALLY DEFERRED, "
+                    "payload_version INTEGER NOT NULL, "
+                    "tokens TEXT NOT NULL, grid TEXT NOT NULL)"
+                )
+                connection.execute(
+                    "CREATE TABLE table_document(id TEXT PRIMARY KEY "
+                    "REFERENCES entity(id) ON DELETE CASCADE, "
+                    "payload_version INTEGER NOT NULL)"
+                )
+                connection.executescript("""
+                    CREATE TABLE table_column(
+                      id TEXT PRIMARY KEY, table_id TEXT NOT NULL REFERENCES table_document(id),
+                      name TEXT NOT NULL, data_type TEXT NOT NULL, position INTEGER NOT NULL,
+                      UNIQUE(table_id,id), UNIQUE(table_id,position));
+                    CREATE TABLE table_row(
+                      id TEXT PRIMARY KEY, table_id TEXT NOT NULL REFERENCES table_document(id),
+                      position INTEGER NOT NULL, UNIQUE(table_id,id), UNIQUE(table_id,position));
+                    CREATE TABLE table_cell(
+                      table_id TEXT NOT NULL, row_id TEXT NOT NULL, column_id TEXT NOT NULL,
+                      value TEXT NOT NULL, PRIMARY KEY(table_id,row_id,column_id),
+                      FOREIGN KEY(table_id,row_id) REFERENCES table_row(table_id,id),
+                      FOREIGN KEY(table_id,column_id) REFERENCES table_column(table_id,id));
+                """)
+                connection.execute(
+                    "CREATE TABLE dice_document(id TEXT PRIMARY KEY "
+                    "REFERENCES entity(id) ON DELETE CASCADE, "
+                    "payload_version INTEGER NOT NULL, presets TEXT NOT NULL)"
+                )
                 connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             (root / "assets").mkdir()
         except sqlite3.Error as error:
@@ -162,9 +219,6 @@ class SQLiteProjectStore:
         store = cls(root, ProjectLock(root))
         try:
             store.load()
-            if store._loaded_version < SCHEMA_VERSION:
-                store._migrate()
-                store.load()
         except Exception:
             store.close()
             raise
@@ -180,9 +234,8 @@ class SQLiteProjectStore:
         try:
             with closing(connect_database(self.path, readonly=True)) as connection:
                 version = connection.execute("PRAGMA user_version").fetchone()[0]
-                if version not in {1, 2, 3, SCHEMA_VERSION}:
+                if version != SCHEMA_VERSION:
                     raise ProjectError(f"Unsupported project schema version: {version}")
-                self._loaded_version = version
                 if connection.execute("PRAGMA quick_check").fetchone() != ("ok",):
                     raise ProjectError("Project database is damaged; restore a backup")
                 if connection.execute("PRAGMA foreign_key_check").fetchall():
@@ -190,89 +243,118 @@ class SQLiteProjectStore:
                 metadata = connection.execute("SELECT revision FROM metadata").fetchall()
                 if len(metadata) != 1 or type(metadata[0][0]) is not int or metadata[0][0] < 0:
                     raise ProjectError("Invalid project metadata")
-                rows = connection.execute(
-                    "SELECT id,kind,title,parent_id,position,payload_version,content "
-                    "FROM entity ORDER BY position,id"
-                ).fetchall()
-                cards, positions = [], {}
-                for card_id, kind, title, parent_id, position, payload_version, content in rows:
-                    if kind != "card" or payload_version != 1:
-                        raise ProjectError(
-                            f"Unsupported entity kind/version: {kind}/{payload_version}"
-                        )
-                    expected = positions.get(parent_id, 0)
-                    if type(position) is not int or position != expected:
-                        raise ProjectError("Invalid sibling positions")
-                    positions[parent_id] = expected + 1
-                    cards.append(Card(title, card_id, parent_id, content))
-                ordered_cards = CardCollection(cards).all()
-                assets = tuple(AssetRecord(*row) for row in connection.execute(
-                    "SELECT id,path,sha256,size FROM asset ORDER BY id"
-                ))
-                maps, tables = (), ()
-                if version >= 3:
-                    maps, tables = self._load_modules(connection)
+                assets = tuple(
+                    AssetRecord(*row)
+                    for row in connection.execute(
+                        "SELECT id,path,sha256,size FROM asset ORDER BY id"
+                    )
+                )
+                envelopes = tuple(
+                    Entity(*row)
+                    for row in connection.execute(
+                        "SELECT id,kind,title,parent_id,position FROM entity ORDER BY position,id"
+                    )
+                )
+                cards = tuple(
+                    decode_card(title, key, parent, payload_version, content)
+                    for key, title, parent, payload_version, content in connection.execute(
+                        "SELECT e.id,e.title,e.parent_id,c.payload_version,c.content "
+                        "FROM entity e JOIN card_content c ON e.id=c.id WHERE e.kind='card'"
+                    )
+                )
+                dice = tuple(
+                    decode_dice(title, key, payload_version, presets)
+                    for key, title, payload_version, presets in connection.execute(
+                        "SELECT e.id,e.title,d.payload_version,d.presets "
+                        "FROM entity e JOIN dice_document d ON e.id=d.id WHERE e.kind='dice'"
+                    )
+                    if self._require_version(payload_version, 2, "Dice")
+                )
+                maps, tables = self._load_modules(connection)
+                snapshot = ProjectSnapshot(
+                    tuple(cards), metadata[0][0], assets, maps, tables, dice, envelopes
+                )
+                collection = snapshot.entity_collection()
+                ordered_cards = CardCollection(entities=collection).all()
                 self._validate_modules(ordered_cards, assets, maps, tables)
-                return ProjectSnapshot(ordered_cards, metadata[0][0], assets, maps, tables)
+                expected = {
+                    "card": "card_content",
+                    "map": "map_document",
+                    "table": "table_document",
+                    "dice": "dice_document",
+                }
+                for kind, table in expected.items():
+                    ids = {row[0] for row in connection.execute(f"SELECT id FROM {table}")}
+                    if ids != {e.id for e in envelopes if e.kind == kind}:
+                        raise ProjectError("Entity payload inventory mismatch")
+                return ProjectSnapshot(
+                    ordered_cards,
+                    metadata[0][0],
+                    assets,
+                    maps,
+                    tables,
+                    dice,
+                    collection.summaries(),
+                )
         except sqlite3.Error as error:
+            raise ProjectError(f"Cannot read project: {error}") from error
+        except ValueError as error:
+            if isinstance(error, ProjectError):
+                raise
             raise ProjectError(f"Cannot read project: {error}") from error
 
     @staticmethod
-    def _upgrade_v1(connection):
-        connection.execute("CREATE INDEX entity_parent_position ON entity(parent_id,position)")
-        connection.execute("PRAGMA user_version=2")
-
-    @staticmethod
-    def _upgrade_v2(connection):
-        connection.execute(
-            "CREATE TABLE map_document(id TEXT PRIMARY KEY, title TEXT NOT NULL, "
-            "asset_id TEXT NOT NULL REFERENCES asset(id), payload_version INTEGER NOT NULL, "
-            "pins TEXT NOT NULL)"
-        )
-        connection.execute(
-            "CREATE TABLE random_table(id TEXT PRIMARY KEY, title TEXT NOT NULL, "
-            "payload_version INTEGER NOT NULL, rows TEXT NOT NULL)"
-        )
-        connection.execute("PRAGMA user_version=3")
-
-    @staticmethod
-    def _upgrade_v3(connection):
-        connection.execute("ALTER TABLE map_document ADD COLUMN tokens TEXT NOT NULL DEFAULT '[]'")
-        connection.execute("ALTER TABLE map_document ADD COLUMN grid TEXT NOT NULL DEFAULT '{}'")
-        connection.execute("UPDATE map_document SET payload_version=2")
-        connection.execute("PRAGMA user_version=4")
+    def _require_version(actual, expected, kind):
+        if actual != expected:
+            raise ProjectError(f"Unsupported {kind} payload version: {actual}")
+        return True
 
     @staticmethod
     def _load_modules(connection):
         maps, tables = [], []
         try:
-            schema = connection.execute("PRAGMA user_version").fetchone()[0]
-            fields = ",tokens,grid" if schema >= 4 else ", '[]', '{}'"
-            for key, title, asset, version, payload, tokens_payload, grid_payload in (
-                connection.execute("SELECT id,title,asset_id,payload_version,pins" + fields
-                                   + " FROM map_document ORDER BY rowid")
+            for key, title, asset, version, tokens, grid in connection.execute(
+                "SELECT m.id,e.title,m.asset_id,m.payload_version,m.tokens,m.grid "
+                "FROM map_document m JOIN entity e ON e.id=m.id ORDER BY e.position,e.id"
             ):
-                if version != (2 if schema >= 4 else 1):
-                    raise ProjectError(f"Unsupported Map payload version: {version}")
-                pins = json.loads(payload)
-                if not isinstance(pins, list):
-                    raise ValueError("Invalid markers")
-                tokens = json.loads(tokens_payload)
-                grid = json.loads(grid_payload)
+                SQLiteProjectStore._require_version(version, 3, "Map")
+                tokens, grid = json.loads(tokens), json.loads(grid)
                 if not isinstance(tokens, list) or not isinstance(grid, dict):
-                    raise ValueError("Invalid tokens/grid")
-                maps.append(MapDocument(title, asset, key, tuple(MapPin(**pin) for pin in pins),
-                                        tuple(MapToken(**token) for token in tokens),
-                                        MapGrid(**grid)))
-            for key, title, version, payload in connection.execute(
-                "SELECT id,title,payload_version,rows FROM random_table ORDER BY rowid"
+                    raise ValueError("Invalid map payload")
+                maps.append(
+                    MapDocument(
+                        title,
+                        asset,
+                        key,
+                        tuple(MapToken(**token) for token in tokens),
+                        MapGrid(**grid),
+                    )
+                )
+            columns, rows, cells = {}, {}, {}
+            for key, table_id, name, data_type, position in connection.execute(
+                "SELECT id,table_id,name,data_type,position FROM table_column ORDER BY position"
             ):
-                if version != 1:
-                    raise ProjectError(f"Unsupported Tools payload version: {version}")
-                rows = json.loads(payload)
-                if not isinstance(rows, list):
-                    raise ValueError("Invalid table rows")
-                tables.append(RandomTable(title, key, tuple(rows)))
+                columns.setdefault(table_id, []).append(
+                    ColumnDefinition(name, data_type, position, key)
+                )
+            for table_id, row_id, column_id, value in connection.execute(
+                "SELECT table_id,row_id,column_id,value FROM table_cell ORDER BY column_id"
+            ):
+                cells.setdefault((table_id, row_id), []).append((column_id, json.loads(value)))
+            for key, table_id, position in connection.execute(
+                "SELECT id,table_id,position FROM table_row ORDER BY position"
+            ):
+                rows.setdefault(table_id, []).append(
+                    RowRecord(position, tuple(cells.get((table_id, key), ())), key)
+                )
+            for key, title, version in connection.execute(
+                "SELECT t.id,e.title,t.payload_version FROM table_document t "
+                "JOIN entity e ON e.id=t.id ORDER BY e.position,e.id"
+            ):
+                SQLiteProjectStore._require_version(version, 2, "Table")
+                tables.append(
+                    RandomTable(title, key, tuple(columns.get(key, ())), tuple(rows.get(key, ())))
+                )
         except (TypeError, KeyError, ValueError) as error:
             raise ProjectError(f"Cannot read module data: {error}") from error
         return tuple(maps), tuple(tables)
@@ -286,38 +368,11 @@ class SQLiteProjectStore:
         if any(document.asset_id not in asset_ids for document in maps):
             raise ProjectError("Map refers to an unregistered asset")
 
-    def _migrate(self):
-        # Migrations only change the DB; immutable assets are untouched.
-        # Keep a consistent database backup before the first schema-changing statement.
-        folder = self.root / "backups"
-        folder.mkdir(exist_ok=True)
-        if not folder.resolve().is_relative_to(self.root):
-            raise ProjectError("Migration backup directory is outside the project")
-        version = self._loaded_version
-        backup_path = folder / f"schema-v{version}-{uuid4().hex}.sqlite3"
-        with backup_path.open("xb"):
-            pass
-        with closing(connect_database(self.path, readonly=True)) as source:
-            with closing(sqlite3.connect(backup_path)) as backup:
-                backup.execute("PRAGMA foreign_keys=ON")
-                source.backup(backup)
-        try:
-            with closing(connect_database(self.path)) as connection, connection:
-                connection.execute("BEGIN IMMEDIATE")
-                if connection.execute("PRAGMA user_version").fetchone()[0] != version:
-                    raise ProjectError("Schema changed before migration; refusing to continue")
-                if version == 1:
-                    self._upgrade_v1(connection)
-                if version <= 2:
-                    self._upgrade_v2(connection)
-                self._upgrade_v3(connection)
-        except sqlite3.Error as error:
-            raise ProjectError(f"Migration failed; original schema retained: {error}") from error
-
     @project_operation
     def save(self, snapshot: ProjectSnapshot):
         self._check_open()
-        cards = CardCollection(snapshot.cards).all()
+        collection = snapshot.entity_collection()
+        cards = CardCollection(entities=collection).all()
         if type(snapshot.revision) is not int or snapshot.revision < 0:
             raise ProjectError("Invalid snapshot revision")
         assets = {asset.id: asset for asset in snapshot.assets}
@@ -329,52 +384,90 @@ class SQLiteProjectStore:
             connection.execute("BEGIN IMMEDIATE")
             if connection.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
                 raise ProjectError("Project schema changed; save refused")
-            if connection.execute(
-                "SELECT 1 FROM entity WHERE kind!='card' OR payload_version!=1 LIMIT 1"
-            ).fetchone():
-                raise ProjectError("Unsupported entity; save refused without changing data")
+            # Refuse to overwrite unsupported/corrupt existing data, including payload inventory.
+            self.load()
             current = connection.execute("SELECT revision FROM metadata").fetchone()[0]
             if snapshot.revision <= current:
                 raise ProjectError("Stale revision cannot overwrite a newer project")
             # Validate existing module versions before replacing any canonical payload.
             self._load_modules(connection)
-            existing_assets = {row[0]: AssetRecord(*row) for row in connection.execute(
-                "SELECT id,path,sha256,size FROM asset"
-            )}
+            existing_assets = {
+                row[0]: AssetRecord(*row)
+                for row in connection.execute("SELECT id,path,sha256,size FROM asset")
+            }
             for asset in snapshot.assets:
                 if existing_assets.get(asset.id) != asset:
                     self._verify_asset(asset)
+            encoded_cards = [(c.id, *encode_card(c)) for c in cards]
+            for table in (
+                "table_cell",
+                "table_row",
+                "table_column",
+                "card_content",
+                "map_document",
+                "table_document",
+                "dice_document",
+            ):
+                connection.execute(f"DELETE FROM {table}")
             connection.execute("DELETE FROM entity")
-            counts = {}
-            records = []
-            for card in cards:
-                position = counts.get(card.parent_id, 0)
-                counts[card.parent_id] = position + 1
-                records.append(
-                    (card.id, "card", card.title, card.parent_id, position, 1, card.content)
-                )
-            connection.executemany("INSERT INTO entity VALUES(?,?,?,?,?,?,?)", records)
-            connection.execute("DELETE FROM map_document")
-            connection.execute("DELETE FROM random_table")
             connection.execute("DELETE FROM asset")
-            connection.executemany("INSERT INTO asset VALUES(?,?,?,?)", [
-                (a.id, a.path, a.sha256, a.size) for a in snapshot.assets
-            ])
-            connection.executemany("INSERT INTO map_document VALUES(?,?,?,?,?,?,?)", [
-                (m.id, m.title, m.asset_id, 2,
-                 json.dumps([asdict(pin) for pin in m.pins], ensure_ascii=False),
-                 json.dumps([asdict(token) for token in m.tokens], ensure_ascii=False),
-                 json.dumps(asdict(m.grid)))
-                for m in snapshot.maps
-            ])
-            connection.executemany("INSERT INTO random_table VALUES(?,?,?,?)", [
-                (t.id, t.title, 1, json.dumps(t.rows, ensure_ascii=False)) for t in snapshot.tables
-            ])
+            connection.executemany(
+                "INSERT INTO asset VALUES(?,?,?,?)",
+                [(a.id, a.path, a.sha256, a.size) for a in snapshot.assets],
+            )
+            connection.executemany(
+                "INSERT INTO entity VALUES(?,?,?,?,?)",
+                [(e.id, e.kind, e.title, e.parent_id, e.position) for e in collection.summaries()],
+            )
+            connection.executemany("INSERT INTO card_content VALUES(?,?,?)", encoded_cards)
+            connection.executemany(
+                "INSERT INTO map_document VALUES(?,?,?,?,?)",
+                [
+                    (
+                        m.id,
+                        m.asset_id,
+                        3,
+                        json.dumps([asdict(token) for token in m.tokens], ensure_ascii=False),
+                        json.dumps(asdict(m.grid)),
+                    )
+                    for m in snapshot.maps
+                ],
+            )
+            connection.executemany(
+                "INSERT INTO table_document VALUES(?,?)",
+                [(t.id, 2) for t in snapshot.tables],
+            )
+            connection.executemany(
+                "INSERT INTO table_column VALUES(?,?,?,?,?)",
+                [
+                    (c.id, t.id, c.name, c.data_type, c.position)
+                    for t in snapshot.tables
+                    for c in t.columns
+                ],
+            )
+            connection.executemany(
+                "INSERT INTO table_row VALUES(?,?,?)",
+                [(r.id, t.id, r.position) for t in snapshot.tables for r in t.rows],
+            )
+            connection.executemany(
+                "INSERT INTO table_cell VALUES(?,?,?,?)",
+                [
+                    (t.id, r.id, key, json.dumps(value, ensure_ascii=False))
+                    for t in snapshot.tables
+                    for r in t.rows
+                    for key, value in r.cells
+                ],
+            )
+            connection.executemany(
+                "INSERT INTO dice_document VALUES(?,?,?)",
+                [(d.id, 2, encode_dice(d)) for d in snapshot.dice],
+            )
             connection.execute("UPDATE metadata SET revision=?", (snapshot.revision,))
 
     @project_operation
-    def import_asset(self, source: Path, *, known_assets=(), max_bytes=None,
-                     cancelled=lambda: False) -> AssetRecord:
+    def import_asset(
+        self, source: Path, *, known_assets=(), max_bytes=None, cancelled=lambda: False
+    ) -> AssetRecord:
         self._check_open()
         source = Path(source)
         suffix = source.suffix.lower()
@@ -408,7 +501,7 @@ class SQLiteProjectStore:
                 if existing.sha256 == checksum.hexdigest() and existing.size == size:
                     try:
                         self._verify_asset(existing)
-                    except (OSError, ValueError):
+                    except OSError, ValueError:
                         continue
                     return existing
             os.replace(temporary, target)
@@ -443,9 +536,10 @@ class SQLiteProjectStore:
                 with closing(sqlite3.connect(database)) as backup:
                     backup.execute("PRAGMA foreign_keys=ON")
                     source.backup(backup)
-                    assets = tuple(AssetRecord(*row) for row in backup.execute(
-                        "SELECT id,path,sha256,size FROM asset"
-                    ))
+                    assets = tuple(
+                        AssetRecord(*row)
+                        for row in backup.execute("SELECT id,path,sha256,size FROM asset")
+                    )
             total = database.stat().st_size + sum(asset.size for asset in assets)
             if total > MAX_BACKUP_BYTES:
                 raise ProjectError("Backup exceeds the supported 4 GiB restore budget")
@@ -465,7 +559,7 @@ class SQLiteProjectStore:
                                     size += len(chunk)
                         if checksum.hexdigest() != asset.sha256 or size != asset.size:
                             raise ProjectError("Asset changed while creating backup")
-                    # Markdown may reference user-supplied files inside assets too.
+                    # Documents may reference user-supplied files inside assets too.
                     # Preserve them, including unreferenced imports; never discard bytes
                     # merely because a derivative/infrastructure record is absent.
                     asset_folder = self.root / "assets"
@@ -514,9 +608,14 @@ class SQLiteProjectStore:
                     allowed = entry.filename == DATABASE_NAME or (
                         len(parts) >= 2 and parts[0] == "assets"
                     )
-                    if (not allowed or ".." in parts or "\\" in entry.filename
-                            or ":" in entry.filename or entry.is_dir()
-                            or (entry.external_attr >> 16) & 0o170000 == 0o120000):
+                    if (
+                        not allowed
+                        or ".." in parts
+                        or "\\" in entry.filename
+                        or ":" in entry.filename
+                        or entry.is_dir()
+                        or (entry.external_attr >> 16) & 0o170000 == 0o120000
+                    ):
                         raise ProjectError("Unsafe backup entry")
                     target = staging / entry.filename
                     if not target.resolve().is_relative_to(staging):

@@ -101,7 +101,7 @@ def ensure_pyramid(project_root, asset, cancel=None, progress=lambda _percent: N
 
 
 def _ensure_pyramid(project_root, asset, cancel, progress):
-    from lodandsy.application.markdown_links import resolve_asset_image
+    from lodandsy.application.resource_paths import resolve_asset_image
 
     source = resolve_asset_image(Path(project_root), asset.path)
     if source is None:
@@ -233,12 +233,12 @@ def build_pyramid(source, target, stage, checksum, progress):
             if not size.isValid() or size.width() * size.height() > 16_000_000:
                 raise ValueError("Большие BMP/GIF: преобразуйте файл в PNG/JPEG/WebP")
             raster = reader.read()
-            if raster.isNull() or not raster.save(str(stage / "legacy.png"), "PNG"):
+            if raster.isNull() or not raster.save(str(stage / "bounded-raster.png"), "PNG"):
                 raise ValueError("Повреждённое изображение BMP/GIF")
         finally:
             if reader.device() is not None:
                 reader.device().close()
-        image = pyvips.Image.pngload(str(stage / "legacy.png"), access="sequential")
+        image = pyvips.Image.pngload(str(stage / "bounded-raster.png"), access="sequential")
     else:
         raise ValueError("Поддерживаются растровые PNG, JPEG, WebP, BMP и GIF")
     width, height = image.width, image.height
@@ -267,7 +267,7 @@ def build_pyramid(source, target, stage, checksum, progress):
     with source.open("rb") as stream:
         if hashlib.file_digest(stream, "sha256").hexdigest() != checksum:
             raise ValueError("Исходная карта изменилась во время обработки")
-    (stage / "legacy.png").unlink(missing_ok=True)
+    (stage / "bounded-raster.png").unlink(missing_ok=True)
     manifest = {"version": CACHE_VERSION, "sha256": checksum, "tile_size": TILE_SIZE,
                 "width": width, "height": height}
     with (stage / "manifest.json").open("x", encoding="utf-8") as stream:

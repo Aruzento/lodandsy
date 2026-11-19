@@ -1,4 +1,3 @@
-from collections.abc import Iterable
 
 from PySide6.QtCore import QItemSelectionModel, QModelIndex, QPoint, QSignalBlocker, Qt, Signal
 from PySide6.QtGui import QAction, QKeySequence, QShortcut
@@ -15,10 +14,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from lodandsy.domain.card import Card
-from lodandsy.domain.entity_summary import EntitySummary
 from lodandsy.ui.card_creation_dialog import CardCreationDialog
-from lodandsy.ui.card_tree_model import CARD_ID_ROLE
 from lodandsy.ui.card_tree_view import CardTreeView
 from lodandsy.ui.icons import icon
 from lodandsy.ui.navigator_actions import NavigatorActions
@@ -33,13 +29,11 @@ from lodandsy.ui.project_tree_model import (
 class TreePanel(QDockWidget):
     entity_selected = Signal(str, str)
     entity_open_requested = Signal(str, str)
-    module_create_requested = Signal(str)
+    module_create_requested = Signal(str, object)
     module_rename_requested = Signal(str, str)
     module_delete_requested = Signal(str, str)
     search_requested = Signal()
     move_parent_requested = Signal(str)
-    card_selected = Signal(str)
-    card_open_requested = Signal(str)
 
     create_requested = Signal(str, object)
     template_create_requested = Signal(str, object, str)
@@ -119,8 +113,8 @@ class TreePanel(QDockWidget):
         self.create_button.setMenu(self.create_menu)
         self.search_button = QToolButton(toolbar)
         self.search_button.setIcon(icon("search"))
-        self.search_button.setAccessibleName("Поиск карточек")
-        self.search_button.setToolTip("Поиск карточек (Ctrl+F)")
+        self.search_button.setAccessibleName("Поиск документов")
+        self.search_button.setToolTip("Поиск документов (Ctrl+F)")
         self.search_button.clicked.connect(self.search_requested)
         toolbar.addWidget(self.create_button)
         toolbar.addWidget(self.search_button)
@@ -139,22 +133,22 @@ class TreePanel(QDockWidget):
             key.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             key.activated.connect(callback)
 
-    def _creation_menu(self):
+    def _creation_menu(self, parent_id=None):
         menu = QMenu(self)
         for kind, title in [("card", "Карточка…"), ("map", "Карта из изображения…"),
-                            ("table", "Случайная таблица…")]:
+                            ("table", "Случайная таблица…"), ("dice", "Кубики…")]:
             action = menu.addAction(title)
             action.setObjectName(f"create-{kind}")
-            action.triggered.connect(lambda _checked=False, k=kind: self._create_kind(k))
+            action.triggered.connect(lambda _checked=False, k=kind: self._create_kind(k, parent_id))
         return menu
 
-    def _create_kind(self, kind):
+    def _create_kind(self, kind, parent_id=None):
         if kind == "map" and not self.map_creation_enabled:
             return
         if kind == "card":
-            self.request_create_root()
+            self._request_create(parent_id)
         else:
-            self.module_create_requested.emit(kind)
+            self.module_create_requested.emit(kind, parent_id)
 
     def show_creation_menu(self):
         self.create_menu.exec(self.create_button.mapToGlobal(self.create_button.rect().bottomLeft()))
@@ -174,17 +168,8 @@ class TreePanel(QDockWidget):
             if action.objectName() == "create-map":
                 action.setEnabled(enabled)
 
-    def set_cards(
-        self,
-        cards: Iterable[Card | EntitySummary],
-    ) -> None:
-        self._preserve_tree_state(lambda: self.tree_model.set_cards(cards))
-
-    def set_modules(self, maps, tables):
-        def update():
-            self.tree_model.set_module_entries("map", maps)
-            self.tree_model.set_module_entries("table", tables)
-        self._preserve_tree_state(update)
+    def set_entities(self, entities):
+        self._preserve_tree_state(lambda: self.tree_model.set_entities(entities))
 
     def current_node_key(self):
         return self.tree_view.currentIndex().data(NODE_KEY_ROLE)
@@ -197,20 +182,13 @@ class TreePanel(QDockWidget):
         selected = self.current_node_key()
         previous_selection = selected
         expanded = self.expanded_keys()
-        previous_counts = {kind: self.tree_model.rowCount(self.tree_model.section_index(kind))
-                           for kind in ("card", "map", "table")}
         scroll = self.tree_view.verticalScrollBar().value()
         blocker = QSignalBlocker(self.tree_view.selectionModel())
         update()
         for key in expanded:
             self.tree_view.setExpanded(self.tree_model.index_for_node(key), True)
-        for kind in ("card", "map", "table"):
-            if (previous_counts[kind] == 0
-                    and self.tree_model.rowCount(self.tree_model.section_index(kind)) > 0):
-                self.tree_view.setExpanded(self.tree_model.section_index(kind), True)
         if selected and not self.tree_model.index_for_node(selected).isValid():
-            kind = selected.split(":", 1)[0]
-            selected = f"section:{kind}" if kind in {"card", "map", "table"} else None
+            selected = None
         self.select_node(selected)
         self.tree_view.verticalScrollBar().setValue(scroll)
         del blocker
@@ -227,9 +205,6 @@ class TreePanel(QDockWidget):
         if hasattr(self, "inline_actions"):
             self.inline_actions.select_current()
 
-    def select_card(self, card_id: str | None) -> None:
-        self.select_node(f"card:{card_id}" if card_id is not None else None)
-
     def request_open(self, index=None):
         self._on_double_clicked(self._resolve_index(index))
 
@@ -242,9 +217,7 @@ class TreePanel(QDockWidget):
     ) -> None:
         target_index = self._resolve_index(index)
 
-        parent_id = self._card_id_from_index(
-            target_index
-        )
+        parent_id = target_index.data(NODE_ID_ROLE)
 
         if parent_id is None:
             return
@@ -258,15 +231,7 @@ class TreePanel(QDockWidget):
         index: QModelIndex | None = None,
     ) -> None:
         target_index = self._resolve_index(index)
-        if target_index.data(NODE_KIND_ROLE) in {"map", "table"}:
-            self.module_rename_requested.emit(target_index.data(NODE_KIND_ROLE),
-                                              target_index.data(NODE_ID_ROLE))
-            return
-
-        card_id = self._card_id_from_index(
-            target_index
-        )
-
+        card_id = target_index.data(NODE_ID_ROLE)
         if card_id is None:
             return
 
@@ -277,7 +242,7 @@ class TreePanel(QDockWidget):
 
         new_title, accepted = QInputDialog.getText(
             self,
-            "Переименовать карточку",
+            "Переименовать документ",
             "Название:",
             QLineEdit.EchoMode.Normal,
             current_title,
@@ -305,38 +270,27 @@ class TreePanel(QDockWidget):
     ) -> None:
         target_index = self._resolve_index(index)
 
-        if target_index.data(NODE_KIND_ROLE) in {"map", "table"}:
-            self.module_delete_requested.emit(target_index.data(NODE_KIND_ROLE),
-                                              target_index.data(NODE_ID_ROLE))
-            return
-
-        card_id = self._card_id_from_index(
-            target_index
-        )
-
+        card_id = target_index.data(NODE_ID_ROLE)
         if card_id is None:
             return
-
+        counts, pending = {}, [target_index]
+        while pending:
+            current = pending.pop()
+            kind = current.data(NODE_KIND_ROLE)
+            counts[kind] = counts.get(kind, 0) + 1
+            pending.extend(self.tree_model.index(row, 0, current)
+                           for row in range(self.tree_model.rowCount(current)))
+        labels = {"card": "карточек", "map": "карт", "table": "таблиц", "dice": "кубиков"}
+        details = ", ".join(f"{labels[kind]}: {count}" for kind, count in counts.items())
         title = target_index.data()
-
-        if not isinstance(title, str):
-            return
-
-        has_children = (
-            self.tree_model.rowCount(target_index) > 0
-        )
-
-        if has_children:
-            message = (
-                f'Удалить «{title}» и все вложенные карточки?\n\n'
-                "Будет удалено всё поддерево карточек."
-            )
-        else:
-            message = f'Удалить «{title}»?'
+        message = (f'Удалить «{title}» и вложенные документы?\n\n'
+                   f"Всего: {sum(counts.values())} ({details}).\n"
+                   "Окна удаляемых документов будут закрыты. "
+                   "Ссылки из других документов останутся.")
 
         answer = QMessageBox.question(
             self,
-            "Удаление карточки",
+            "Удаление документов",
             message,
             (
                 QMessageBox.StandardButton.Yes
@@ -387,7 +341,7 @@ class TreePanel(QDockWidget):
     def context_menu(self, index=None):
         index = self._resolve_index(index)
         key = index.data(NODE_KEY_ROLE)
-        kind, entity_id = index.data(NODE_KIND_ROLE), index.data(NODE_ID_ROLE)
+        entity_id = index.data(NODE_ID_ROLE)
         menu = QMenu(self)
         def command(name, title, callback):
             action = QAction(title, menu)
@@ -399,35 +353,29 @@ class TreePanel(QDockWidget):
             return self.tree_model.index_for_node(key)
         if not index.isValid():
             for k, title in [("card", "Создать карточку…"), ("map", "Создать карту…"),
-                             ("table", "Создать таблицу…")]:
+                             ("table", "Создать таблицу…"), ("dice", "Создать кубики…")]:
                 action = command(f"create-{k}", title,
                                  lambda _checked=False, k=k: self._create_kind(k))
                 action.setEnabled(k != "map" or self.map_creation_enabled)
-            command("dice", "Кубики", lambda: self.entity_open_requested.emit("dice", "dice"))
-        elif kind == "section":
-            action = command(f"create-{entity_id}", "Создать…",
-                             lambda: self._create_kind(entity_id))
-            action.setEnabled(entity_id != "map" or self.map_creation_enabled)
         else:
             command("open", "Открыть · Enter", lambda: self.request_open(current()))
-            if kind == "dice":
-                return menu
-            if kind == "card":
-                command("child", "Создать дочернюю карточку…",
-                        lambda: self.request_create_child(current()))
-                command("move-parent", "Переместить в…",
-                        lambda: self.move_parent_requested.emit(entity_id))
-                for direction, label in [(-1, "Выше"), (1, "Ниже")]:
-                    def move(_checked=False, d=direction):
-                        target = current()
-                        if target.isValid():
-                            self.move_requested.emit(entity_id, target.parent().data(CARD_ID_ROLE),
-                                                     target.row() + d)
-                    action = command(f"move-{direction}", label, move)
-                    action.setEnabled(0 <= index.row() + direction
-                                      < self.tree_model.rowCount(index.parent()))
-                command("copy-link", "Копировать ссылку на карточку",
-                        lambda: self.copy_link_requested.emit(entity_id))
+            child_menu = self._creation_menu(entity_id)
+            child_menu.setParent(menu)
+            child_menu.setTitle("Создать дочерний документ")
+            menu.addMenu(child_menu).setObjectName("child")
+            command("move-parent", "Переместить в…",
+                    lambda: self.move_parent_requested.emit(entity_id))
+            for direction, label in [(-1, "Выше"), (1, "Ниже")]:
+                def move(_checked=False, d=direction):
+                    target = current()
+                    if target.isValid():
+                        self.move_requested.emit(entity_id, target.parent().data(NODE_ID_ROLE),
+                                                 target.row() + d)
+                action = command(f"move-{direction}", label, move)
+                action.setEnabled(0 <= index.row() + direction
+                                  < self.tree_model.rowCount(index.parent()))
+            command("copy-link", "Копировать ссылку на документ",
+                    lambda: self.copy_link_requested.emit(entity_id))
             menu.addSeparator()
             command("rename", "Переименовать · F2", lambda: self.request_rename(current()))
             command("delete", "Удалить… · Delete", lambda: self.request_delete(current()))
@@ -438,29 +386,17 @@ class TreePanel(QDockWidget):
         current: QModelIndex,
         _previous: QModelIndex,
     ) -> None:
-        card_id = self._card_id_from_index(current)
-
         kind, entity_id = current.data(NODE_KIND_ROLE), current.data(NODE_ID_ROLE)
         if isinstance(kind, str) and isinstance(entity_id, str):
             self.entity_selected.emit(kind, entity_id)
-
-        if card_id is not None:
-            self.card_selected.emit(card_id)
 
     def _on_double_clicked(
         self,
         index: QModelIndex,
     ) -> None:
-        card_id = self._card_id_from_index(index)
-
         kind, entity_id = index.data(NODE_KIND_ROLE), index.data(NODE_ID_ROLE)
-        if kind == "section":
-            self.tree_view.setExpanded(index, not self.tree_view.isExpanded(index))
-        elif isinstance(kind, str) and isinstance(entity_id, str):
+        if isinstance(kind, str) and isinstance(entity_id, str):
             self.entity_open_requested.emit(kind, entity_id)
-
-        if card_id is not None:
-            self.card_open_requested.emit(card_id)
 
     def _resolve_index(
         self,
@@ -470,17 +406,3 @@ class TreePanel(QDockWidget):
             return index
 
         return self.tree_view.currentIndex()
-
-    @staticmethod
-    def _card_id_from_index(
-        index: QModelIndex,
-    ) -> str | None:
-        if not index.isValid():
-            return None
-
-        card_id = index.data(CARD_ID_ROLE)
-
-        if not isinstance(card_id, str):
-            return None
-
-        return card_id

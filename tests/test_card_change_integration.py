@@ -5,10 +5,11 @@ from PySide6.QtGui import QTextCursor
 
 from lodandsy.application.app_controller import AppController
 from lodandsy.application.card_editor_binding import CardEditorBinding
+from lodandsy.application.rich_html import html_text, text_document
 from lodandsy.domain.card_collection import CardCollection
 from lodandsy.ui.app_shell import AppShell
 from lodandsy.ui.card_editor import CardEditorWidget
-from lodandsy.ui.card_tree_model import CARD_ID_ROLE
+from lodandsy.ui.project_tree_model import NODE_ID_ROLE
 
 
 def make_controller(qtbot):
@@ -26,8 +27,8 @@ def test_tree_keeps_selection_and_collapsed_branches_after_all_commands(qtbot):
     controller, a, child, b = make_controller(qtbot)
     panel = controller.window.tree_panel
     model, view = panel.tree_model, panel.tree_view
-    view.collapse(model.index_for_card(b.id))
-    view.setCurrentIndex(model.index_for_card(child.id))
+    view.collapse(model.index_for_node("card:" + b.id))
+    view.setCurrentIndex(model.index_for_node("card:" + child.id))
     selection_events = []
     controller.session.current_card_changed.connect(selection_events.append)
     for operation in [
@@ -37,9 +38,9 @@ def test_tree_keeps_selection_and_collapsed_branches_after_all_commands(qtbot):
         lambda: controller.delete_card(a.id),
     ]:
         operation()
-        assert view.currentIndex().data(CARD_ID_ROLE) == child.id
+        assert view.currentIndex().data(NODE_ID_ROLE) == child.id
         assert controller.session.current_card_id == child.id
-        assert not view.isExpanded(model.index_for_card(b.id))
+        assert not view.isExpanded(model.index_for_node("card:" + b.id))
         assert controller.window.inspector_panel.id_edit.text() == child.id
     assert selection_events == []
     controller.delete_card(b.id)
@@ -57,14 +58,14 @@ def test_session_changes_update_views_once_and_skip_noops_and_failures(qtbot):
     binding = CardEditorBinding(session, editor, child.id)
     changes = []
     session.card_changed.connect(lambda *args: changes.append(args))
-    session.update_card(child.id, title="Renamed", parent_id=b.id, content="Text")
+    session.update_card(child.id, title="Renamed", parent_id=b.id, content=text_document("Text"))
     assert changes == [(child.id, frozenset({"title", "parent_id", "position", "content"}))]
     panel = controller.window.tree_panel
-    assert panel.tree_model.index_for_card(child.id).data() == "Renamed"
-    assert panel.tree_model.index_for_card(child.id).parent().data(CARD_ID_ROLE) == b.id
+    assert panel.tree_model.index_for_node("card:" + child.id).data() == "Renamed"
+    assert panel.tree_model.index_for_node("card:" + child.id).parent().data(NODE_ID_ROLE) == b.id
     assert editor.text_edit.toPlainText() == "Text"
     assert controller.window.inspector_panel.title_edit.text() == "Renamed"
-    session.update_card(child.id, title="Renamed", content="Text")
+    session.update_card(child.id, title="Renamed", content=text_document("Text"))
     with pytest.raises(ValueError):
         session.update_card(child.id, title="Bad", parent_id=str(uuid4()))
     assert len(changes) == 1
@@ -84,13 +85,13 @@ def test_two_views_synchronize_without_resetting_origin_undo_or_cursor(qtbot):
     resets = []
     controller.window.tree_panel.tree_model.modelReset.connect(lambda: resets.append(True))
     editors[0].text_edit.insertPlainText("Hello")
-    assert session.cards.get(child.id).content == "Hello"
+    assert html_text(session.cards.get(child.id).content).strip() == "Hello"
     assert editors[1].text_edit.toPlainText() == "Hello"
     assert editors[0].text_edit.textCursor().position() == 5
     assert editors[0].text_edit.document().isUndoAvailable()
     session.update_card(child.id, title="Renamed")
     editors[0].text_edit.undo()
-    assert session.cards.get(child.id).content == ""
+    assert html_text(session.cards.get(child.id).content).strip() == ""
     assert editors[1].text_edit.toPlainText() == ""
     assert resets == []
     bindings[1].dispose()

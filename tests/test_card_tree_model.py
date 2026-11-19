@@ -1,7 +1,8 @@
 from PySide6.QtCore import QModelIndex, Qt
 
 from lodandsy.domain.card import Card
-from lodandsy.ui.card_tree_model import CardTreeModel
+from lodandsy.domain.document_payloads import project_entities
+from lodandsy.ui.project_tree_model import ProjectTreeModel
 
 
 def test_drop_requests_reparent(qtbot) -> None:
@@ -16,8 +17,8 @@ def test_drop_requests_reparent(qtbot) -> None:
         parent_id=world.id,
     )
 
-    model = CardTreeModel()
-    model.set_cards([world, kingdom, city])
+    model = ProjectTreeModel()
+    model.set_entities(project_entities([world, kingdom, city]).summaries())
 
     world_index = model.index(0, 0)
     kingdom_index = model.index(
@@ -62,8 +63,8 @@ def test_drop_on_root_requests_root_parent(
         parent_id=world.id,
     )
 
-    model = CardTreeModel()
-    model.set_cards([world, city])
+    model = ProjectTreeModel()
+    model.set_entities(project_entities([world, city]).summaries())
 
     world_index = model.index(0, 0)
     city_index = model.index(
@@ -97,8 +98,8 @@ def test_drop_between_rows_requests_validated_move(qtbot) -> None:
     first = Card(title="First")
     second = Card(title="Second")
 
-    model = CardTreeModel()
-    model.set_cards([first, second])
+    model = ProjectTreeModel()
+    model.set_entities(project_entities([first, second]).summaries())
 
     first_index = model.index(0, 0)
     mime_data = model.mimeData([first_index])
@@ -123,8 +124,8 @@ def test_drop_into_descendant_is_rejected() -> None:
         parent_id=kingdom.id,
     )
 
-    model = CardTreeModel()
-    model.set_cards([world, kingdom, city])
+    model = ProjectTreeModel()
+    model.set_entities(project_entities([world, kingdom, city]).summaries())
 
     world_index = model.index(0, 0)
     kingdom_index = model.index(

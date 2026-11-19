@@ -1,5 +1,5 @@
 import pytest
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QModelIndex, Qt
 
 from lodandsy.application.app_controller import AppController
 from lodandsy.domain.card_collection import CardCollection
@@ -29,9 +29,9 @@ def test_real_tree_drop_reorders_domain_and_keeps_selection(qtbot):
     controller = AppController(window)
     a, b = controller.create_card("A"), controller.create_card("B")
     panel = window.tree_panel
-    panel.tree_view.setCurrentIndex(panel.tree_model.index_for_card(a.id))
-    mime = panel.tree_model.mimeData([panel.tree_model.index_for_card(a.id)])
-    section = panel.tree_model.section_index("card")
+    panel.tree_view.setCurrentIndex(panel.tree_model.index_for_node("card:" + a.id))
+    mime = panel.tree_model.mimeData([panel.tree_model.index_for_node("card:" + a.id)])
+    section = QModelIndex()
     assert panel.tree_model.dropMimeData(mime, Qt.DropAction.MoveAction, 2, 0, section)
     assert controller.cards.child_ids(None) == (b.id, a.id)
     assert panel.tree_model.index(0, 0, section).data() == "B"

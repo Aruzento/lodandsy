@@ -23,6 +23,7 @@ class CardEditorBinding:
         )
 
         self.session.card_changed.connect(self._on_card_changed)
+        self.editor.portrait_panel.changed.connect(self._on_portrait_changed)
         self.session.cards_deleted.connect(self._on_cards_deleted)
 
         self.refresh()
@@ -41,6 +42,7 @@ class CardEditorBinding:
             card.id,
             card.content,
         )
+        self.editor.portrait_panel.set_portrait(card.portrait)
 
     def dispose(self) -> None:
         if self._disposed:
@@ -54,6 +56,7 @@ class CardEditorBinding:
 
         self.session.card_changed.disconnect(self._on_card_changed)
         self.session.cards_deleted.disconnect(self._on_cards_deleted)
+        self.editor.portrait_panel.changed.disconnect(self._on_portrait_changed)
 
     def _on_cards_deleted(self, card_ids: tuple[str, ...]) -> None:
         if self.card_id in card_ids:
@@ -61,8 +64,12 @@ class CardEditorBinding:
             self.dispose()
 
     def _on_card_changed(self, card_id: str, fields: frozenset[str]) -> None:
-        if card_id == self.editor.card_id and "content" in fields:
+        if card_id == self.editor.card_id and fields & {"content", "portrait"}:
             self.refresh()
+
+    def _on_portrait_changed(self, portrait):
+        if not self._disposed:
+            self.session.update_card(self.card_id, portrait=portrait)
 
     def _on_content_changed(
         self,

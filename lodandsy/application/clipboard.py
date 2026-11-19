@@ -1,4 +1,4 @@
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QMimeData, QObject, QTimer, Signal
 from PySide6.QtWidgets import QApplication
 
 
@@ -15,13 +15,20 @@ class ClipboardWriter(QObject):
         self._text = ""
         self._remaining = 0
 
-    def copy(self, text):
+    def copy(self, text, *, html=None):
         self._timer.stop()
         self._text, self._remaining = text, 5
+        self._html = html
         self._attempt()
 
     def _attempt(self):
-        self.clipboard.setText(self._text)
+        if self._html is None:
+            self.clipboard.setText(self._text)
+        else:
+            data = QMimeData()
+            data.setText(self._text)
+            data.setHtml(self._html)
+            self.clipboard.setMimeData(data)
         if self.clipboard.text() == self._text:
             self.message.emit("Скопировано")
             return

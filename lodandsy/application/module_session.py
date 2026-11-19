@@ -5,8 +5,10 @@ from types import MappingProxyType
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QUndoCommand, QUndoStack
 
-from lodandsy.domain.map_document import MapDocument, MapPin, MapToken
-from lodandsy.domain.tools import RandomTable
+from lodandsy.domain.dice_document import DiceDocument
+from lodandsy.domain.document_payloads import module_document, module_payload, project_entities
+from lodandsy.domain.map_document import MapDocument, MapToken
+from lodandsy.domain.table_document import RandomTable
 
 
 class MapEdit(QUndoCommand):
@@ -26,36 +28,101 @@ class ModuleSession(QObject):
 
     map_changed = Signal(str)
     table_changed = Signal(str)
+    dice_changed = Signal(str)
+    dice_deleted = Signal(str)
     map_deleted = Signal(str)
     table_deleted = Signal(str)
     changed = Signal()
     replaced = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, entities=None, delete_handler=None):
         super().__init__(parent)
-        self._maps = {}
-        self._tables = {}
+        self.entities = entities if entities is not None else project_entities()
+        self.delete_handler = delete_handler
         self._undo = {}
+
+    def _documents(self, kind):
+        return MappingProxyType(
+            {
+                e.id: module_document(self.entities, e.id)
+                for e in self.entities.summaries()
+                if e.kind == kind
+            }
+        )
 
     @property
     def maps(self):
-        return MappingProxyType(self._maps)
+        return self._documents("map")
 
     @property
     def tables(self):
-        return MappingProxyType(self._tables)
+        return self._documents("table")
 
-    def reset(self, maps=(), tables=()):
+    @property
+    def dice(self):
+        return self._documents("dice")
+
+    def reset(self, maps=(), tables=(), dice=(), *, entities=None):
+        replacement = (
+            entities
+            if entities is not None
+            else project_entities(maps=maps, tables=tables, dice=dice)
+        )
         for stack in self._undo.values():
             stack.deleteLater()
         self._undo.clear()
-        maps, tables = tuple(maps), tuple(tables)
-        ids = [item.id for item in (*maps, *tables)]
-        if len(set(ids)) != len(ids):
-            raise ValueError("Duplicate module entity ID")
-        self._maps = {item.id: item for item in maps}
-        self._tables = {item.id: item for item in tables}
+        self.entities = replacement
         self.replaced.emit()
+
+    def _put(self, document):
+        self.entities.update(document.id, title=document.title)
+        self.entities.put_payload(document.id, module_payload(document))
+
+    def _get(self, key, kind):
+        if self.entities.get(key).kind != kind:
+            raise ValueError("Неподдерживаемый тип документа")
+        return module_document(self.entities, key)
+
+    def get_dice(self, key):
+        return self._get(key, "dice")
+
+    def create_dice(self, title, parent_id=None):
+        document = DiceDocument(title)
+        self.entities.create(
+            "dice", document.title, module_payload(document), parent_id, id=document.id
+        )
+        self.dice_changed.emit(document.id)
+        self.changed.emit()
+        return document
+
+    def edit_dice(self, key, **changes):
+        if changes.keys() - {"title", "presets"}:
+            raise ValueError("Неподдерживаемые поля кубиков")
+        before = self.get_dice(key)
+        after = replace(before, **changes)
+        if before != after:
+            self._put(after)
+            self.dice_changed.emit(key)
+            self.changed.emit()
+
+    def _delete(self, key):
+        if self.delete_handler is not None:
+            return self.delete_handler(key)
+        deleted = self.entities.delete(key)
+        self.notify_deleted(deleted)
+        return deleted
+
+    def notify_deleted(self, deleted):
+        for key in deleted:
+            stack = self._undo.pop(key, None)
+            if stack is not None:
+                stack.clear()
+                stack.deleteLater()
+            # Each listener closes only its own key. Payloads were removed atomically.
+            self.map_deleted.emit(key)
+            self.table_deleted.emit(key)
+            self.dice_deleted.emit(key)
+        self.changed.emit()
 
     def undo_stack(self, map_id):
         self.get_map(map_id)
@@ -65,77 +132,75 @@ class ModuleSession(QObject):
         return self._undo[map_id]
 
     def get_map(self, map_id):
-        if map_id not in self.maps:
-            raise ValueError("Карта отсутствует")
-        return self.maps[map_id]
+        return self._get(map_id, "map")
 
     def get_table(self, table_id):
-        if table_id not in self.tables:
-            raise ValueError("Таблица отсутствует")
-        return self.tables[table_id]
+        return self._get(table_id, "table")
 
     def _put_map(self, document):
-        self._maps[document.id] = document
+        self._put(document)
         self.map_changed.emit(document.id)
         self.changed.emit()
 
-    def create_map(self, title, asset_id):
+    def create_map(self, title, asset_id, parent_id=None):
         document = MapDocument(title, asset_id)
-        if document.id in self._maps or document.id in self._tables:
-            raise ValueError("Duplicate module entity ID")
-        self._put_map(document)
+        self.entities.create(
+            "map", document.title, module_payload(document), parent_id, id=document.id
+        )
+        self.map_changed.emit(document.id)
+        self.changed.emit()
         return document
 
     def edit_map(self, map_id, *, command="Изменить карту", **changes):
-        if changes.keys() - {"title", "pins", "tokens", "grid"}:
+        if changes.keys() - {"title", "tokens", "grid"}:
             raise ValueError("Изменять ID или источник карты этой командой нельзя")
         before = self.get_map(map_id)
         after = replace(before, **changes)
         if before != after:
             self.undo_stack(map_id).push(MapEdit(self, before, after, command))
 
-    def add_pin(self, map_id, title, x, y, card_id=None):
-        pin = MapPin(title, x, y, card_id=card_id)
-        self.edit_map(map_id, pins=(*self.get_map(map_id).pins, pin), command="Добавить маркер")
-        return pin
-
-    def edit_pin(self, map_id, pin_id, **changes):
-        if changes.keys() - {"title", "x", "y", "card_id"}:
-            raise ValueError("Неподдерживаемые поля маркера")
-        document = self.get_map(map_id)
-        if pin_id not in {p.id for p in document.pins}:
-            raise ValueError("Маркер отсутствует")
-        pins = tuple(replace(pin, **changes) if pin.id == pin_id else pin for pin in document.pins)
-        self.edit_map(map_id, pins=pins, command="Изменить маркер")
-
-    def delete_pin(self, map_id, pin_id):
-        document = self.get_map(map_id)
-        self.edit_map(map_id, pins=tuple(p for p in document.pins if p.id != pin_id),
-                      command="Удалить маркер")
-
     def add_token(self, map_id, title, asset_id, x, y, **values):
         token = MapToken(title, asset_id, x, y, **values)
-        self.edit_map(map_id, tokens=(*self.get_map(map_id).tokens, token),
-                      command="Добавить токен")
+        self.edit_map(
+            map_id, tokens=(*self.get_map(map_id).tokens, token), command="Добавить токен"
+        )
         return token
 
     def edit_token(self, map_id, token_id, **changes):
-        if changes.keys() - {"title", "asset_id", "x", "y", "width", "height", "z", "card_id"}:
+        if changes.keys() - {
+            "title",
+            "asset_id",
+            "x",
+            "y",
+            "cells_w",
+            "cells_h",
+            "kind",
+            "z",
+            "entity_id",
+        }:
             raise ValueError("Неподдерживаемые поля токена")
         document = self.get_map(map_id)
         if token_id not in {token.id for token in document.tokens}:
             raise ValueError("Токен отсутствует")
-        tokens = tuple(replace(token, **changes) if token.id == token_id else token
-                       for token in document.tokens)
+        tokens = tuple(
+            replace(token, **changes) if token.id == token_id else token
+            for token in document.tokens
+        )
         self.edit_map(map_id, tokens=tokens, command="Изменить токен")
 
     def move_token(self, map_id, token_id, x, y, *, bounds=None):
-        if any(type(value) not in (int, float) or not -1e9 <= value <= 1e9
-               or not math.isfinite(value) for value in (x, y)):
+        if any(
+            type(value) not in (int, float) or not -1e9 <= value <= 1e9 or not math.isfinite(value)
+            for value in (x, y)
+        ):
             raise ValueError("Некорректные координаты токена")
-        grid = self.get_map(map_id).grid
+        document = self.get_map(map_id)
+        token = next((t for t in document.tokens if t.id == token_id), None)
+        if token is None:
+            raise ValueError("Токен отсутствует")
+        grid = document.grid
         if grid.snap:
-            x, y = grid.snap_point(x, y)
+            x, y = grid.snap_point(x, y, token.cells_w, token.cells_h)
         if bounds is not None:
             x, y = max(0, min(bounds[0], x)), max(0, min(bounds[1], y))
         self.edit_token(map_id, token_id, x=x, y=y)
@@ -144,40 +209,33 @@ class ModuleSession(QObject):
         document = self.get_map(map_id)
         if token_id not in {token.id for token in document.tokens}:
             raise ValueError("Токен отсутствует")
-        self.edit_map(map_id, tokens=tuple(token for token in document.tokens
-                                         if token.id != token_id),
-                      command="Удалить токен")
+        self.edit_map(
+            map_id,
+            tokens=tuple(token for token in document.tokens if token.id != token_id),
+            command="Удалить токен",
+        )
 
     def delete_map(self, map_id):
         self.get_map(map_id)
-        self._maps.pop(map_id)
-        stack = self._undo.pop(map_id, None)
-        if stack is not None:
-            stack.deleteLater()
-        self.map_deleted.emit(map_id)
-        self.changed.emit()
+        return self._delete(map_id)
 
-    def create_table(self, title):
+    def create_table(self, title, parent_id=None):
         table = RandomTable(title)
-        if table.id in self._maps or table.id in self._tables:
-            raise ValueError("Duplicate module entity ID")
-        self._tables[table.id] = table
+        self.entities.create("table", table.title, module_payload(table), parent_id, id=table.id)
         self.table_changed.emit(table.id)
         self.changed.emit()
         return table
 
     def edit_table(self, table_id, **changes):
-        if changes.keys() - {"title", "rows"}:
+        if changes.keys() - {"title", "columns", "rows"}:
             raise ValueError("Неподдерживаемые поля таблицы")
         before = self.get_table(table_id)
         after = replace(before, **changes)
         if after != before:
-            self._tables[table_id] = after
+            self._put(after)
             self.table_changed.emit(table_id)
             self.changed.emit()
 
     def delete_table(self, table_id):
         self.get_table(table_id)
-        self._tables.pop(table_id)
-        self.table_deleted.emit(table_id)
-        self.changed.emit()
+        return self._delete(table_id)

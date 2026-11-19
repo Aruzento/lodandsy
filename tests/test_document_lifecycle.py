@@ -1,4 +1,5 @@
 from lodandsy.application.app_controller import AppController
+from lodandsy.application.rich_html import html_text
 from lodandsy.ui.app_shell import AppShell
 
 
@@ -14,7 +15,7 @@ def test_late_close_signal_does_not_dispose_reopened_document(qtbot):
     assert controller.card_editors[card.id] is reopened.widget()
     assert not controller.card_editor_bindings[card.id].is_disposed
     reopened.widget().text_edit.insertPlainText("Still bound")
-    assert controller.cards.get(card.id).content == "Still bound"
+    assert html_text(controller.cards.get(card.id).content).strip() == "Still bound"
 
 
 def test_focus_changes_active_document_without_changing_tree_selection(qtbot):

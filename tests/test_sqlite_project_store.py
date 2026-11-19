@@ -6,6 +6,7 @@ from uuid import UUID
 
 import pytest
 
+from lodandsy.application.rich_html import sanitize_html, text_document
 from lodandsy.application.sqlite_project_store import (
     ProjectError,
     ProjectSnapshot,
@@ -26,26 +27,30 @@ def make_cards():
     cards = CardCollection()
     a, b = cards.create("А"), cards.create("Б")
     child = cards.create("Дочерняя", a.id)
-    cards.update(child.id, content="# Исходник\n\n**Markdown**\n\tTail  ")
+    cards.update(child.id, content=text_document("# Исходник\n\n**Markdown**\n\tTail  "))
     return cards, a, b, child
 
 
-@pytest.mark.parametrize("path,checksum", [
-    (b"assets/image.png", "0" * 64),
-    ("assets/image.png", b"0" * 64),
-    ("assets/image\0.png", "0" * 64),
-])
+@pytest.mark.parametrize(
+    "path,checksum",
+    [
+        (b"assets/image.png", "0" * 64),
+        ("assets/image.png", b"0" * 64),
+        ("assets/image\0.png", "0" * 64),
+    ],
+)
 def test_malformed_asset_values_are_diagnosed_without_rewriting_database(store, path, checksum):
     with closing(connect_database(store.path)) as connection, connection:
-        connection.execute("INSERT INTO asset VALUES(?,?,?,?)",
-                           (str(UUID(int=1)), path, checksum, 0))
+        connection.execute(
+            "INSERT INTO asset VALUES(?,?,?,?)", (str(UUID(int=1)), path, checksum, 0)
+        )
     with pytest.raises(ProjectError, match="Invalid asset"):
         store.load()
     with closing(connect_database(store.path)) as connection:
         assert connection.execute("SELECT path,sha256 FROM asset").fetchone() == (path, checksum)
 
 
-def test_create_save_close_reopen_preserves_ids_markdown_hierarchy_and_order(store):
+def test_create_save_close_reopen_preserves_ids_document_hierarchy_and_order(store):
     cards, a, b, child = make_cards()
     cards.update(b.id, position=0)
     store.save(ProjectSnapshot(cards.all(), 1))
@@ -56,7 +61,7 @@ def test_create_save_close_reopen_preserves_ids_markdown_hierarchy_and_order(sto
         assert snapshot.cards == cards.all()
         loaded = CardCollection(snapshot.cards)
         assert loaded.child_ids(None) == (b.id, a.id)
-        assert loaded.get(child.id).content == "# Исходник\n\n**Markdown**\n\tTail  "
+        assert loaded.get(child.id).content == text_document("# Исходник\n\n**Markdown**\n\tTail  ")
         assert snapshot.revision == 1
         assert loaded.get(child.id).parent_id == a.id
     finally:
@@ -100,13 +105,16 @@ def test_cascade_delete_is_committed_as_one_snapshot(store):
     assert store.load().cards == (b,)
 
 
-@pytest.mark.parametrize("mutation", [
-    "PRAGMA user_version=999",
-    "UPDATE entity SET kind='future'",
-    "UPDATE entity SET payload_version=999",
-    "UPDATE entity SET parent_id=id",
-    "UPDATE entity SET position=10",
-])
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "PRAGMA user_version=999",
+        "UPDATE entity SET kind='future'",
+        "UPDATE card_content SET payload_version=999",
+        "UPDATE entity SET parent_id=id",
+        "UPDATE entity SET position=10",
+    ],
+)
 def test_unsupported_or_invalid_data_is_not_rewritten(store, mutation):
     cards = CardCollection()
     cards.create("Card")
@@ -161,8 +169,10 @@ def test_missing_new_asset_and_failed_import_do_not_publish_references(
         store.save(ProjectSnapshot((), 1, (asset,)))
     assert store.load().revision == 0
     assert store.load().assets == ()
+
     def fail_replace(*args):
         raise OSError("simulated replacement failure")
+
     monkeypatch.setattr("lodandsy.application.sqlite_project_store.os.replace", fail_replace)
     with pytest.raises(OSError, match="simulated"):
         store.import_asset(source)
@@ -206,13 +216,15 @@ def test_asset_paths_cannot_escape_project(store, tmp_path):
             replace(asset, path=path)
 
 
-def test_backup_preserves_unregistered_assets_referenced_by_markdown(store, tmp_path):
+def test_backup_preserves_unregistered_document_assets(store, tmp_path):
     folder = store.root / "assets/user-images"
     folder.mkdir()
     (folder / "image.png").write_bytes(b"user image bytes")
     cards = CardCollection()
     card = cards.create("With image")
-    cards.update_content(card.id, "![image](assets/user-images/image.png)")
+    cards.update_content(
+        card.id, sanitize_html('<p><img src="assets/user-images/image.png"></p>')[0]
+    )
     store.save(ProjectSnapshot(cards.all(), 1))
     archive = tmp_path / "with-user-assets.lodbackup"
     store.backup(archive)
@@ -230,9 +242,7 @@ def test_asset_id_collision_never_overwrites_existing_bytes(store, tmp_path, mon
     asset = store.import_asset(source)
     store.save(ProjectSnapshot((), 1, (asset,)))
     source.write_bytes(b"replacement")
-    monkeypatch.setattr(
-        "lodandsy.application.sqlite_project_store.uuid4", lambda: UUID(asset.id)
-    )
+    monkeypatch.setattr("lodandsy.application.sqlite_project_store.uuid4", lambda: UUID(asset.id))
     with pytest.raises(ProjectError, match="collision"):
         store.import_asset(source)
     assert (store.root / asset.path).read_bytes() == b"original"
