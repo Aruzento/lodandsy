@@ -5,14 +5,10 @@ from PySide6.QtCore import QSignalBlocker, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QAction, QTextCursor
 from PySide6.QtWidgets import (
     QBoxLayout,
-    QComboBox,
-    QDialog,
-    QDialogButtonBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
     QMenu,
-    QPlainTextEdit,
     QSizePolicy,
     QTabBar,
     QTextEdit,
@@ -25,6 +21,7 @@ from lodandsy.application.rich_html import allowed_link, sanitize_html
 from lodandsy.application.rich_text_codec import serialize_document
 from lodandsy.domain.card import EMPTY_DOCUMENT
 from lodandsy.domain.card_schema import CARD_TYPES
+from lodandsy.ui.conflict_bar import ConflictBar
 from lodandsy.ui.icons import icon
 from lodandsy.ui.portrait_panel import PortraitPanel
 from lodandsy.ui.rich_document import RichDocument
@@ -87,7 +84,6 @@ class CardEditorWidget(QWidget):
     link_activated = Signal(QUrl)
     links_changed = Signal()
     copy_link_requested = Signal(str)
-    options_edited = Signal(object)
     discard_drafts_requested = Signal()
     section_action_requested = Signal(str, str, object)
 
@@ -122,23 +118,12 @@ class CardEditorWidget(QWidget):
         self.title_edit.setObjectName("cardHeroTitle")
         self.title_edit.setAccessibleName("Название карточки")
         self.title_edit.setMaxLength(2000)
-        self.type_combo = QComboBox()
-        self.type_combo.setAccessibleName("Тип карточки")
-        for definition in CARD_TYPES.values():
-            self.type_combo.addItem(definition.title, definition.id)
-        self.type_combo.currentIndexChanged.connect(
-            lambda _: (
-                self.options_edited.emit({"card_type": self.type_combo.currentData()})
-                if self.card_id
-                else None
-            )
-        )
-        self.copy_link_button = QToolButton()
-        self.copy_link_button.setIcon(icon("link"))
-        self.copy_link_button.setText("Копировать ссылку")
-        self.copy_link_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.copy_link_button.setToolTip("Копировать ссылку на карточку")
-        self.copy_link_button.clicked.connect(lambda: self.copy_link_requested.emit(self.card_id))
+        self.title_edit.setFixedHeight(48)
+        self.type_label = QLabel()
+        self.type_label.setObjectName("cardTypeBadge")
+        self.type_label.setAccessibleName("Тип карточки (неизменяемый)")
+        self.type_label.setTextFormat(Qt.TextFormat.PlainText)
+        self.type_label.setFixedHeight(24)
         self.summary_edit = SemanticPlainTextEdit()
         self.summary_edit.setObjectName("cardSummary")
         self.summary_edit.setPlaceholderText("Краткое описание")
@@ -160,19 +145,9 @@ class CardEditorWidget(QWidget):
         meta.setSpacing(6)
         row = QHBoxLayout()
         row.addWidget(self.title_edit, 1)
-        meta.addWidget(self.type_combo, 0, Qt.AlignmentFlag.AlignLeft)
+        meta.addWidget(self.type_label, 0, Qt.AlignmentFlag.AlignLeft)
         meta.addLayout(row)
         meta.addWidget(self.summary_edit)
-        self.summary_expand = QToolButton()
-        self.summary_expand.setIcon(icon("more"))
-        self.summary_expand.setToolTip("Редактировать краткое описание целиком")
-        self.summary_expand.setAccessibleName(self.summary_expand.toolTip())
-        self.summary_expand.clicked.connect(self.edit_summary)
-        summary_row = QHBoxLayout()
-        summary_row.addWidget(self.summary_edit, 1)
-        summary_row.addWidget(self.summary_expand, 0, Qt.AlignmentFlag.AlignTop)
-        meta.removeWidget(self.summary_edit)
-        meta.addLayout(summary_row)
         self.portrait_panel = PortraitPanel(self)
         self.hero = QWidget()
         self.hero_layout = QBoxLayout(QBoxLayout.Direction.LeftToRight, self.hero)
@@ -182,17 +157,8 @@ class CardEditorWidget(QWidget):
         self.hero_layout.addWidget(self.metadata, 1)
         self.header = QWidget()
         header_layout = QVBoxLayout(self.header)
-        header_layout.setContentsMargins(28, 16, 28, 20)
+        header_layout.setContentsMargins(16, 16, 16, 16)
         header_layout.setSpacing(14)
-        self.breadcrumb = QLabel()
-        self.breadcrumb.setTextFormat(Qt.TextFormat.PlainText)
-        self.breadcrumb.setObjectName("mutedCaption")
-        self.breadcrumb.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        self.breadcrumb_provider = lambda key: "Карточка"
-        path_row = QHBoxLayout()
-        path_row.addWidget(self.breadcrumb, 1)
-        path_row.addWidget(self.copy_link_button)
-        header_layout.addLayout(path_row)
         header_layout.addWidget(self.hero)
         self.header.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self.section_bar = QTabBar()
@@ -215,16 +181,10 @@ class CardEditorWidget(QWidget):
         self.body = QStackedWidget()
         rich = QWidget()
         rich_layout = QVBoxLayout(rich)
-        rich_layout.setContentsMargins(20, 4, 20, 12)
+        rich_layout.setContentsMargins(16, 4, 16, 12)
         rich_layout.setSpacing(4)
         rich_layout.addWidget(self.format_toolbar)
-        self.text_edit.setMaximumWidth(760)
-        prose = QHBoxLayout()
-        prose.setContentsMargins(0, 0, 0, 0)
-        prose.addStretch(1)
-        prose.addWidget(self.text_edit, 12)
-        prose.addStretch(1)
-        rich_layout.addLayout(prose, 1)
+        rich_layout.addWidget(self.text_edit, 1)
         self.body.addWidget(rich)
         self.table_page = QWidget()
         self.table_layout = QVBoxLayout(self.table_page)
@@ -246,8 +206,11 @@ class CardEditorWidget(QWidget):
         layout.addWidget(self.header)
         layout.addLayout(tabs)
         layout.addWidget(self.body, 1)
+        self.conflicts = ConflictBar(self)
+        layout.addWidget(self.conflicts)
         layout.addWidget(self.validation_status)
         layout.addWidget(self.link_status)
+        self._layout_header()
 
     def set_canonical(self, card, drafts=None, fields=None):
         previous = self._model
@@ -273,9 +236,6 @@ class CardEditorWidget(QWidget):
         if self.document_state:
             self.document_state.prune(live)
         self._model, self._card_id = card, card.id
-        if fields is None or fields & {"title", "parent_id"}:
-            self.breadcrumb.setText(self.breadcrumb_provider(card.id))
-            self.breadcrumb.setToolTip(self.breadcrumb.text())
         drafts = drafts or {}
         metadata = fields is None or bool(fields & {"title", "summary", "card_type", "portrait"})
         for widget, key, value in [
@@ -289,11 +249,18 @@ class CardEditorWidget(QWidget):
             widget.set_value(value, force=not self.field_active(key))
             del blocker
         if metadata:
-            blocker = QSignalBlocker(self.type_combo)
-            self.type_combo.setCurrentIndex(self.type_combo.findData(card.card_type))
-            del blocker
+            self.type_label.setText(CARD_TYPES[card.card_type].title)
             if fields is None or "portrait" in fields:
                 self.portrait_panel.set_portrait(card.portrait)
+        self._show_validation(card.id, drafts)
+        if (
+            previous is not None
+            and previous.id == card.id
+            and fields is not None
+            and not fields & {"sections", "content", *live}
+        ):
+            # Metadata/draft notifications never hide and reinsert an embedded editor.
+            return
         keys = [s.id for s in card.sections]
         current = [self.section_bar.tabData(i) for i in range(self.section_bar.count())]
         blocker = QSignalBlocker(self.section_bar)
@@ -323,7 +290,9 @@ class CardEditorWidget(QWidget):
             self.current_section = None
             self.body.setCurrentIndex(0)
             self.text_edit.setEnabled(False)
-        invalid = [key for (identity, key) in drafts if identity == card.id]
+
+    def _show_validation(self, card_id, drafts):
+        invalid = [key for (identity, key) in drafts if identity == card_id]
         self.validation_status.setText(
             "Несохранённый ошибочный ввод · исправьте или отмените" if invalid else ""
         )
@@ -452,37 +421,17 @@ class CardEditorWidget(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        compact = self.height() < 500 or self.width() < 420
-        side = 88 if compact else max(132, min(184, (self.width() - 240) // 2))
-        self.portrait_panel.setFixedSize(side, side)
-        self.summary_edit.setFixedHeight(44 if compact else 70)
-        self.hero_layout.setSpacing(16 if compact else 24)
+        self._layout_header()
 
-    def edit_summary(self):
-        self.summary_edit.finish()
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Краткое описание")
-        dialog.resize(560, 340)
-        edit = QPlainTextEdit()
-        edit.setPlainText(self.summary_edit.toPlainText())
-        edit.setAccessibleName("Краткое описание целиком")
-        layout = QVBoxLayout(dialog)
-        layout.addWidget(edit)
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        layout.addWidget(buttons)
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        self.field_edit_started.emit("summary")
-        edit.textChanged.connect(
-            lambda: self.field_buffer_changed.emit("summary", edit.toPlainText())
-        )
-        if dialog.exec() == QDialog.DialogCode.Accepted:
-            self.field_commit_requested.emit("summary", edit.toPlainText())
-        else:
-            self.field_cancel_requested.emit("summary")
-        dialog.deleteLater()
+    def _layout_header(self):
+        # Width alone determines geometry: card content, tabs and activation cannot resize it.
+        side = max(132, min(220, (self.width() - 240) // 2))
+        self.portrait_panel.setFixedSize(side, side)
+        self.metadata.setFixedHeight(side)
+        self.hero.setFixedHeight(side)
+        self.header.setFixedHeight(side + 32)
+        self.summary_edit.setFixedHeight(side - 84)
+        self.hero_layout.setSpacing(16)
 
     @property
     def card_id(self):
@@ -618,6 +567,9 @@ class CardEditorWidget(QWidget):
 
     def contextMenuEvent(self, event):
         menu = self.text_edit.createStandardContextMenu()
+        menu.addAction(
+            "Копировать ссылку на карточку", lambda: self.copy_link_requested.emit(self.card_id)
+        )
         if self.text_edit.textCursor().charFormat().anchorHref():
             action = QAction("Открыть ссылку", menu)
             action.triggered.connect(self.open_current_link)

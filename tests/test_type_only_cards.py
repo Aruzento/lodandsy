@@ -30,8 +30,9 @@ def test_real_inspector_add_offers_only_absent_allowed_fields_and_type_hides_old
     app.window.inspector_panel.add_field.click()
     assert "HP" not in labels and "AC" in labels and "Редкость" not in labels
     assert app.cards.get(card.id).value("hp") == 15
-    app.cards_service.update_card(card.id, card_type="article")
-    assert "hp" not in app.window.inspector_panel.field_form.controls
+    with pytest.raises(ValueError):
+        app.cards_service.update_card(card.id, card_type="article")
+    assert "hp" in app.window.inspector_panel.field_form.controls
     assert app.cards.get(card.id).value("hp") == 15
 
 
@@ -41,7 +42,7 @@ def test_type_only_fields_roundtrip_and_no_loss():
     changed = replace(card, card_type="article")
     assert changed.sections == card.sections and changed.value("hp") == 15
     version, data = encode_card(changed)
-    assert version == 4 and "template_id" not in data and '"tags"' not in data
+    assert version == 5 and "template_id" not in data and '"tags"' not in data
     assert decode_card(changed.title, changed.id, None, version, data) == changed
     with pytest.raises(ValueError):
         decode_card(card.title, card.id, None, 3, data)

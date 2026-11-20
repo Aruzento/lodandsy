@@ -1,12 +1,10 @@
 from PySide6.QtWidgets import (
     QCheckBox,
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
     QFormLayout,
     QLineEdit,
-    QSpinBox,
 )
 
 from lodandsy.domain.map_document import MapGrid
@@ -71,46 +69,3 @@ def dialog_buttons(parent, layout):
     buttons.rejected.connect(parent.reject)
     layout.addRow(buttons)
     return buttons
-
-
-class TokenPropertiesDialog(QDialog):
-    def __init__(self, token, presentation, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Свойства размещения · " + presentation.label)
-        layout = QFormLayout(self)
-        self.title = QLineEdit(token.label_override or "", self)
-        self.title.setPlaceholderText("Из карточки: " + presentation.label)
-        self.width, self.height = QSpinBox(self), QSpinBox(self)
-        for box, value in [(self.width, token.cells_w), (self.height, token.cells_h)]:
-            box.setRange(0, 100)
-            box.setSpecialValueText("Из карточки")
-            box.setValue(value or 0)
-        self.kind = QComboBox(self)
-        for label, value in [
-            ("Из карточки", None),
-            ("Персонаж (круг)", "character"),
-            ("Предмет", "item"),
-        ]:
-            self.kind.addItem(label, value)
-        self.kind.setCurrentIndex(self.kind.findData(token.kind_override))
-        self.z = QSpinBox(self)
-        self.z.setRange(0, 10000)
-        self.z.setValue(token.z)
-        for label, widget in [
-            ("Своя подпись:", self.title),
-            ("Свой вид:", self.kind),
-            ("Ширина (клетки):", self.width),
-            ("Высота (клетки):", self.height),
-            ("Порядок:", self.z),
-        ]:
-            layout.addRow(label, widget)
-        self.buttons = dialog_buttons(self, layout)
-
-    def changes(self):
-        return dict(
-            label_override=self.title.text().strip() or None,
-            cells_w=self.width.value() or None,
-            cells_h=self.height.value() or None,
-            kind_override=self.kind.currentData(),
-            z=self.z.value(),
-        )

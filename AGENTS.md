@@ -37,24 +37,45 @@ LODANDSY — нативное локальное Windows-приложение д
 
 ## Рабочий цикл
 
-Активна утверждённая итерация6-rev3: docs/iterations/2026-11-19-iteration-6-rev3/CODEX-ITERATION-6.md.
-Выполнять A→E непрерывно; сначала независимость модулей ARU-84, затем refs/inventory и
-структурный Qt layout. ADR-027 определяет владельцев. Никаких private widgets/worker
-соседних модулей и общих ModuleController/ModuleSession; composition root собирает
-Cards/Tables/Maps/Dice, общие Core/Resources/Media/navigation, transactional ProjectActions.
-Один canonical EntityCollection/SQLite writer и post-commit revision ACK. Настоящий UI
-ввод подтверждается semantic commit Enter/Tab/blur/Escape/Ctrl+S, а не событием каждой буквы;
-rich text остаётся непрерывным QTextDocument с coalescing, без reset/focus/Undo loss.
+Активна утверждённая итерация7: docs/iterations/2026-11-20-iteration-7/CODEX-ITERATION-7.md.
+Выполнять A–G непрерывно. Прямое дополнение владельца о Card Editor обязательно.
+ADR-027 сохраняет независимых владельцев Cards/Tables/Maps/Dice. Core/Resources/Media/
+navigation и transactional ProjectActions собираются только composition root. Никаких
+private widgets/worker соседних модулей и общих ModuleController/ModuleSession.
+Один canonical EntityCollection/SQLite writer и post-commit revision ACK.
 
-Макеты design.html/PNG с portrait — только .prototype-deps/iteration6-rev3-reference,
-не public repo/production/release. Новый Qt дизайн нейтральный graphite #191919/#202020;
-navy/blue-gold отменён. Портрет слева square adaptive132–220, metadata справа, no header
-scroll конфликт; crop roundtrip идемпотентен. Inventory — обычная Table со ссылкой item,
-положительным integer count и живыми description/cost projections, без копий/игровых правил.
-Map palette только Object Cards; original alpha/aspect long-edge128; front layer сверху.
-Schema/payload версионировать по фактической реализации, без legacy/migration adapters.
-Full snapshot writer/sync backup4GiB и libvips tiles сохраняются, новые зависимости не нужны.
-Targeted batches после блоков, общий gate/build после стабилизации; отчёт/draw.io/checklist.
+MOW parser/controller/actions/source fields отменены и удалены. Общие aliases, HTML
+sanitizer и assets сохраняются. Welcome/Open используют MRU каталог QSettings вне мира;
+ProjectController выполняет guards, неудача не переключает мир. Backup/restore — gear
+правого rail. Не создавать сканер миров или второй формат хранения. ADR-030.
+
+Обязательный Card Editor: square portrait слева132–220 logical px; справа immutable
+read-only type, один title и inline summary. Ниже отдельный ряд tabs и content inset16px.
+Никаких breadcrumb, summary popup, centered prose gutter или дублирующей шапки.
+Геометрия зависит от ширины, не от содержимого/активации/высоты; header/hero/metadata
+имеют согласованную рассчитанную высоту. Тип выбирается только при create и защищён
+также при generic payload replacement. Rich text — непрерывный QTextDocument;
+coalescing250ms/max2s, generation/section UUID управляют временем жизни callbacks.
+Structured input commit Enter/Tab/blur/Escape/Ctrl+S, не каждая буква. Conflict draft
+не становится authoritative после reopen/blur/flush: явные UseSaved/ApplyMine,
+проверка нового canonical value; валидные данные сохраняются независимо. ADR-032.
+
+Maps владеет Viewer/Editor/Presentation и FogState в единственном MapPayload/SQLite.
+MapView roles разделяют сцены и overlays, но используют общий канон и bounded tile/media
+providers. Player top-level, не ADS и не layout state; camera следует Viewer с letterbox,
+никакого расширения world framing. До coherent map/fog/camera — чёрный экран.
+Первое открытие не забирает GM focus; повторное фокусирует существующее окно.
+Только committed fog на player,100% black поверх tiles/grid/objects/tokens;
+GM default50%. Numeric rings/UUID, bounded geometry и Qt adapter, без bitmap всей карты.
+ADR-031. Незавершённые gestures остаются локальными; один жест — одна Map Undo команда.
+
+Qt дизайн нейтральный graphite #191919/#202020. Private макеты/портреты остаются
+только в .prototype-deps, не repo/production/release. Inventory — обычная Table:
+item UUID, positive integer count, live description/cost без stored derived cells.
+Object Cards library, original alpha/aspect long-edge128; front layer сверху.
+Full snapshot writer/synchronous backup4GiB и libvips tiles сохраняются.
+Схема по факту: SQLite14/Card5/Map6/Table3, UI state4; legacy/migration adapters нет.
+Targeted batches после блоков, общий gate/build после стабилизации; report/draw.io/checklist.
 Git-действия только в конце после проверки по последним указаниям владельца.
 
 ## Проверки и отчёт
@@ -71,7 +92,3 @@ python -m pip check
 GUI-тесты pytest-qt и offscreen не заменяют ручную проверку Windows: focus, docking, floating, maximize/restore, mixed DPI, второй монитор, установленная сборка. Не заявляй о запуске тестов или сборки без фактического результата. Не считай количество тестов эквивалентом качества.
 
 Каждый отчёт о блоке: цель и ID Linear; изменения и затронутые файлы; команды и фактические результаты; что проверено и не проверено; риски и решение владельца (если нужно); состояние задач и следующий блок. Если есть блокер, укажи точную причину и условие продолжения. Продолжай до согласованного результата, а не до первой компилирующейся версии.
-
-Итерация5 отменяет templates/tags/snap/Dice entity/random table mode. Только card_type, UUID CardSection rich_text/table_ref, характеристики в Inspector, portrait crop, самостоятельный Map Editor и tool:dice. Invalid drafts не блокируют сохранение валидного канона. Целевые проверки по завершённым блокам; один полный gate и сборка после стабилизации.
-
-Фактический контракт6: SQLite13/Card4/Map5/Table3, UUID entity_ref/projection без stored derived cells. ADR-027/028/029 и docs/architecture/LODANDSY.drawio описывают действующие границы и UI. Ввод structured — semantic commit, rich coalescing250ms/max2s; generation/section UUID управляют временем жизни callbacks.

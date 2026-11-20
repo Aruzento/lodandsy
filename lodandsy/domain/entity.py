@@ -158,6 +158,12 @@ class EntityCollection:
 
     def put_payload(self, key, payload):
         self.get(key)
+        previous = self._payloads[key]
+        if type(payload) is not type(previous):
+            raise ValueError("Entity payload kind cannot change")
+        validate = getattr(payload, "validate_replacement", None)
+        if validate is not None:
+            validate(previous)
         if self._payloads[key] != payload:
             self._payloads[key] = payload
 

@@ -51,8 +51,9 @@ def test_item_projections_are_live_addressed_and_never_stored(project, tmp_path,
     assert embedded.model.data(embedded.model.index(0, 0)) == "Клинок"
     assert view.model.data(view.model.index(0, 2)) == "<Опасный>"
     assert view.model.data(view.model.index(0, 3)) == "—"
-    app.cards_service.update_card(item.id, card_type="article")
-    assert view.model.data(view.model.index(0, 0)) == "Предмет недоступен"
+    with pytest.raises(ValueError):
+        app.cards_service.update_card(item.id, card_type="article")
+    assert view.model.data(view.model.index(0, 0)) == "Клинок"
     replacement = app.create_card("Щит", card_type="item")
     app.tables_service.set_cell(table.id, table.rows[0].id, table.columns[0].id, replacement.id)
     assert view.model.data(view.model.index(0, 1)) == "7"

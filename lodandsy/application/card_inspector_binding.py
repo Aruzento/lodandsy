@@ -17,6 +17,10 @@ class CardInspectorBinding:
         self._field_owners = {}
         self._title_owner = None
         self._title_manager = None
+        inspector.conflicts.resolve_requested.connect(self._resolve_conflict)
+        session.field_edits.changed.connect(lambda key: self._sync_conflicts())
+        if title_edits:
+            title_edits.changed.connect(lambda key: self._sync_conflicts())
         form = inspector.field_form
         form.edit_active = lambda field: session.field_edits.has(self._field_owners.get(field))
         inspector.title_active = lambda: (
@@ -77,6 +81,31 @@ class CardInspectorBinding:
         text = next((message for (key, field), message in errors.items() if key == card.id), "")
         self.inspector.validation_notice.setText(text)
         self.inspector.validation_notice.setVisible(bool(text))
+        self._sync_conflicts()
+
+    def _sync_conflicts(self):
+        key = self.session.current_entity_id
+        manager = self.session.field_edits if self.session.current_card_id else self.title_edits
+        self.inspector.conflicts.set_conflicts(
+            [
+                (
+                    identity,
+                    "Конфликт · " + identity[1],
+                    manager.drafts.get(identity, conflict.raw),
+                    manager.read(identity),
+                )
+                for identity, conflict in manager.conflicts.items()
+                if identity[0] == key
+            ]
+            if manager and key
+            else []
+        )
+
+    def _resolve_conflict(self, key, mine):
+        manager = self.session.field_edits if self.session.current_card_id else self.title_edits
+        if manager and key:
+            manager.resolve(key, mine=mine)
+            self.refresh()
 
     def _begin_field(self, field):
         key = self.session.current_card_id

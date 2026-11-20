@@ -257,7 +257,6 @@ class CardsController(QObject):
                 state.load_ui_values(values)
             self.documents[card_id] = state
         editor = CardEditorWidget()
-        editor.breadcrumb_provider = self.breadcrumb
         editor.pending_changed.connect(self.pending_changed)
         editor.document_state = state
         editor.table_factory = lambda section, previous=None: self.table_factory(
@@ -299,14 +298,6 @@ class CardsController(QObject):
         self.bindings[card_id] = binding
         self._index_links(card_id)
         return editor
-
-    def breadcrumb(self, key):
-        parts = []
-        while key is not None:
-            entity = self.service.entities.get(key)
-            parts.append(entity.title)
-            key = entity.parent_id
-        return " / ".join(reversed(parts))
 
     def _section_action(self, card_id, action, key, value):
         from PySide6.QtWidgets import QMessageBox

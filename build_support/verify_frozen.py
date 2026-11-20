@@ -26,13 +26,15 @@ def main():
     args = parser.parse_args()
     executable = ROOT / ".prototype-deps/mvp-dist/LODANDSY/LODANDSY.exe"
     pyz = CArchiveReader(str(executable)).open_embedded_archive("PYZ.pyz")
-    mismatches, count = [], 0
+    mismatches, missing, count = [], [], 0
     for folder in ("lodandsy", "build_support"):
         for path in (ROOT / folder).rglob("*.py"):
             name = ".".join(path.relative_to(ROOT).with_suffix("").parts)
             if name.endswith(".__init__"):
                 name = name[:-9]
             if name not in pyz.toc:
+                if folder == "lodandsy":
+                    missing.append(name)
                 continue
             actual = normalized(pyz.extract(name))
             expected = normalized(compile(path.read_bytes(), str(path), "exec", dont_inherit=True))
@@ -58,13 +60,16 @@ def main():
             "lodandsy.application.module_session",
             "lodandsy.application.module_controller",
             "lodandsy.application.card_images",
+            "lodandsy.application.mow_import",
+            "lodandsy.application.mow_import_controller",
         }
     ]
     result = {
         "compiled_modules_compared": count,
         "mismatches": mismatches,
+        "missing_runtime_modules": missing,
         "obsolete_modules": obsolete,
-        "passed": not mismatches and not obsolete and count >= 60,
+        "passed": not mismatches and not missing and not obsolete and count >= 60,
     }
     if args.report:
         args.report.write_text(json.dumps(result, indent=2), encoding="utf-8")

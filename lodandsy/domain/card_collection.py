@@ -76,7 +76,6 @@ class CardCollection:
             "position",
             "content",
             "portrait",
-            "card_type",
             "sections",
             "values",
         }:

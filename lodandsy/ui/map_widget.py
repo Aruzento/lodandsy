@@ -1,7 +1,7 @@
 import math
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QPainter
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
+from PySide6.QtGui import QAction, QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QGraphicsItem,
     QGraphicsScene,
@@ -14,7 +14,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from lodandsy.application.fog_geometry import state_path
 from lodandsy.domain.map_document import resolve_token
+from lodandsy.domain.map_fog import FogState
 from lodandsy.ui.icons import icon
 from lodandsy.ui.map_annotations import GridLayer, RasterObjectItem, TokenItem
 from lodandsy.ui.project_tree_model import ENTITY_MIME_TYPE
@@ -71,6 +73,10 @@ class TileLayer(QGraphicsItem):
 
 
 class MapView(QGraphicsView):
+    camera_changed = Signal(object)
+    transient_changed = Signal(str, str, float, float)
+    fullscreen_requested = Signal()
+    exit_fullscreen_requested = Signal()
     world_clicked = Signal(float, float)
     object_moved = Signal(str, float, float)
     object_action = Signal(str, str)
@@ -82,9 +88,18 @@ class MapView(QGraphicsView):
 
     def __init__(self, role="viewer"):
         super().__init__()
-        if role not in {"viewer", "editor"}:
+        if role not in {"viewer", "editor", "player"}:
             raise ValueError("Unsupported map view role")
         self.role = role
+        self._background = None
+        self._display_ready = False
+        self._model_ready = False
+        self._source_rect = QRectF()
+        self._fog_state = FogState()
+        self._fog_path = QPainterPath()
+        self._fog_preview = QPainterPath()
+        self._fog_selection = QPainterPath()
+        self.fog_opacity = 0.5
         self.tool = "select"
         self._previous_tool = None
         self.setScene(QGraphicsScene(self))
@@ -94,12 +109,91 @@ class MapView(QGraphicsView):
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setAccessibleName("Карта: колесо — масштаб, перетаскивание — перемещение")
-        self.setAcceptDrops(True)
+        self.setAcceptDrops(role != "player")
         self.card_exists = lambda key: False
         self._background = None
         self._tokens = []
         self._objects = {}
         self._grid = None
+        if role == "player":
+            self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self.setDragMode(QGraphicsView.DragMode.NoDrag)
+            self.setInteractive(False)
+            self.setFrameShape(QGraphicsView.Shape.NoFrame)
+
+    def paintEvent(self, event):
+        if self.role == "player" and not self._display_ready:
+            painter = QPainter(self.viewport())
+            painter.fillRect(self.viewport().rect(), Qt.GlobalColor.black)
+            painter.end()
+            return
+        super().paintEvent(event)
+
+    def drawForeground(self, painter, rect):
+        super().drawForeground(painter, rect)
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        color = QColor("#000000")
+        color.setAlphaF(1 if self.role == "player" else self.fog_opacity)
+        painter.setBrush(color)
+        pen = QPen(color, 2 if self.role == "player" else 0)
+        pen.setCosmetic(True)
+        painter.setPen(pen if self.role == "player" else Qt.PenStyle.NoPen)
+        painter.drawPath(self._fog_path)
+        if self.role != "player":
+            painter.setPen(QPen(QColor("#dededb"), 0))
+            painter.setBrush(QColor(180, 180, 180, 50))
+            painter.drawPath(self._fog_preview)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(self._fog_selection)
+        painter.restore()
+        if self.role == "player":
+            outside = QPainterPath()
+            outside.addRect(rect)
+            visible = QPainterPath()
+            visible.addRect(self._source_rect)
+            painter.fillPath(outside.subtracted(visible), Qt.GlobalColor.black)
+
+    def viewportEvent(self, event):
+        if self.role == "player" and event.type() == QEvent.Type.ToolTip:
+            return True
+        return super().viewportEvent(event)
+
+    def _publish_camera(self):
+        if getattr(self, "role", None) == "viewer" and self._background is not None:
+            self.camera_changed.emit(self.mapToScene(self.viewport().rect()).boundingRect())
+
+    def follow_camera(self, rect):
+        if self.role != "player" or rect.isEmpty():
+            return
+        self._source_rect = QRectF(rect)
+        self.setSceneRect(rect)
+        self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+        self._display_ready = self._background is not None and self._model_ready
+        self.viewport().update()
+
+    def scrollContentsBy(self, dx, dy):
+        super().scrollContentsBy(dx, dy)
+        self._publish_camera()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if getattr(self, "role", None) == "player" and not self._source_rect.isEmpty():
+            self.follow_camera(self._source_rect)
+        else:
+            self._publish_camera()
+
+    def fitInView(self, *args):
+        super().fitInView(*args)
+        self._publish_camera()
+
+    def mouseDoubleClickEvent(self, event):
+        if self.role == "player":
+            self.fullscreen_requested.emit()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
     def set_pyramid(self, pyramid, tiles):
         if self._background is not None:
@@ -110,8 +204,15 @@ class MapView(QGraphicsView):
         tiles.ready.connect(self.viewport().update)
         self.scene().setSceneRect(QRectF(0, 0, self.map_width, self.map_height))
         self.fitInView(self.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        if self.role == "player":
+            self.follow_camera(self._source_rect)
 
-    def set_annotations(self, document, card_resolver, root, assets, provider):
+    def set_annotations(self, document, card_resolver, root, assets, provider, *, fog_path=None):
+        if self.role == "player":
+            self._display_ready = False
+        if self._fog_state != document.fog or fog_path is not None:
+            self._fog_path = fog_path if fog_path is not None else state_path(document.fog)
+            self._fog_state = document.fog
         self.grid = document.grid
         previous = {item.token.id: item for item in self._tokens}
         current_ids = {token.id for token in document.tokens}
@@ -154,7 +255,7 @@ class MapView(QGraphicsView):
             item.setVisible(item.token.layer_id is None or layers[item.token.layer_id].visible)
             item.setAcceptedMouseButtons(
                 Qt.MouseButton.NoButton
-                if self.role == "editor"
+                if self.role != "viewer"
                 else Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton
             )
         ids = {o.id for o in document.objects}
@@ -171,16 +272,20 @@ class MapView(QGraphicsView):
                 self.scene().addItem(item)
                 self._objects[value.id] = item
 
-        if self._background is None:
-            self.scene().setSceneRect(
-                self.scene()
-                .itemsBoundingRect()
-                .united(QRectF(0, 0, self.map_width, self.map_height))
-            )
+        self._model_ready = True
+        if self.role == "player":
+            self.follow_camera(self._source_rect)
+        if self.role != "player":
+            bounds = QRectF(0, 0, self.map_width, self.map_height)
+            for item in (*self._tokens, *self._objects.values()):
+                if item.isVisible():
+                    bounds = bounds.united(item.sceneBoundingRect())
+            self.scene().setSceneRect(bounds)
+        self.viewport().update()
 
     def _drag_card(self, event):
         if (
-            self.role == "editor"
+            self.role != "viewer"
             or self._background is None
             or not event.mimeData().hasFormat(ENTITY_MIME_TYPE)
         ):
@@ -235,6 +340,10 @@ class MapView(QGraphicsView):
         self.tool_changed.emit(name)
 
     def mousePressEvent(self, event):
+        if self.role == "player":
+            self.setFocus()
+            event.accept()
+            return
         if (
             self.role == "editor"
             and self.tool == "place"
@@ -252,10 +361,25 @@ class MapView(QGraphicsView):
         super().mousePressEvent(event)
 
     def keyPressEvent(self, event):
+        if self.role == "player":
+            if event.key() == Qt.Key.Key_F11:
+                self.fullscreen_requested.emit()
+            elif event.key() == Qt.Key.Key_Escape:
+                self.exit_fullscreen_requested.emit()
+            event.accept()
+            return
         if self.role == "editor" and event.key() == Qt.Key.Key_Space:
             if not event.isAutoRepeat() and self._previous_tool is None:
                 self._previous_tool = self.tool
                 self.set_tool("pan")
+            event.accept()
+            return
+        if self.role == "viewer" and event.key() == Qt.Key.Key_Escape:
+            for item in self._tokens:
+                if getattr(item, "_dragging", False):
+                    item._cancelled = True
+                    item.setPos(item._drag_origin)
+                    self.transient_changed.emit("token", item.token.id, item.x(), item.y())
             event.accept()
             return
         if self.role == "editor" and event.key() == Qt.Key.Key_Escape:
@@ -263,6 +387,7 @@ class MapView(QGraphicsView):
                 if getattr(item, "_dragging", False):
                     item.setPos(item._origin)
                     item._cancelled = True
+                    self.transient_changed.emit("object", item.value.id, item.x(), item.y())
             self.scene().clearSelection()
             self.set_tool("select")
             event.accept()
@@ -285,14 +410,21 @@ class MapView(QGraphicsView):
         super().focusOutEvent(event)
 
     def wheelEvent(self, event):
+        if self.role == "player":
+            event.accept()
+            return
         scale = self.transform().m11()
         target = max(
             self.minimum_zoom(), min(16, scale * (1.2 if event.angleDelta().y() > 0 else 1 / 1.2))
         )
         self.scale(target / scale, target / scale)
+        self._publish_camera()
         event.accept()
 
     def contextMenuEvent(self, event):
+        if self.role == "player":
+            event.accept()
+            return
         item = self.itemAt(event.pos())
         while item is not None and not isinstance(item, (TokenItem, RasterObjectItem)):
             item = item.parentItem()
@@ -319,9 +451,10 @@ class MapView(QGraphicsView):
         }
 
     def minimum_zoom(self):
+        bounds = self.sceneRect().united(QRectF(0, 0, self.map_width, self.map_height))
         fit = min(
-            max(1, self.viewport().width()) / self.map_width,
-            max(1, self.viewport().height()) / self.map_height,
+            max(1, self.viewport().width()) / max(1, bounds.width()),
+            max(1, self.viewport().height()) / max(1, bounds.height()),
         )
         return max(1e-8, min(0.01, fit / 16))
 
@@ -332,14 +465,20 @@ class MapView(QGraphicsView):
         x, y, zoom = values
         self.resetTransform()
         self.scale(max(self.minimum_zoom(), min(16, zoom)), max(self.minimum_zoom(), min(16, zoom)))
+        bounds = self.sceneRect().united(QRectF(0, 0, self.map_width, self.map_height))
         self.centerOn(
-            QPointF(max(0, min(1, x)) * self.map_width, max(0, min(1, y)) * self.map_height)
+            QPointF(
+                max(bounds.left(), min(bounds.right(), x * self.map_width)),
+                max(bounds.top(), min(bounds.bottom(), y * self.map_height)),
+            )
         )
+        self._publish_camera()
 
 
 class MapWidget(QWidget):
     grid_requested = Signal()
     editor_requested = Signal()
+    presentation_requested = Signal()
 
     def __init__(self, undo_stack):
         super().__init__()
@@ -356,6 +495,12 @@ class MapWidget(QWidget):
         editor = QAction(icon("rename"), "Редактор", self)
         editor.triggered.connect(self.editor_requested)
         buttons.addActions([self.token_add, grid, fit, editor])
+        presentation = QAction(icon("monitor"), "Открыть презентацию", self)
+        presentation.triggered.connect(self.presentation_requested)
+        button = QToolButton(buttons)
+        button.setDefaultAction(presentation)
+        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        buttons.addWidget(button)
         buttons.addSeparator()
         self.add_undo_actions(buttons, undo_stack)
         layout.addWidget(buttons)
@@ -364,6 +509,17 @@ class MapWidget(QWidget):
         self.message.setObjectName("mapStatus")
         layout.addWidget(self.message)
         self.view = MapView()
+        from lodandsy.ui.fog_tools import FogTools
+
+        self.fog_tools = FogTools(self.view, self)
+        fog = QAction(icon("fog"), "Туман войны", self)
+        fog.setCheckable(True)
+        fog.toggled.connect(self.fog_tools.setVisible)
+        fog_button = QToolButton(buttons)
+        fog_button.setDefaultAction(fog)
+        fog_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        buttons.addWidget(fog_button)
+        layout.addWidget(self.fog_tools)
         layout.addWidget(self.view, 1)
         self.pending_camera = None
         self.project_root = None

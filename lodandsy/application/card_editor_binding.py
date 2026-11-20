@@ -26,11 +26,12 @@ class CardEditorBinding:
         self.editor.field_commit_requested.connect(self._commit_field)
         self.editor.field_cancel_requested.connect(self._cancel_field)
 
+        self.editor.conflicts.resolve_requested.connect(self._resolve_conflict)
+        self.session.field_edits.changed.connect(self._field_status)
         self.editor.content_changed.connect(self._on_content_changed)
 
         self.session.card_changed.connect(self._on_card_changed)
         self.editor.portrait_panel.changed.connect(self._on_portrait_changed)
-        self.editor.options_edited.connect(self._on_options)
         self.editor.discard_drafts_requested.connect(self._discard_drafts)
         self.session.field_draft_changed.connect(self._on_card_changed)
         self.session.cards_deleted.connect(self._on_cards_deleted)
@@ -48,6 +49,17 @@ class CardEditorBinding:
         card = self.session.cards.get(self.card_id)
 
         self.editor.set_canonical(card, self.session.field_drafts, fields=fields)
+        edits = self.session.field_edits
+        errors = [message for key, message in edits.errors.items() if key[0] == self.card_id]
+        if errors:
+            self.editor.validation_status.setText(errors[0])
+        self.editor.conflicts.set_conflicts(
+            [
+                (key, "Конфликт · " + key[1], edits.drafts.get(key, conflict.raw), edits.read(key))
+                for key, conflict in edits.conflicts.items()
+                if key[0] == self.card_id
+            ]
+        )
 
     def dispose(self) -> None:
         if self._disposed:
@@ -55,6 +67,7 @@ class CardEditorBinding:
 
         self.editor.flush_pending()
         self._disposed = True
+        self.session.field_edits.changed.disconnect(self._field_status)
         for owner in tuple(self._field_owners.values()):
             self.session.field_edits.commit(owner, finish=True)
         self._field_owners.clear()
@@ -68,7 +81,6 @@ class CardEditorBinding:
         self.session.card_changed.disconnect(self._on_card_changed)
         self.session.cards_deleted.disconnect(self._on_cards_deleted)
         self.editor.portrait_panel.changed.disconnect(self._on_portrait_changed)
-        self.editor.options_edited.disconnect(self._on_options)
         self.editor.discard_drafts_requested.disconnect(self._discard_drafts)
         self.session.field_draft_changed.disconnect(self._on_card_changed)
 
@@ -81,6 +93,15 @@ class CardEditorBinding:
         if card_id == self.editor.card_id:
             self.refresh(fields)
 
+    def _field_status(self, key):
+        if key[0] == self.card_id:
+            self.refresh(frozenset({key[1]}))
+
+    def _resolve_conflict(self, key, mine):
+        if key:
+            self.session.field_edits.resolve(key, mine=mine)
+            self.refresh(frozenset({key[1]}))
+
     def _begin_field(self, field):
         if not self._disposed and not self.session.field_edits.has(self._field_owners.get(field)):
             self._field_owners[field] = self.session.field_edits.begin((self.card_id, field))
@@ -91,22 +112,12 @@ class CardEditorBinding:
 
     def _commit_field(self, field, raw):
         self._buffer_field(field, raw)
-        success = self.session.field_edits.commit(self._field_owners.pop(field, None), finish=True)
-        if not success:
-            self.editor.show_link_error(
-                self.session.field_edits.errors.get(
-                    (self.card_id, field), "Ошибочный ввод не сохранён"
-                )
-            )
+        self.session.field_edits.commit(self._field_owners.pop(field, None), finish=True)
         self.refresh(frozenset({field}))
 
     def _cancel_field(self, field):
         self.session.field_edits.cancel(self._field_owners.pop(field, None))
         self.refresh(frozenset({field}))
-
-    def _on_options(self, changes):
-        if not self._disposed:
-            self.session.update_card(self.card_id, **changes)
 
     def _discard_drafts(self):
         self.session.discard_field_drafts(self.card_id)

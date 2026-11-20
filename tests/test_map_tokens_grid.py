@@ -16,7 +16,7 @@ from lodandsy.application.sqlite_project_store import (
 )
 from lodandsy.domain.card import Card
 from lodandsy.domain.map_document import MapDocument, MapGrid, TokenInstance, resolve_token
-from lodandsy.ui.map_settings_dialogs import MapGridDialog, TokenPropertiesDialog
+from lodandsy.ui.map_settings_dialogs import MapGridDialog
 from lodandsy.ui.map_widget import MapView
 from tests.project_fixture import map_services
 
@@ -126,20 +126,9 @@ def test_ui_import_properties_canonical_images_and_multi_map(project, qtbot, tmp
     app.cards_service.update_card(card.id, portrait=None)
     assert second_widget.view._tokens[0].presentation.asset_id is None
 
-    def properties():
-        dialog = QApplication.activeModalWidget()
-        assert isinstance(dialog, TokenPropertiesDialog)
-        dialog.title.setText("Local")
-        dialog.width.setValue(2)
-        dialog.height.setValue(3)
-        dialog.accept()
-
-    QTimer.singleShot(0, properties)
-    app.maps._token_action(document.id, first.id, "properties")
+    app.maps_service.edit_token(document.id, first.id, label_override="Local", cells_w=2, cells_h=3)
     assert widget.view._tokens[0].presentation.label == "Local"
     assert widget.view._tokens[1].presentation.label == "Renamed"
-    app.maps._token_action(document.id, first.id, "reset")
-    assert widget.view._tokens[0].presentation.label == "Renamed"
     assert len(project.assets) == 2
     app.maps._token_action(document.id, first.id, "open")
     assert app.window_manager.find_window(app.card_editor_window_key(card.id))

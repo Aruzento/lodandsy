@@ -2,6 +2,7 @@ import math
 from dataclasses import dataclass, field
 from uuid import uuid4
 
+from lodandsy.domain.map_fog import FogState
 from lodandsy.domain.module_values import validate_id, validate_title
 
 
@@ -20,7 +21,7 @@ class MapGrid:
     cell_size: float = 64
     offset_x: float = 0
     offset_y: float = 0
-    opacity: float = 0.65
+    opacity: float = 0.25
     color: str = "#ffffff"
 
     def __post_init__(self):
@@ -198,13 +199,19 @@ class MapDocument:
     id: str = field(default_factory=lambda: str(uuid4()))
     tokens: tuple[TokenInstance, ...] = ()
     grid: MapGrid = field(default_factory=MapGrid)
-    layers: tuple[MapLayer, ...] = ()
+    layers: tuple[MapLayer, ...] = field(default_factory=lambda: (MapLayer("Слой 1"),))
     objects: tuple[PlacedAssetObject, ...] = ()
+    layers_initialized: bool = True
+    fog: FogState = field(default_factory=FogState)
 
     def __post_init__(self):
         validate_id(self.id)
         validate_id(self.asset_id)
         object.__setattr__(self, "title", validate_title(self.title))
+        if not isinstance(self.fog, FogState):
+            raise ValueError("Invalid map fog")
+        if type(self.layers_initialized) is not bool:
+            raise ValueError("Invalid layer initialization state")
         validate_map_contents(self.tokens, self.grid, self.layers, self.objects)
 
 
@@ -213,10 +220,16 @@ class MapPayload:
     asset_id: str
     tokens: tuple = ()
     grid: MapGrid = field(default_factory=MapGrid)
-    layers: tuple = ()
+    layers: tuple = field(default_factory=lambda: (MapLayer("Слой 1"),))
     objects: tuple = ()
-    version: int = field(default=5, init=False)
+    layers_initialized: bool = True
+    fog: FogState = field(default_factory=FogState)
+    version: int = field(default=6, init=False)
 
     def __post_init__(self):
         validate_id(self.asset_id)
+        if not isinstance(self.fog, FogState):
+            raise ValueError("Invalid map fog")
+        if type(self.layers_initialized) is not bool:
+            raise ValueError("Invalid layer initialization state")
         validate_map_contents(self.tokens, self.grid, self.layers, self.objects)

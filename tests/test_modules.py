@@ -186,6 +186,8 @@ def test_card_placement_rename_move_delete_undo_and_cascade(project, tmp_path, m
     second = session.add_token(other.id, card.id, 0.7, 0.8)
     monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("Renamed", True))
     app.maps._token_action(document.id, pin.id, "rename")
+    assert app.cards.get(card.id).title == "Canonical"
+    app.cards_service.update_card_fields(card.id, {"title": "Renamed"})
     assert app.cards.get(card.id).title == "Renamed"
     assert session.get_map(other.id).tokens == (second,)
     session.edit_token(document.id, pin.id, label_override="Local", x=0.6)

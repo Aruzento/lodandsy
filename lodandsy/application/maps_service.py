@@ -19,7 +19,13 @@ from lodandsy.domain.map_document import (
 
 def map_payload(document):
     return MapPayload(
-        document.asset_id, document.tokens, document.grid, document.layers, document.objects
+        document.asset_id,
+        document.tokens,
+        document.grid,
+        document.layers,
+        document.objects,
+        document.layers_initialized,
+        document.fog,
     )
 
 
@@ -77,7 +83,15 @@ class MapsService(QObject):
         return self.entities.project(
             key,
             lambda e, p: MapDocument(
-                e.title, p.asset_id, e.id, p.tokens, p.grid, p.layers, p.objects
+                e.title,
+                p.asset_id,
+                e.id,
+                p.tokens,
+                p.grid,
+                p.layers,
+                p.objects,
+                p.layers_initialized,
+                p.fog,
             ),
         )
 
@@ -114,7 +128,9 @@ class MapsService(QObject):
             self.core.mark_changed()
 
     def create_map(self, title, asset_id, parent_id=None):
-        document = MapDocument(title, asset_id)
+        document = MapDocument(
+            title, asset_id, layers=(MapLayer("Слой 1"),), layers_initialized=True
+        )
         with self.core.transaction():
             self.entities.create(
                 "map", document.title, map_payload(document), parent_id, id=document.id
@@ -123,6 +139,18 @@ class MapsService(QObject):
             self.core.after_commit(lambda: self.map_changed.emit(document.id))
             self.core.mark_changed()
         return document
+
+    def initialize_layers(self, map_id):
+        document = self.get_map(map_id)
+        if not document.layers_initialized:
+            # Canonical one-time initialization, never a side effect of refresh or paint.
+            self._put_map(
+                replace(
+                    document,
+                    layers=document.layers or (MapLayer("Слой 1"),),
+                    layers_initialized=True,
+                )
+            )
 
     def record_card_placement(self, before, after):
         self.undo_stack(before.id).push(MapEdit(self, before, after, "Разместить новую карточку"))
@@ -156,12 +184,30 @@ class MapsService(QObject):
         return self._get(map_id, "map")
 
     def edit_map(self, map_id, *, command="Изменить карту", **changes):
-        if changes.keys() - {"tokens", "grid", "layers", "objects"}:
+        if changes.keys() - {"tokens", "grid", "layers", "objects", "layers_initialized", "fog"}:
             raise ValueError("Изменять ID или источник карты этой командой нельзя")
         before = self.get_map(map_id)
+        if "layers" in changes:
+            changes["layers_initialized"] = True
         after = replace(before, **changes)
         if before != after:
             self.undo_stack(map_id).push(MapEdit(self, before, after, command))
+
+    def edit_fog(self, map_id, path, *, erase=False):
+        from lodandsy.application.fog_geometry import apply_fog
+
+        state = apply_fog(self.get_map(map_id).fog, path, erase=erase)
+        self.edit_map(map_id, fog=state, command="Открыть область" if erase else "Скрыть область")
+
+    def delete_fog_region(self, map_id, region_id):
+        from lodandsy.domain.map_fog import FogState
+
+        state = self.get_map(map_id).fog
+        self.edit_map(
+            map_id,
+            fog=FogState(tuple(r for r in state.regions if r.id != region_id)),
+            command="Удалить область тумана",
+        )
 
     def add_token(self, map_id, card_id, x, y, **values):
         self.card(card_id)

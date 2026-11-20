@@ -7,10 +7,12 @@ from PySide6.QtCore import QEventLoop, QObject, Qt, Signal
 from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox, QProgressDialog
 
 from lodandsy.application.background_tasks import BackgroundTasks
+from lodandsy.application.fog_geometry import state_path
 from lodandsy.application.map_pyramid import MAX_SOURCE_BYTES, ensure_pyramid
 from lodandsy.application.map_tiles import MapTiles
 from lodandsy.ui.map_editor import MapEditorWidget
-from lodandsy.ui.map_settings_dialogs import MapGridDialog, TokenPropertiesDialog
+from lodandsy.ui.map_presentation import MapPresentation
+from lodandsy.ui.map_settings_dialogs import MapGridDialog
 from lodandsy.ui.map_widget import MapWidget
 
 
@@ -29,7 +31,6 @@ class MapsController(QObject):
         media,
         actions,
         open_card,
-        edit_portrait,
         ensure_project,
         request_card_creation,
         queries,
@@ -37,23 +38,22 @@ class MapsController(QObject):
         super().__init__(window)
         self.window, self.windows, self.service, self.cards = window, windows, service, cards
         self.resources, self.media, self.actions = resources, media, actions
-        self.open_card, self.edit_portrait, self.ensure_project = (
-            open_card,
-            edit_portrait,
-            ensure_project,
-        )
+        self.open_card, self.ensure_project = open_card, ensure_project
         self.tasks = BackgroundTasks(self, workers=2, name="map-images")
         self.request_card_creation = request_card_creation
         self.queries = queries
         self.tiles = MapTiles(self)
         self._cancel = Event()
         self._decode_cancels = set()
+        self.presentations = {}
+        self._compiled_fog = {}
         self._map_ui = {}
         self._map_editor_ui = {}
         self._card_maps = {}
         self.progress = None
         self.importing = False
         service.map_changed.connect(self._refresh_map)
+        service.map_deleted.connect(self.close_presentation)
         service.map_deleted.connect(lambda key: self.windows.close_window(f"map:{key}"))
         service.map_deleted.connect(lambda key: self.windows.close_window(f"map-editor:{key}"))
         service.core.replaced.connect(self.reset)
@@ -61,6 +61,8 @@ class MapsController(QObject):
         cards.card_changed.connect(self.card_changed)
 
     def reset(self):
+        for key in tuple(self.presentations):
+            self.close_presentation(key)
         self._cancel.set()
         for cancel in self._decode_cancels:
             cancel.set()
@@ -70,6 +72,7 @@ class MapsController(QObject):
         self._map_ui.clear()
         self._map_editor_ui.clear()
         self._card_maps.clear()
+        self._compiled_fog.clear()
         if self.importing:
             if self.progress:
                 self.progress.close()
@@ -80,6 +83,8 @@ class MapsController(QObject):
             self.import_finished.emit()
 
     def shutdown(self):
+        for key in tuple(self.presentations):
+            self.close_presentation(key)
         self.wait_import()
         for cancel in self._decode_cancels:
             cancel.set()
@@ -205,6 +210,7 @@ class MapsController(QObject):
         return self._open_map_view(map_id, False)
 
     def open_map_editor(self, map_id):
+        self.service.initialize_layers(map_id)
         return self._open_map_view(map_id, True)
 
     def _open_map_view(self, map_id, editor):
@@ -225,6 +231,9 @@ class MapsController(QObject):
                 )
                 if editor
                 else MapWidget(self.service.undo_stack(map_id))
+            )
+            widget.view.transient_changed.connect(
+                lambda kind, key, x, y: self._transient(map_id, kind, key, x, y, widget.view)
             )
             widget.project_root = self.resources.root
             self.media.ready.connect(widget.image_ready)
@@ -252,6 +261,14 @@ class MapsController(QObject):
                     lambda key, action: self._editor_object_action(map_id, key, action)
                 )
             else:
+                widget.fog_tools.edited.connect(
+                    lambda path, erase: self._fog_edit(map_id, path, erase, widget)
+                )
+                widget.fog_tools.deleted.connect(
+                    lambda key: self.service.delete_fog_region(map_id, key)
+                )
+                widget.presentation_requested.connect(lambda: self.open_presentation(map_id))
+                widget.view.camera_changed.connect(lambda rect: self._camera_changed(map_id, rect))
                 widget.editor_requested.connect(lambda: self.open_map_editor(map_id))
                 widget.grid_requested.connect(lambda: self._grid_settings(map_id))
                 widget.view.token_moved.connect(
@@ -274,6 +291,8 @@ class MapsController(QObject):
             return widget
 
         window = self.windows.open_window(key, title, factory)
+        if not editor:
+            window.closed.connect(lambda closed: self.close_presentation(map_id))
         window.closed.connect(
             lambda closed: self._remember_map_camera(map_id, closed.widget(), editor)
         )
@@ -291,6 +310,9 @@ class MapsController(QObject):
                 widget.message.setText("Изображение недоступно: " + error)
             else:
                 widget.view.set_pyramid(pyramid, self.tiles)
+                presentation = self.presentations.get(map_id)
+                if presentation:
+                    presentation.view.set_pyramid(pyramid, self.tiles)
                 if not editor:
                     widget.token_add.setEnabled(True)
                 widget.message.setText(
@@ -304,6 +326,8 @@ class MapsController(QObject):
             if camera:
                 widget.view.restore_camera(camera)
             widget.pending_camera = None
+            if not editor:
+                widget.view._publish_camera()
 
         other = self.windows.find_window(("map:" if editor else "map-editor:") + map_id)
         if other and other.widget().view._background is not None:
@@ -319,16 +343,92 @@ class MapsController(QObject):
         self._refresh_map(map_id)
         return window
 
+    def _fog_edit(self, map_id, path, erase, widget):
+        try:
+            self.service.edit_fog(map_id, path, erase=erase)
+        except ValueError as error:
+            widget.fog_tools.notice.setText(str(error))
+
+    def open_presentation(self, map_id):
+        existing = self.presentations.get(map_id)
+        if existing:
+            existing.show()
+            existing.raise_()
+            existing.activateWindow()
+            return existing
+        viewer = self.windows.find_window("map:" + map_id)
+        if viewer is None:
+            viewer = self.open_map(map_id)
+        document = self.service.get_map(map_id)
+        presentation = MapPresentation(document.title)
+        self.presentations[map_id] = presentation
+        presentation.closed.connect(lambda: self.presentations.pop(map_id, None))
+        self.media.ready.connect(presentation.image_ready)
+        self._refresh_map(map_id)
+        background = viewer.widget().view._background
+        if background is not None:
+            presentation.view.set_pyramid(background.pyramid, self.tiles)
+            viewer.widget().view._publish_camera()
+        presentation.show()
+        return presentation
+
+    def close_presentation(self, map_id):
+        presentation = self.presentations.get(map_id)
+        if presentation:
+            presentation.close()
+
+    def _camera_changed(self, map_id, rect):
+        presentation = self.presentations.get(map_id)
+        if presentation:
+            presentation.follow_camera(rect)
+
+    def _transient(self, map_id, kind, key, x, y, source):
+        views = [
+            w.widget().view
+            for prefix in ("map:", "map-editor:")
+            if (w := self.windows.find_window(prefix + map_id))
+        ]
+        if map_id in self.presentations:
+            views.append(self.presentations[map_id].view)
+        for view in views:
+            if view is source:
+                continue
+            item = (
+                next((i for i in view._tokens if i.token.id == key), None)
+                if kind == "token"
+                else view._objects.get(key)
+            )
+            if item:
+                item.setPos(x, y)
+
     def _remember_map_camera(self, map_id, widget, editor=False):
         camera = widget.camera_state()
         if map_id in self.service.maps and camera is not None:
             (self._map_editor_ui if editor else self._map_ui)[map_id] = camera
+
+        if not any(self.windows.find_window(prefix + map_id) for prefix in ("map:", "map-editor:")):
+            self._compiled_fog.pop(map_id, None)
 
     def _refresh_map(self, key):
         windows = [self.windows.find_window(prefix + key) for prefix in ("map:", "map-editor:")]
         if not any(windows):
             return
         document = self.service.get_map(key)
+        cached = self._compiled_fog.get(key)
+        if cached is None or cached[0] != document.fog:
+            cached = (document.fog, state_path(document.fog))
+            self._compiled_fog[key] = cached
+        presentation = self.presentations.get(key)
+        if presentation:
+            presentation.setWindowTitle("Презентация · " + document.title)
+            presentation.view.set_annotations(
+                document,
+                self.cards.get_card,
+                self.resources.root,
+                self.resources.assets,
+                self.media.cached_preview,
+                fog_path=cached[1],
+            )
         for ids in self._card_maps.values():
             ids.discard(key)
         for token in document.tokens:
@@ -346,6 +446,7 @@ class MapsController(QObject):
                 self.resources.root,
                 project.assets,
                 self.media.cached_preview,
+                fog_path=cached[1],
             )
             if editor:
                 widget.set_document(document)
@@ -526,55 +627,15 @@ class MapsController(QObject):
             self.media.import_image(source, publish)
 
     def _token_action(self, map_id, token_id, action):
-        from lodandsy.domain.map_document import resolve_token
-
         token = next((t for t in self.service.get_map(map_id).tokens if t.id == token_id), None)
         if token is None:
             return
         if action == "delete":
             self.service.delete_token(map_id, token_id)
-            return
-        if action == "reset":
-            self.service.edit_token(
-                map_id,
-                token_id,
-                label_override=None,
-                image_override=None,
-                kind_override=None,
-                cells_w=None,
-                cells_h=None,
-            )
-            return
-        try:
-            card = self.cards.get_card(token.card_id)
-        except ValueError:
-            self._error("Карточка размещения отсутствует. Удалите повреждённое размещение.")
-            return
-        if action == "open":
-            self.open_card(card.id)
-        elif action == "rename":
-            title, ok = QInputDialog.getText(self.window, "Карточка", "Название:", text=card.title)
-            if ok and title.strip():
-                self.cards.update_card_fields(card.id, {"title": title})
-        elif action == "properties":
-            dialog = TokenPropertiesDialog(token, resolve_token(token, card), self.window)
-            if dialog.exec():
-                self.service.edit_token(map_id, token_id, **dialog.changes())
-        elif action == "image":
-            self.edit_portrait(card.id)
-        elif action == "override-image":
-            filename = self._image_filename()
-            if not filename:
+        elif action == "open":
+            try:
+                self.cards.get_card(token.card_id)
+            except ValueError:
+                self._error("Карточка размещения отсутствует")
                 return
-
-            def publish(asset, error):
-                if error:
-                    self._error(error)
-                    return False
-                current = self.service.maps.get(map_id)
-                if current is None or not any(t.id == token_id for t in current.tokens):
-                    return False
-                self.service.edit_token(map_id, token_id, image_override=asset.id)
-                return True
-
-            self.media.import_image(Path(filename), publish)
+            self.open_card(token.card_id)

@@ -6,7 +6,13 @@ from lodandsy.domain.table_document import TableDocument, TablePayload
 def module_payload(document):
     if isinstance(document, MapDocument):
         return MapPayload(
-            document.asset_id, document.tokens, document.grid, document.layers, document.objects
+            document.asset_id,
+            document.tokens,
+            document.grid,
+            document.layers,
+            document.objects,
+            document.layers_initialized,
+            document.fog,
         )
     if isinstance(document, TableDocument):
         return TablePayload(document.columns, document.rows)
@@ -28,6 +34,8 @@ def _module_document(entity, payload):
             payload.grid,
             payload.layers,
             payload.objects,
+            payload.layers_initialized,
+            payload.fog,
         )
     if entity.kind == "table":
         return TableDocument(entity.title, key, payload.columns, payload.rows)

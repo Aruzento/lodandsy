@@ -3,6 +3,10 @@ from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
 PATHS = {
+    "fog": '<path d="M2 6a3 3 0 0 1 5-3 4 4 0 0 1 7 3M1 9h14M3 12h10M5 15h6"/>',
+    "monitor": '<rect x="1" y="2" width="14" height="10" rx="1"/><path d="M8 12v3M4 15h8"/>',
+    "settings": '<circle cx="8" cy="8" r="3"/>'
+    '<path d="M8 1v2M8 13v2M1 8h2M13 8h2M3 3l2 2M11 11l2 2M3 13l2-2M11 5l2-2"/>',
     "undo": '<path d="M5 4 2 7l3 3M2 7h7a4 4 0 0 1 0 8"/>',
     "redo": '<path d="m11 4 3 3-3 3M14 7H7a4 4 0 0 0 0 8"/>',
     "crop": '<path d="M4 1v11h11M1 4h11v11M13 1 1 13"/>',

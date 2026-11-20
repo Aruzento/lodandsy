@@ -1,0 +1,31 @@
+{
+  "source": "nasa-blue-marble.jpg",
+  "pixels": 233280000,
+  "platform": "windows",
+  "dpi": [
+    96.0,
+    96.0
+  ],
+  "import_s": 15.964,
+  "reopen_s": 4.004,
+  "tokens": 1000,
+  "objects": 30,
+  "fog_regions": 64,
+  "shared_tile_cache": true,
+  "tile_cache_bytes": 66852864,
+  "tile_cache_budget_mib": 64,
+  "gui_peak_rss_mib": 190.32,
+  "worker_peak_rss_mib": 157.27,
+  "two_view_render_p50_ms": 30.399,
+  "two_view_render_p95_ms": 85.921,
+  "transient_p50_ms": 0.05,
+  "transient_p95_ms": 0.145,
+  "fog_gesture_p50_ms": 115.012,
+  "fog_gesture_p95_ms": 157.738,
+  "save_ms": 137.709,
+  "backup_block_ms": 872.016,
+  "player_close_rss_before_mib": 190.05,
+  "player_close_rss_after_mib": 184.59,
+  "max_gui_tick_gap_ms": 1013.523,
+  "physical_smoothness": "not evaluated"
+}

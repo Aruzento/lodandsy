@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QPushButton,
 )
 
+from lodandsy.application.project_history import ProjectHistory
 from lodandsy.application.save_coordinator import SaveCoordinator, SaveState
 from lodandsy.application.sqlite_project_store import (
     AssetRecord,
@@ -35,9 +36,10 @@ if TYPE_CHECKING:
 
 
 class ProjectController(QObject):
-    def __init__(self, controller: "AppController"):
+    def __init__(self, controller: "AppController", history=None):
         super().__init__(controller.window)
         self.controller = controller
+        self.history = history if history is not None else ProjectHistory()
         controller.attach_project(self)
         self.resources = controller.resources
         self.window = controller.window
@@ -60,10 +62,6 @@ class ProjectController(QObject):
         self.retry.clicked.connect(self.save_current)
         self.window.statusBar().addWidget(self.status, 1)
         self.window.statusBar().addPermanentWidget(self.retry)
-        from lodandsy.application.mow_import_controller import MowImportController
-
-        self.mow_importer = MowImportController(self)
-        self.mow_importer.busy_changed.connect(self._update_status)
         self._build_menu()
         self.window.close_guard = self.can_close
         if self.controller.cards.all():
@@ -89,17 +87,9 @@ class ProjectController(QObject):
             self.new_action,
             self.open_action,
             self.save_action,
-            self.backup_action,
-            self.restore_action,
         ]:
             menu.addAction(action)
-        self.mow_actions = []
-        for title, directory in [("Импорт карточки MOW…", False), ("Импорт каталога MOW…", True)]:
-            action = menu.addAction(title)
-            action.triggered.connect(
-                lambda checked=False, d=directory: self.mow_importer.request(d)
-            )
-            self.mow_actions.append(action)
+        self.window.right_rail.settings_menu.addActions([self.backup_action, self.restore_action])
         tools = self.window.menuBar().addMenu("Инструменты")
         dice = tools.addAction("Кубики")
         dice.triggered.connect(self.controller.dice.open)
@@ -122,11 +112,7 @@ class ProjectController(QObject):
 
     @property
     def busy(self):
-        return (
-            self.controller.maps.importing
-            or self.controller.media.importing
-            or (hasattr(self, "mow_importer") and self.mow_importer.importing)
-        )
+        return self.controller.maps.importing or self.controller.media.importing
 
     def _snapshot(self, revision):
         return ProjectSnapshot(
@@ -229,7 +215,7 @@ class ProjectController(QObject):
         color = (
             "#f19a9a"
             if self.saver.state == SaveState.ERROR
-            else ("#ceb075" if self.saver.dirty or self.draft_count else "#aab7ca")
+            else ("#c9c7bf" if self.saver.dirty or self.draft_count else "#a6a6a3")
         )
         self.status.setStyleSheet(f"color: {color};")
         self.status.setToolTip(text)
@@ -239,16 +225,18 @@ class ProjectController(QObject):
             self.open_action,
             self.backup_action,
             self.restore_action,
-            *self.mow_actions,
         ]:
             action.setEnabled(not self.saver.saving and not self.busy)
+        self.backup_action.setEnabled(
+            self.store is not None and not self.saver.saving and not self.busy
+        )
+        self.restore_action.setEnabled(self.backup_action.isEnabled())
         self.window.setWindowTitle(f"LODANDSY — {name}" + (" *" if self.saver.dirty else ""))
 
     def create_project(self, folder: Path, *, preserve_current=True, discard=False):
         self.controller.flush_edits()
         self.controller.media.wait_import()
         self.controller.maps.wait_import()
-        self.mow_importer.wait_import()
         self.saver.wait_current()
         if (self.draft_count or (self.saver.dirty and self.store is not None)) and not discard:
             raise ProjectError("Save the current project before creating another")
@@ -281,6 +269,7 @@ class ProjectController(QObject):
                 return False
         if old is not None:
             old.close()
+        self.history.remember(store.root)
         self._update_status()
         return True
 
@@ -288,7 +277,6 @@ class ProjectController(QObject):
         self.controller.flush_edits()
         self.controller.media.wait_import()
         self.controller.maps.wait_import()
-        self.mow_importer.wait_import()
         self.saver.wait_current()
         if self.store is not None and self.store.root == Path(folder).resolve():
             return
@@ -316,6 +304,7 @@ class ProjectController(QObject):
         self._ui_restore_failed = False
         if previous is not None:
             previous.close()
+        self.history.remember(store.root)
         self._update_status()
         try:
             state = load_workspace_file(store.root)
@@ -343,7 +332,6 @@ class ProjectController(QObject):
         self.controller.flush_edits()
         self.controller.media.wait_import()
         self.controller.maps.wait_import()
-        self.mow_importer.wait_import()
         self.saver.wait_current()
         if not self._confirm_drafts():
             return False
@@ -372,7 +360,6 @@ class ProjectController(QObject):
             return False
         self.saver.shutdown()
         self.controller.shutdown_features()
-        self.mow_importer.shutdown()
         if self.store is not None:
             self.store.close()
         return True
@@ -391,24 +378,67 @@ class ProjectController(QObject):
     def _show_error(self, error):
         QMessageBox.warning(self.window, "Проект", str(error))
 
-    def _request_new(self):
-        folder = QFileDialog.getExistingDirectory(self.window, "Пустая папка нового проекта")
+    def _request_new(self, _checked=False, *, parent=None):
+        host = parent if parent is not None else self.window
+        folder = QFileDialog.getExistingDirectory(
+            host, "Пустая папка нового проекта", self.history.last_directory
+        )
         if not folder or not self._confirm_changes():
-            return
+            return False
         try:
-            # Discard was explicit in the preceding dialog; retain the old data on disk.
-            self.create_project(Path(folder), preserve_current=False, discard=True)
+            return self.create_project(Path(folder), preserve_current=False, discard=True)
         except (OSError, ValueError) as error:
-            self._show_error(error)
+            if parent is None:
+                self._show_error(error)
+            else:
+                parent.error.setText("Не удалось создать проект.\n" + str(error))
+            return False
+
+    def choose_project(self, *, welcome=False):
+        from lodandsy.ui.project_chooser import ProjectChooser
+
+        dialog = ProjectChooser(
+            self.history.entries, None if welcome else self.window, welcome=welcome
+        )
+
+        def selected(folder, replaces=None):
+            if not self._confirm_changes():
+                return
+            try:
+                self.open_project(Path(folder), discard=True)
+            except (OSError, ValueError) as error:
+                dialog.error.setText("Не удалось открыть проект.\n" + str(error))
+                return
+            if replaces:
+                self.history.remember(folder, replaces=replaces)
+            self.window.show()
+            dialog.accept()
+
+        def browse(replaces=None):
+            folder = QFileDialog.getExistingDirectory(
+                dialog, "Открыть папку проекта", self.history.last_directory
+            )
+            if folder:
+                selected(folder, replaces)
+
+        def create():
+            if self._request_new(parent=dialog):
+                self.window.show()
+                dialog.accept()
+
+        def remove(folder):
+            self.history.remove(folder)
+            dialog.set_entries(self.history.entries)
+
+        dialog.open_requested.connect(selected)
+        dialog.browse_requested.connect(browse)
+        dialog.locate_requested.connect(browse)
+        dialog.remove_requested.connect(remove)
+        dialog.create_requested.connect(create)
+        return dialog.exec()
 
     def _request_open(self):
-        folder = QFileDialog.getExistingDirectory(self.window, "Открыть папку проекта")
-        if not folder or not self._confirm_changes():
-            return
-        try:
-            self.open_project(Path(folder), discard=True)
-        except (OSError, ValueError) as error:
-            self._show_error(error)
+        self.choose_project()
 
     def _request_backup(self):
         if not self.save_current() or self.store is None:

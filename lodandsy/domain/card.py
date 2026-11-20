@@ -102,7 +102,11 @@ class CardPayload:
     portrait: Portrait | None = None
     card_type: str = "note"
     values: tuple = ()
-    version: int = field(default=4, init=False)
+    version: int = field(default=5, init=False)
+
+    def validate_replacement(self, previous):
+        if self.card_type != previous.card_type:
+            raise ValueError("Тип карточки после создания неизменяемый")
 
     def __post_init__(self):
         if not isinstance(self.card_type, str) or self.card_type not in CARD_TYPES:

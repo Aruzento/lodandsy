@@ -6,7 +6,7 @@ jobs:
   test:
     runs-on: windows-latest
     env:
-      QT_QPA_PLATFORM: offscreen
+      QT_QPA_PLATFORM: windows
     steps:
       - uses: actions/checkout@v6
         with:
@@ -22,3 +22,7 @@ jobs:
       - run: python -m pip check
       - run: python -m ruff check .
       - run: python -m pytest
+      - name: Offscreen geometry and data regression checks
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest tests/test_map_fog.py tests/test_conflict_resolution.py tests/test_project_catalogue.py

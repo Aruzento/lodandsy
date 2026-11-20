@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 from lodandsy.application.clipboard import copy_text
 from lodandsy.domain.card_schema import CARD_TYPES
 from lodandsy.ui.card_fields import CardFieldsForm
+from lodandsy.ui.conflict_bar import ConflictBar
 from lodandsy.ui.icons import icon
 from lodandsy.ui.semantic_edits import SemanticLineEdit
 
@@ -98,6 +99,8 @@ class InspectorPanel(QDockWidget):
         self.discard.clicked.connect(self.discard_drafts_requested)
         form.addRow(self.add_field)
         form.addRow(self.discard)
+        self.conflicts = ConflictBar(self)
+        form.addRow(self.conflicts)
         organization = QLabel("ОРГАНИЗАЦИЯ")
         organization.setObjectName("sectionCaption")
         form.addRow(organization)

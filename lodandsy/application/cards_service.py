@@ -144,7 +144,7 @@ class CardsService(QObject):
             *(
                 (definition.label, key)
                 for key, definition in FIELD_DEFINITIONS.items()
-                if key not in {"aliases", "description", "mow_id", "mow_type"}
+                if key not in {"aliases", "description"}
             ),
         )
 

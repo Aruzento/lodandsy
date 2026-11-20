@@ -1,4 +1,6 @@
+import argparse
 import sys
+from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 
@@ -10,14 +12,28 @@ from lodandsy.ui.theme import apply_theme
 
 def main() -> int:
     app = QApplication(sys.argv)
+    app.setOrganizationName("LODANDSY")
+    app.setApplicationName("LODANDSY")
     apply_theme(app)
+    parser = argparse.ArgumentParser(description="LODANDSY")
+    parser.add_argument("project", nargs="?", type=Path)
+    args = parser.parse_args()
 
     window = AppShell()
 
     _controller = AppController(window)
     _project = ProjectController(_controller)
 
-    window.show()
+    if args.project:
+        try:
+            _project.open_project(args.project)
+        except (OSError, ValueError) as error:
+            _project._show_error(error)
+            return 1
+        window.show()
+    elif not _project.choose_project(welcome=True):
+        _project.can_close()
+        return 0
 
     return app.exec()
 

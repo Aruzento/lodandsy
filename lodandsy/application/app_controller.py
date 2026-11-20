@@ -73,7 +73,6 @@ class AppController:
             self.media,
             self.actions,
             self.open_card_editor,
-            self.card_views.edit_portrait,
             self.ensure_project,
             self.card_views.request_card_creation,
             self.references,

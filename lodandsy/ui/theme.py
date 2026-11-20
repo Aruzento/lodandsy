@@ -74,6 +74,8 @@ def apply_theme(app):
         QToolButton#portraitImage { background:#191919; border:1px solid #333333;
                                    padding:0; color:#a6a6a3; font-size:16px; }
         QToolButton#portraitImage:hover, QToolButton#portraitImage:focus { border-color:#c9c7bf; }
+        QLabel#cardTypeBadge { color:#c9c7bf; background:#292929;
+                              padding:4px 8px; border-radius:3px; }
         QLineEdit#cardHeroTitle { font-size:32px; font-weight:600; padding:4px 0;
                                 border:1px solid transparent; background:transparent; }
         QLineEdit#cardHeroTitle:focus { border-bottom:1px solid #c9c7bf; }

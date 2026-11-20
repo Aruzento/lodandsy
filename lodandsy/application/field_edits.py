@@ -5,6 +5,8 @@ from uuid import uuid4
 
 from PySide6.QtCore import QObject, Signal
 
+from lodandsy.application.edit_conflict import EditConflict
+
 
 @dataclass(slots=True)
 class FieldEdit:
@@ -34,8 +36,14 @@ class FieldEdits(QObject):
         )
         self._edits = {}
         self.errors = {}
+        self.conflicts = {}
+        self._draft_bases = {}
 
     def _draft(self, key, raw):
+        if raw is None:
+            self.conflicts.pop(key, None)
+            self._draft_bases.pop(key, None)
+            self.errors.pop(key, None)
         if self.on_draft:
             self.on_draft(key, raw)
         elif raw is None:
@@ -48,7 +56,9 @@ class FieldEdits(QObject):
         value = self.read(key)
         raw = self.drafts.get(key, value_text(value))
         owner = str(uuid4())
-        self._edits[owner] = FieldEdit(key, value, raw, raw, self.drafts.get(key))
+        self._edits[owner] = FieldEdit(
+            key, self._draft_bases.get(key, value), raw, raw, self.drafts.get(key)
+        )
         return owner
 
     def has(self, owner):
@@ -69,9 +79,15 @@ class FieldEdits(QObject):
         success = True
         if edit.raw != edit.committed_text or edit.initial_draft is not None:
             try:
+                if edit.key in self.conflicts:
+                    self.conflicts[edit.key].raw = edit.raw
+                    raise ValueError(
+                        "Конфликт: выберите «Использовать сохранённое» или «Применить мой вариант»"
+                    )
                 value = self.parse(edit.key, edit.raw)
                 current = self.read(edit.key)
                 if current != edit.base and current != value:
+                    self.conflicts[edit.key] = EditConflict(edit.raw, edit.base, current)
                     raise ValueError(
                         "Поле изменено в другом представлении. Текущее значение: "
                         + value_text(current)
@@ -84,6 +100,7 @@ class FieldEdits(QObject):
                 self.errors.pop(edit.key, None)
                 self._draft(edit.key, None)
             except ValueError as error:
+                self._draft_bases.setdefault(edit.key, edit.base)
                 self.errors[edit.key] = str(error)
                 self._draft(edit.key, edit.raw)
                 success = False
@@ -91,6 +108,33 @@ class FieldEdits(QObject):
             self._edits.pop(owner, None)
         self.pending_changed.emit()
         return success
+
+    def resolve(self, key, *, mine=False):
+        conflict = self.conflicts.get(key)
+        if mine:
+            if conflict is None:
+                return False
+            current = self.read(key)
+            if current != conflict.observed:
+                conflict.observed = current
+                self.errors[key] = "Сохранённое значение снова изменилось: " + value_text(current)
+                self.changed.emit(key)
+                return False
+            try:
+                value = self.parse(key, self.drafts[key])
+                if value != current:
+                    self.write(key, value)
+            except ValueError as error:
+                self.errors[key] = str(error)
+                self.changed.emit(key)
+                return False
+        for owner, edit in tuple(self._edits.items()):
+            if edit.key == key:
+                self._edits.pop(owner)
+        self.errors.pop(key, None)
+        self._draft(key, None)
+        self.pending_changed.emit()
+        return True
 
     def cancel(self, owner):
         edit = self._edits.pop(owner, None)
@@ -110,6 +154,10 @@ class FieldEdits(QObject):
         for owner, edit in tuple(self._edits.items()):
             if ids is None or edit.key[0] in ids:
                 self._edits.pop(owner)
+        for key in self.conflicts.keys() | self._draft_bases.keys():
+            if ids is None or key[0] in ids:
+                self.conflicts.pop(key, None)
+                self._draft_bases.pop(key, None)
         for key in tuple(self.errors):
             if ids is None or key[0] in ids:
                 self.errors.pop(key, None)

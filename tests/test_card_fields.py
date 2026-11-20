@@ -34,7 +34,7 @@ def test_fields_roundtrip_unset_false_zero_refs_and_type_change():
     changed = replace(card, card_type="article")
     assert changed.sections == card.sections and changed.values == card.values
     version, data = encode_card(changed)
-    assert version == 4 and decode_card(changed.title, card.id, None, version, data) == changed
+    assert version == 5 and decode_card(changed.title, card.id, None, version, data) == changed
 
 
 @pytest.mark.parametrize(
@@ -92,7 +92,8 @@ def test_session_addressed_events_search_and_backup(project, tmp_path, qtbot):
     restored = SQLiteProjectStore.restore(backup, tmp_path / "restored")
     assert restored.load() == snapshot
     restored.close()
-    app.cards_service.update_card(card.id, card_type="note")
+    with pytest.raises(ValueError):
+        app.cards_service.update_card(card.id, card_type="note")
     assert app.cards.get(card.id).value("hp") == 0
 
 

@@ -56,6 +56,8 @@ def main():
         shutil.rmtree(source)
     for folder in ["lodandsy", "build_support", "tests", "docs", "prototypes"]:
         for path in (ROOT / folder).rglob("*"):
+            if "references" in path.relative_to(ROOT).parts:
+                continue
             if path.is_file() and (
                 path.suffix in {".py", ".md", ".spec", ".ps1", ".json", ".txt", ".drawio"}
                 or path.is_relative_to(ROOT / "build_support/licenses")

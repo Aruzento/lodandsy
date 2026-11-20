@@ -61,7 +61,8 @@ def test_card_layout_is_square_stable_after_loading_and_switches(project, qtbot)
         editor.select_section(section.id)
         panel.refresh_image()
         assert panel.size() == before and before.width() == before.height()
-    assert editor.text_edit.maximumWidth() == 760
+    assert editor.text_edit.mapTo(editor, editor.text_edit.rect().topLeft()).x() == 16
+    assert editor.text_edit.maximumWidth() > editor.width()
     assert editor.body.height() > 250
 
 

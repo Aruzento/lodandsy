@@ -10,7 +10,7 @@ def encode_card(card):
     for section in card.sections:
         if section.kind == "rich_text":
             validate_html(section.content)
-    return 4, json.dumps(
+    return 5, json.dumps(
         dict(
             card_type=card.card_type,
             fields=dict(card.values),
@@ -31,7 +31,7 @@ def _unique_pairs(pairs):
 
 
 def decode_card(title, key, parent, version, source):
-    if type(version) is not int or version != 4:
+    if type(version) is not int or version != 5:
         raise ValueError(f"Unsupported Card payload version: {version}")
     if not isinstance(source, str) or len(source.encode("utf-8")) > 5 * 2**20:
         raise ValueError("Card payload exceeds budget")

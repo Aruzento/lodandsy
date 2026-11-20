@@ -68,7 +68,7 @@ class TokenItem(QGraphicsItem):
         self.token, self.presentation, self.view = token, presentation, view
         self.cell_size = view.grid.cell_size
         self.root, self.asset_path, self.provider = root, asset_path, provider
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, view.role != "player")
         self.set_value(token, presentation, root, asset_path, provider)
 
     def set_value(self, token, presentation, root, asset_path, provider):
@@ -173,35 +173,42 @@ class TokenItem(QGraphicsItem):
 
     def mousePressEvent(self, event):
         self._drag_origin = self.pos()
+        self._dragging = True
+        self._cancelled = False
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._cancelled:
+            return
+        super().mouseMoveEvent(event)
+        self.view.transient_changed.emit("token", self.token.id, self.x(), self.y())
 
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
+        self._dragging = False
+        if self._cancelled:
+            self.setPos(self._drag_origin)
+            return
         if getattr(self, "_drag_origin", self.pos()) == self.pos():
             return
         view, key, x, y = self.view, self.token.id, self.pos().x(), self.pos().y()
         QTimer.singleShot(0, view, lambda: view.token_moved.emit(key, x, y))
 
     def mouseDoubleClickEvent(self, event):
-        if self.view.role == "editor":
+        if self.view.role != "viewer":
             event.ignore()
             return
         self.view.token_action.emit(self.token.id, "open")
         event.accept()
 
     def contextMenuEvent(self, event):
-        if self.view.role == "editor":
+        if self.view.role != "viewer":
             event.ignore()
             return
         menu = QMenu()
         for label, name in [
             ("Открыть карточку", "open"),
-            ("Свойства размещения…", "properties"),
-            ("Переименовать карточку…", "rename"),
-            ("Портрет карточки…", "image"),
-            ("Своё изображение размещения…", "override-image"),
-            ("Сбросить переопределения", "reset"),
-            ("Удалить размещение", "delete"),
+            ("Удалить токен", "delete"),
         ]:
             action = menu.addAction(label)
             action.setData(name)
@@ -215,7 +222,7 @@ class RasterObjectItem(QGraphicsItem):
     def __init__(self, value, layer, view, path, root, provider):
         super().__init__()
         self.view = view
-        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, view.role != "player")
         self.set_value(value, layer, path, root, provider)
 
     def set_value(self, value, layer, path, root, provider):
@@ -277,6 +284,7 @@ class RasterObjectItem(QGraphicsItem):
     def mouseMoveEvent(self, event):
         if not getattr(self, "_cancelled", False):
             super().mouseMoveEvent(event)
+            self.view.transient_changed.emit("object", self.value.id, self.x(), self.y())
 
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
@@ -289,7 +297,7 @@ class RasterObjectItem(QGraphicsItem):
             QTimer.singleShot(0, self.view, lambda: self.view.object_moved.emit(key, x, y))
 
     def contextMenuEvent(self, event):
-        if self.view.role == "viewer":
+        if self.view.role != "editor":
             event.ignore()
             return
         menu = QMenu()

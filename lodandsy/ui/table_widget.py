@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 
 from lodandsy.application.clipboard import copy_text
 from lodandsy.domain.table_document import ColumnDefinition
+from lodandsy.ui.conflict_bar import ConflictBar
 from lodandsy.ui.entity_picker import EntityPicker
 from lodandsy.ui.table_headers import TableView
 from lodandsy.ui.table_model import SemanticCellDelegate, TableModel
@@ -61,6 +62,9 @@ class TableWidget(QWidget):
         self.error.setTextFormat(Qt.TextFormat.PlainText)
         self.error.setStyleSheet("color:#f19a9a")
         layout.addWidget(self.error)
+        self.conflicts = ConflictBar(self)
+        self.conflicts.resolve_requested.connect(self._resolve_conflict)
+        layout.addWidget(self.conflicts)
         self.model.error.connect(self.error.setText)
         self.table.horizontalHeader().append_requested.connect(self.add_column)
         self.table.verticalHeader().append_requested.connect(self.add_row)
@@ -431,7 +435,31 @@ class TableWidget(QWidget):
         menu.exec(header.mapToGlobal(point))
         self._context_row_id = None
 
+    def _resolve_conflict(self, identity, mine):
+        if self.model.service and identity:
+            self.model.flush_owned_edits()
+            if self.model.service.resolve_conflict(*identity, mine=mine):
+                self.revert_active_editor()
+            self.update_draft_notice()
+
     def update_draft_notice(self):
+        service = self.model.service
+        rows = {r.id: r for r in self.model.document.rows}
+        columns = {c.id: c for c in self.model.document.columns}
+        self.conflicts.set_conflicts(
+            [
+                (
+                    key,
+                    "Конфликт · " + columns[key[2]].name,
+                    service.drafts(key[0]).get(key[1:], conflict.raw),
+                    rows[key[1]].value(key[2]),
+                )
+                for key, conflict in service.conflicts.items()
+                if key[0] == self.model.document.id and key[1] in rows and key[2] in columns
+            ]
+            if service
+            else []
+        )
         invalid = bool(self.model.drafts)
         self.discard.setVisible(invalid)
         if not invalid:

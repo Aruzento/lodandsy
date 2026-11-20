@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from PySide6.QtCore import QObject, Signal
 
+from lodandsy.application.edit_conflict import ConcurrentEditError, EditConflict
 from lodandsy.application.entity_session import EntitySession
 from lodandsy.domain.table_document import TableDocument, TablePayload, display_value, parse_cell
 
@@ -46,6 +47,8 @@ class TablesService(QObject):
         self._edits = {}
         self._orphans = {}
         self._errors = {}
+        self.conflicts = {}
+        self._draft_bases = {}
         self._lookups = {}
         self._ref_rows = {}
         self._table_edges = {}
@@ -150,6 +153,14 @@ class TablesService(QObject):
         changed = frozenset(
             cell for cell in current.keys() | before.keys() if current.get(cell) != before.get(cell)
         )
+        for identity in self.conflicts.keys() | self._draft_bases.keys():
+            if identity[0] == key and identity[1:] not in current:
+                self.conflicts.pop(identity, None)
+                self._draft_bases.pop(identity, None)
+        errors = self._errors.get(key, {})
+        for cell in tuple(errors):
+            if cell not in current:
+                errors.pop(cell)
         self._draft_snapshots[key] = dict(current)
         self.draft_changed.emit(key, changed)
 
@@ -168,6 +179,8 @@ class TablesService(QObject):
         self._edits.clear()
         self._orphans.clear()
         self._errors.clear()
+        self.conflicts.clear()
+        self._draft_bases.clear()
         self._lookups.clear()
         self._ref_rows.clear()
         self._table_edges.clear()
@@ -178,6 +191,10 @@ class TablesService(QObject):
 
     def _deleted(self, keys):
         for key in keys:
+            for identity in self.conflicts.keys() | self._draft_bases.keys():
+                if identity[0] == key:
+                    self.conflicts.pop(identity, None)
+                    self._draft_bases.pop(identity, None)
             self._drafts.pop(key, None)
             self._draft_snapshots.pop(key, None)
             self._lookups.pop(key, None)
@@ -247,9 +264,11 @@ class TablesService(QObject):
             and row.value(column_id) != expected
             and value != row.value(column_id)
         ):
-            raise ValueError(
+            raise ConcurrentEditError(
                 "Ячейка изменена в другом представлении. Текущее значение: "
-                + display_value(row.value(column_id))
+                + display_value(row.value(column_id)),
+                expected,
+                row.value(column_id),
             )
         self._validate_target(column, value)
         return self.update_table(document.with_cell(row_id, column_id, value))
@@ -262,7 +281,7 @@ class TablesService(QObject):
             key,
             row_id,
             column_id,
-            row.value(column_id),
+            self._draft_bases.get((key, row_id, column_id), row.value(column_id)),
             raw,
             raw,
             self.drafts(key).get((row_id, column_id)),
@@ -300,6 +319,10 @@ class TablesService(QObject):
             self._orphans[(key, row_id, column_id)] = (raw, str(error))
             self.pending_changed.emit()
             return
+        if isinstance(error, ConcurrentEditError):
+            identity = key, row_id, column_id
+            self.conflicts[identity] = EditConflict(raw, error.base, error.observed)
+            self._draft_bases.setdefault(identity, error.base)
         self.drafts(key)[(row_id, column_id)] = raw
         self._errors.setdefault(key, {})[(row_id, column_id)] = str(error)
         self.notify_drafts(key)
@@ -315,7 +338,13 @@ class TablesService(QObject):
             if finish:
                 self._edits.pop(owner, None)
             return True
+        identity = edit.table_id, edit.row_id, edit.column_id
         try:
+            if identity in self.conflicts:
+                self.conflicts[identity].raw = edit.raw
+                raise ValueError(
+                    "Конфликт: выберите «Использовать сохранённое» или «Применить мой вариант»"
+                )
             self.set_cell(edit.table_id, edit.row_id, edit.column_id, edit.raw, expected=edit.base)
             _, row, _ = self._cell(edit.table_id, edit.row_id, edit.column_id)
             edit.base = row.value(edit.column_id)
@@ -326,12 +355,45 @@ class TablesService(QObject):
             self.notify_drafts(edit.table_id)
             success = True
         except ValueError as error:
+            self._draft_bases.setdefault(identity, edit.base)
             self.reject_draft(edit.table_id, edit.row_id, edit.column_id, edit.raw, error)
             success = False
         if finish:
             self._edits.pop(owner, None)
         self.pending_changed.emit()
         return success
+
+    def resolve_conflict(self, key, row_id, column_id, *, mine=False):
+        identity = key, row_id, column_id
+        conflict = self.conflicts.get(identity)
+        if mine:
+            if conflict is None:
+                return False
+            _, row, _ = self._cell(*identity)
+            current = row.value(column_id)
+            if current != conflict.observed:
+                conflict.observed = current
+                self.reject_draft(
+                    *identity,
+                    self.drafts(key)[(row_id, column_id)],
+                    "Сохранённое значение снова изменилось: " + display_value(current),
+                )
+                return False
+            try:
+                self.set_cell(*identity, self.drafts(key)[(row_id, column_id)], expected=current)
+            except ValueError as error:
+                self.reject_draft(*identity, self.drafts(key)[(row_id, column_id)], error)
+                return False
+        for owner, edit in tuple(self._edits.items()):
+            if (edit.table_id, edit.row_id, edit.column_id) == identity:
+                self._edits.pop(owner)
+        self.drafts(key).pop((row_id, column_id), None)
+        self.conflicts.pop(identity, None)
+        self._draft_bases.pop(identity, None)
+        self._errors.get(key, {}).pop((row_id, column_id), None)
+        self.notify_drafts(key)
+        self.pending_changed.emit()
+        return True
 
     def cancel_edit(self, owner):
         edit = self._edits.pop(owner, None)

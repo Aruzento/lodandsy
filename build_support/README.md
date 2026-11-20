@@ -1,64 +1,90 @@
-# LODANDSY — Windows-кандидат итерации 6-rev3
+# Windows portable — итерация7,20.11.2026
 
-Распакуйте всю папку LODANDSY на Windows10/11 x64, запустите LODANDSY.exe.
-Python/Qt/ADS/libvips встроены в _internal; exe отдельно не переносится. Мир создавайте
-отдельно: project.sqlite3 + assets — канон; .lodandsy-ui.json — UI; .lodandsy-cache —
-перестраиваемые тайлы. Текущий формат SQLite13/Card4/Map5/Table3. Старые тестовые версии
-отклоняются без записи; обязательных миграций нет. URI только lodandsy://entity/UUID.
-Это новый кандидат, прежний W2 preflight не является его визуальной приёмкой.
+Кандидат: `LODANDSY-Iteration7-2026-11-20.zip` и `.zip.sha256` в `.prototype-deps`.
+Распаковать целиком в новую папку и запустить `LODANDSY.exe`. Python для запуска
+не требуется по структуре frozen package; фактическая clean Windows приёмка этой
+версии ещё обязательна. Прежний W2 preflight её не заменяет.
 
-## Ручная приёмка итерации6-rev3
+Текущий формат SQLite14/Card5/Map6/Table3, UI state4. Legacy/миграции отсутствуют;
+старые проекты отклоняются без записи. Проверять на новом тестовом мире, исходные
+пользовательские миры не удалять и не перезаписывать. Миграция тестовых данных не нужна.
 
-Проверять именно новый ZIP, в отдельном тестовом мире. Предыдущие W2/итерации не
-заменяют эти сценарии. Отметки ниже оставлены открытыми до фактической ручной приёмки.
-
-| № | Сценарий и ожидаемый результат | Статус |
-|---|---|---|
-|1|Модули: Card/Table/Map Viewer/Map Editor/Dice открываются независимо; закрытие соседних окон не выключает операции. Одна Table одновременно встроена и открыта отдельно.|□|
-|2|Инвентарь: Предмет/Количество/Описание/Стоимость; picker ищет title/aliases, различает одинаковые имена по path/UUID, Enter/Escape. Только item, количество default1/целое>0; replacement сохраняет число, дубли item допустимы.|□|
-|3|Item rename/summary/body/cost/type/delete обновляют только связанные строки обоих представлений. Cost0 отличается от unset«—»; недоступный item сохраняет UUID+quantity и позволяет повторный выбор. Description/cost read-only; TSV с projection/невалидным UUID отвергается целиком.|□|
-|4|Нейтральный graphite Shell/ADS/popups/таблицы/focus: rail/Tree/workspace/Inspector, регулируемые разделители. Card — портрет слева, type/title/summary справа, breadcrumb/copy link, вкладки/+ одной строкой, без scrollbar шапки; prose читаемой ширины, Table full width.|□|
-|5|Две Card с разными landscape/portrait изображениями: resize, switch10раз, close/reopen/load callback не меняют квадратную геометрию. Пустой портрет clickable; hover/Tab доступны replace/crop/remove. Полный summary открывается в диалоге.|□|
-|6|Crop:10 последовательных открытий/Apply без изменения не меняют область/масштаб; Cancel неизменен. Drag/zoom/reset работают на разноцветных landscape/portrait/square/EXIF. Card/token используют выбранную область, override отдельно, source bytes не меняются. Undo/Redo карты только стрелки с command tooltip, Ctrl+Z действует в активном контексте.|□|
-|7|Аудит:100 циклов create/open/delete rich/table вкладок, несколько Card окон, pending image, удаление/перемещение/повторная привязка Table. Нет накопления удалённых views/docs/предпочтений; Undo живых разделов сохранён.|□|
-|8|Аудит: explicit/custom/empty sections создаются без конфликта default content; обычное создание по типу работает. Повтор add-field не сбрасывает HP15, отсутствуют legacy adapters/режимы.|□|
-|9|Встроенная+standalone Table: настоящее непрерывное typing, кириллица, пауза>750ms, вставка в середину, selection/backspace/native Undo. Focus/caret/текст не прыгают при обновлении соседней строки/item/Inspector. Enter/Tab/blur подтверждают целиком, Escape отменяет.|□|
-|10|Card title/summary и Inspector numeric: ввод без публикации каждой буквы, invalid draft отмечен. Ctrl+S прямо из активного поля сохраняет валидный ввод, сохраняет focus/selection/Undo; autosave другой Card не завершает чужое слово.|□|
-|11|Два представления меняют одну ячейку: конфликт показан, raw не перезаписывает чужой канон. Row/column reorder сохраняет редактор UUID; удаление во время ввода оставляет доступный для copy orphan draft. Закрытие/смена проекта предлагают исправить/отбросить/отменить; I/O error/retry отличаются от draft.|□|
-|12|Map Editor библиотека: только Card(object) с доступным main image, title/thumbnail/search/UUID; чужие portrait/inline/background assets отсутствуют. Rename/image/type/delete обновляют entry и выбор по UUID. Import создаёт и выбирает Object Card.|□|
-|13|PNG400×200 с alpha размещается128×64; portrait crop не применяется. Move/resize/rotate/z/Undo сохраняют original image. После правки/удаления исходной Card размещённый raster сохраняет asset и геометрию.|□|
-|14|Три слоя с перекрывающимися изображениями: front вверху списка; ↑ поднимает list и scene z, ↓ опускает, края disabled, выделен тот же UUID. Проверить Undo/Redo и restart.|□|
-|15|Viewer+Editor одновременно: общий канон/Undo/tiles, разные камеры/selection, независимое закрытие/reopen; layer visibility/delete, object transforms, Escape отменяет drag, Space временно pan. Grid/world clipping/offset/zoom корректны, snap отсутствует.|□|
-|16|Singleton Dice:7типов+modifier, формула/каждый результат/сумма/repeat/clear/copy/history50, narrow dock, без project dirty/Entity/presets; смена мира не создаёт копию.|□|
-|17|Cards A/B + Table + viewer/editor + Dice: save→restart сохраняет UUID/refs/quantity/crop/sections/layers/objects/tokens/layout. Backup→новая restore-папка сохраняет канон+assets, без производных cells/tiles; отказ не перезаписывает существующую папку.|□|
-|18|Настоящая большая PNG/JPEG/WebP, два Maps/1000tokens, cancel/error/rebuild, повторное открытие. Нет полного bitmap в GUI; действующие resource limits не сняты. Множество объектов не является SLA.|□|
-|19|MOW sample: read-only preview/report→skip/remap→apply, source/aliases/safe HTML/media/links; исходники неизменны, исключённые поля отражены, prose не превращается в выдуманный инвентарь. Offline links/assets/traversal защита.|□|
-|20|Dock all directions/CENTER/insert/float/redock/maximize→drag/focus/Tab, фиксированные боковые области;100/125/150% и mixed DPI/второй физический монитор. Синтетический DPR тест не заменяет это.|□|
-|21|Распакованный новый ZIP в кириллическом пути на чистой Windows без Python: запуск и пункты1–20. Изоляция PATH на машине с установленным Python не закрывает ARU-64.|□|
-
-## Проверенные границы
-
-Автоматический frozen smoke создаёт временный Unicode мир, выполняет реальные commands/
-Qt key events, refs/projections, Map library/layers, save/restart/backup/restore и layout.
-Он не является визуальной ручной приёмкой и не подтверждает physical mixed DPI.
-Полный snapshot writer/синхронный backup≤4GiB остаются; bounded worker/progress/cancel и
-incremental changed-entity writer — отдельные следующие работы, не часть редизайна.
-
-## Воспроизведение и ограничения
+## Сборка и проверка
 
 ```powershell
-.\LODANDSY.exe --self-test --report "$env:TEMP\lodandsy-smoke.json"
-# опционально: --large-map-image "C:\Maps\large.jpg"
+python -m pip install -r requirements-build.lock
+powershell -File build_support/build_windows.ps1 -Python .venv/Scripts/python.exe -SkipPackage
+.prototype-deps/mvp-dist/LODANDSY/LODANDSY.exe --self-test --report .prototype-deps/frozen-smoke.json
+python -m build_support.verify_frozen --report .prototype-deps/frozen-source.json
+python -m build_support.package_windows --archive LODANDSY-Iteration7-2026-11-20.zip
 ```
 
-Это автоматический smoke во временном мире, не ручная визуальная приёмка.
-Build из source: CPython3.14.8 x64 + requirements-build.lock,
-`build_support/build_windows.ps1 -Python .venv/Scripts/python.exe -Archive LODANDSY-Iteration6-2026-11-19.zip`.
-source/MANIFEST.sha256 и docs/validation/iteration6-frozen-source.json фиксируют
-исходники и проверку compiled code; внешний SHA — соседний .zip.sha256. LICENSES и THIRD-PARTY.md в дистрибутиве.
+Locked stack: CPython3.14.8 x64/PySide6 6.11.2/Qt ADS5.1.1/pyvips3.2.0/
+pyvips-binary8.18.7. Новых зависимостей нет. `THIRD-PARTY.md` и LICENSES включают
+Qt/ADS/Python/libvips и native dependency notices; vips DLL SHA проверяется по provenance.
+Пакет содержит точные исходники/тесты/docs/draw.io и source MANIFEST.sha256.
+Папки references, private макеты/портреты, пользовательские проекты и кеши не публикуются.
+MOW runtime исключён из исходников и проверяется как obsolete в compiled archive.
 
-Backup/restore пока синхронны,≤4GiB без tile cache; full snapshot writer остаётся.
-Background backup/progress/cancel/incremental SQL — отдельные задачи. Source map≤2GiB,
-cache≤4GiB/32768tiles, worker512MiB/900s, tileLRU64MiB, BMP/GIF≤16MP. Media64MiB/32MP,
-thumbnail≤1024, documentLRU8MiB/shared16MiB/32pending. MOW≤500файлов/2MiB/64MiB total,
-v1 subset. Эти пределы не являются SLA; реальные измерения и непроверенные пункты — отчёт.
+Автоматический `--self-test` обходит Welcome и использует отдельный временный мир
+и отдельный QSettings catalogue. Проверяет Card/Map/Editor/Table/Dice, UUID hierarchy,
+semantic keyboard input, shared resources, presentation/fog, layout и backup/restore.
+Это не ручная визуальная приёмка и не clean Windows доказательство.
+CI: полный suite на Windows QPA плюс targeted offscreen geometry/data/privacy;
+для Windows offscreen tests регистрируется системный Segoe UI (font discovery там отсутствует).
+
+## Ручной чек-лист:12исправлений+3новых возможности
+
+В каждом пункте фиксировать: версия ZIP/SHA, Windows, monitor/DPI, результат и repro.
+`□` означает, что владелец ещё не передал результат именно этой сборки. Автоматические
+результаты отдельно в [итоговом отчёте](../docs/validation/2026-11-20-iteration-7.md).
+
+|№|Сценарий и ожидаемое поведение|Результат|
+|---|---|---|
+|1|MOW: нет меню/import actions/source fields; обычные Card/aliases/HTML/assets работают.|□|
+|2|Первый и повторный normal startup: компактный Welcome, Open/New, MRU last-used первым; мир сам не открывается.|□|
+|3|Несколько миров с кириллицей/пробелами: Open сначала каталог title/path; другая папка регистрируется после успеха, case/relative duplicate не размножается. Missing/moved/locked/unsupported — ошибка, Locate или Remove только записи, файлы остаются. Cancel/fail не переключает текущий мир.|□|
+|4|Gear icon-only у Inspector справа, tooltip«Настройки проекта», только работающие действия.|□|
+|5|Backup/restore только в gear, без дублей верхнего меню; disabled без мира/busy. Dirty/invalid guards, cancel не меняет источник; восстановление в новую папку.|□|
+|6|Создать все текущие типы Card; тип read-only над title. Rename/summary/typed fields сохраняются, тип после reopen прежний.|□|
+|7|Ровно title в document tab и основной шапке, нет третьего title/breadcrumb; inline rename сразу меняет Tree/tab.|□|
+|8|Summary редактируется inline, нет«…»/popup; Copy link доступна в Tree/context, URI entity/UUID работает.|□|
+|9|Rich section/История/Описание: toolbar и текст у общего левого inset16px, нет пустой декоративной колонки; Table согласована с tabs.|□|
+|10|Новая сетка25%, собственная opacity сохраняется; pan/zoom/DPI не сдвигают world grid и токены.|□|
+|11|New Map→Editor: активен видимый«Слой1», сразу разместить Object Card. Reopen не добавляет слои; delete last→Undo/reopen корректны, явное добавление слоя доступно.|□|
+|12|ПКМ токена ровно«Открыть карточку»/«Удалить токен». Удаление одного placement сохраняет Card/другие placements; undo возвращает. Broken reference диагностируется.|□|
+|13|Монитор открывает отдельный player window одной карты; повторное нажатие фокусирует его. Нет ADS/toolbar/Inspector/scrollbars/context/drop/selection/tooltips. F11/double-click/Escape и перенос на второй монитор работают; reopen мира не запускает player автоматически.|□|
+|14|Fog action показывает/скрывает компактную панель, не отключает player mask. Brush size в world units; polygon preview/close-first/Enter; invalid/self-cross/degenerate rejected, Escape отменяет; Space pan.|□|
+|15|Erase пересекает brush/polygon/overlaps, оставляет holes/splits со стабильными IDs; topmost selection/Delete удаляет только region. Остальные overlaps скрыты. Один жест — один Undo/Redo; save/reopen/backup/restore сохраняют туман.|□|
+
+## Обязательное дополнение Card Editor
+
+|Проверка|Ожидание|Результат|
+|---|---|---|
+|Открыть3–5Card подряд, вернуться к каждой, повторно открыть активную|Portrait большой слева, справа type/title/summary; нет скачка header/портрета, вкладки под общей шапкой.|□|
+|Portrait и empty portrait, первое открытие и завершение загрузки|Квадрат132–220logicalpx, аккуратный aspect/crop, геометрия не меняется от изображения.|□|
+|Короткий/длинный title, короткое/500-char summary|Title читается крупно; summary inline, без popup/дублей. Короткая карточка не требует scroll только из-за шапки.|□|
+|Узкий/широкий dock, floating, resize высоты/ширины|Размер header зависит от ширины, нет лишней левой колонки/пустой строки/обрезки controls; стабильная компоновка Qt Widgets.|□|
+|Переключить rich_text/inventory/table tabs, затем reopen проекта|Портрет/header стабильны; content/caret/scroll/Undo и дочерний inventory сохранены.|□|
+
+## Отдельные конфликты, синхронизация и Windows
+
+|Сценарий|Ожидание|Результат|
+|---|---|---|
+|Одно поле Card в Editor/Inspector: A draft, B saved, A conflict; reopen/blur/unchanged Enter/Ctrl+S|Канон B сохранён; raw A остаётся конфликтом, нет silent overwrite; другие валидные изменения autosave.|□|
+|UseSaved и ApplyMine, затем третья canonical правка C до применения|UseSaved не пишет; ApplyMine требует повторного разрешения после C. Escape/close/discard согласованы, stale owner не применяет старый raw.|□|
+|Одна Table embedded/standalone, оба порядка передачи фокуса; number/entity picker conflict|Оба views показывают conflict actions; reopen/flush не перезаписывает B. Активный ввод, Undo/caret и background save ACK сохраняются.|□|
+|Редактировать quantity в embedded Table, параллельно изменить summary Card|Delegate/raw не исчезает и не делает преждевременный commit. Rich invalid draft discard возвращает канонический document.|□|
+|Player другого aspect/DPR, pan/zoom/fit GM, объекты вне фона|Player следует тем же visible world bounds с чёрным letterbox, не показывает дополнительную территорию; нет feedback/dirty от камеры.|□|
+|Token/object drag/escape/Undo, скрыть слой из Editor|Player получает transient/live changes, нет SQL/revision на каждую точку; один commit в конце и откат при cancel; скрытые слои не видны.|□|
+|Скрытый token частично за fog, overlap/hole, provisional erase; загрузка/нет asset/switch мира|Player100% black поверх всех items; нет швов/проблеска скрытого фона/GM alpha/временного reveal. До current map+fog+camera только чёрный.|□|
+|Закрыть player, Viewer, Editor, удалить Map, сменить мир, shutdown|Соответствующий lifecycle без потери канона/других документов, без поздних callbacks и лишнего focus-out в новом editor.|□|
+|Два физических монитора, разные DPI, fullscreen/exit, disconnect monitor|Адекватный размер/кадрирование; нет off-screen недоступного окна, фокус и ввод GM сохраняются.|□|
+|Большая реальная карта233MP,1000tokens/30objects/64regions, два окна|Оценить фактическую плавность pan/drag/fog и RAM, reopen/close; автоматические timings не равны SLA.|□|
+|Чистая Windows без установленного Python, именно новый ZIP|Запуск, import большого изображения/native vips, Card/Map/Table/Dice, presentation/fog, save/backup/restore. Отдельный обязательный ARU-64.|□|
+
+Ограничения сохранены: full snapshot writer, synchronous backup≤4GiB; на233MP
+профиле backup блокировал GUI~0.87s. TileLRU общий64MiB, source≤2GiB/cache≤4GiB/
+32768tiles/worker≤512MiB/900s. Fog≤256regions/8192points-region/65536total,
+512samples-gesture/8MiB JSON; oversized gesture отклоняется целиком с объяснением.
+Manual visual/physical mixedDPI/clean Windows не помечать Done по offscreen/native Qt tests.

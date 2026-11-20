@@ -93,8 +93,6 @@ _FIELDS = (
             ("token_cells_h", "Высота токена (клетки)"),
         ]
     ),
-    FieldDefinition("mow_id", "Исходный ID MOW", "entity", "source"),
-    FieldDefinition("mow_type", "Исходный тип MOW", "text", "source"),
 )
 FIELD_DEFINITIONS = {f.key: f for f in _FIELDS}
 CARD_TYPES = {

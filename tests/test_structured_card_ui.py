@@ -70,7 +70,8 @@ def test_sections_preserve_independent_undo_selection_and_never_duplicate_descri
     assert not editor.text_edit.textCursor().charFormat().font().bold()
     editor.flush_pending()
     before = app.cards.get(card.id)
-    editor.type_combo.setCurrentIndex(editor.type_combo.findData("article"))
+    assert editor.type_label.text()
+    assert not hasattr(editor, "type_combo")
     after = app.cards.get(card.id)
     assert after.sections == before.sections and after.values == before.values
     assert project.save_current()

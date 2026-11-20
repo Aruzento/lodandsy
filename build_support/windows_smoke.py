@@ -10,12 +10,13 @@ from dataclasses import replace
 from pathlib import Path
 
 import PySide6
-from PySide6.QtCore import QEvent, Qt
-from PySide6.QtGui import QImage, QKeyEvent
+from PySide6.QtCore import QEvent, QSettings, Qt
+from PySide6.QtGui import QImage, QKeyEvent, QPainterPath
 from PySide6.QtWidgets import QApplication, QLineEdit
 
 from lodandsy.application.app_controller import AppController
 from lodandsy.application.project_controller import ProjectController
+from lodandsy.application.project_history import ProjectHistory
 from lodandsy.application.sqlite_project_store import SQLiteProjectStore
 from lodandsy.application.workspace_state import capture_workspace
 from lodandsy.domain.map_document import MapGrid
@@ -43,7 +44,13 @@ def main():
     apply_theme(app)
     window = AppShell()
     controller = AppController(window)
-    project = ProjectController(controller)
+    catalogue = tempfile.TemporaryDirectory(prefix="lodandsy-smoke-user-")
+    project = ProjectController(
+        controller,
+        ProjectHistory(
+            QSettings(str(Path(catalogue.name) / "user.ini"), QSettings.Format.IniFormat)
+        ),
+    )
     window.show()
     try:
         with (
@@ -107,6 +114,14 @@ def main():
             controller.actions.update_entity(document.id, parent_id=b.id)
             map_widget = controller.maps.open_map(document.id).widget()
             wait(app, lambda: map_widget.view._background is not None, timeout=120)
+            fog_path = QPainterPath()
+            fog_path.addRect(50, 50, 200, 200)
+            controller.maps_service.edit_fog(document.id, fog_path)
+            presentation = controller.maps.open_presentation(document.id)
+            wait(app, lambda: presentation.view._display_ready)
+            assert presentation.view._fog_state is controller.maps_service.get_map(document.id).fog
+            assert presentation.view._background.tiles is map_widget.view._background.tiles
+            controller.maps.close_presentation(document.id)
             grid = MapGrid(True, 50, 10, 10, 0.5)
             controller.maps_service.edit_map(document.id, grid=grid)
             token = controller.maps_service.add_token(document.id, a.id, 120, 130)
@@ -206,33 +221,6 @@ def main():
             second.dock.setFloating()
             app.processEvents()
             assert second.dock.floatingDockContainer().isWindow()
-            # Explicit synthetic MOW fixture; the real supplied sample is covered by pytest.
-            from uuid import uuid4
-
-            from lodandsy.application.mow_import import (
-                apply_import,
-                inspect_source,
-                prepare_import,
-            )
-
-            mow_source = root / "MOW-synthetic.md"
-            mow_source.write_text(
-                f"---\nid: {uuid4()}\nschemaVersion: 1\ntype: folder\n"
-                "tags: [card, folder]\naliases: []\n---\n"
-                '<h1>Импорт MOW</h1><div class="entity-main">'
-                '<div class="rich-text-field"><b>Содержимое</b>'
-                "<select><option>runtime</option></select></div></div>",
-                encoding="utf-8",
-            )
-            imported = prepare_import(
-                inspect_source(mow_source),
-                project.store,
-                controller.cards.all(),
-                tuple(project.assets.values()),
-            )
-            apply_import(controller.cards_service, imported)
-            assert imported.cards[0].card_type == "folder"
-            assert "runtime" not in imported.cards[0].content
             assert project.save_current()
             expected = project.store.load()
             project._save_ui_state()
@@ -255,6 +243,7 @@ def main():
             assert controller.cards.get(b.id)
             assert project.save_current()
             result = {
+                "player_presentation_shared_tiles_vector_fog": True,
                 "passed": True,
                 "frozen": bool(getattr(sys, "frozen", False)),
                 "python": sys.version,
@@ -267,7 +256,6 @@ def main():
                 "card_placements_cascade_atomically": True,
                 "layers_raster_objects": True,
                 "canonical_card_fields": True,
-                "mow_synthetic_import": True,
                 "unicode_paths": True,
                 "uuid_sections_child_inventory_crop": True,
                 "reference_inventory_projections_no_copies": True,

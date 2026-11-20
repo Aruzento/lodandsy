@@ -12,7 +12,7 @@ try {
     & $Python -m PyInstaller --clean --noconfirm --distpath .prototype-deps/mvp-dist `
         --workpath .prototype-deps/mvp-build build_support/windows.spec
     if ($LASTEXITCODE -ne 0) { throw 'Windows build failed.' }
-    & $Python -m build_support.verify_frozen --report .prototype-deps/iteration6-frozen-source.json
+    & $Python -m build_support.verify_frozen --report .prototype-deps/iteration7-frozen-source.json
     if ($LASTEXITCODE -ne 0) { throw 'Frozen source verification failed.' }
     if (-not $SkipPackage) {
         & $Python -m build_support.package_windows --archive $Archive
