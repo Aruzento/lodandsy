@@ -1,6 +1,6 @@
 """Semantic structured-field buffers with optimistic conflict detection; no widget references."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from uuid import uuid4
 
 from PySide6.QtCore import QObject, Signal
@@ -15,6 +15,8 @@ class FieldEdit:
     raw: str
     committed_text: str
     initial_draft: object = None
+    draft_version: object = None
+    initial_status: tuple = ()
 
 
 def value_text(value):
@@ -38,8 +40,12 @@ class FieldEdits(QObject):
         self.errors = {}
         self.conflicts = {}
         self._draft_bases = {}
+        self._draft_versions = {}
 
-    def _draft(self, key, raw):
+    def _draft(self, key, raw, *, edit=None):
+        version = self._draft_versions[key] = object()
+        if edit is not None:
+            edit.draft_version = version
         if raw is None:
             self.conflicts.pop(key, None)
             self._draft_bases.pop(key, None)
@@ -56,8 +62,19 @@ class FieldEdits(QObject):
         value = self.read(key)
         raw = self.drafts.get(key, value_text(value))
         owner = str(uuid4())
+        conflict = self.conflicts.get(key)
         self._edits[owner] = FieldEdit(
-            key, self._draft_bases.get(key, value), raw, raw, self.drafts.get(key)
+            key,
+            self._draft_bases.get(key, value),
+            raw,
+            raw,
+            self.drafts.get(key),
+            self._draft_versions.get(key),
+            (
+                self.errors.get(key),
+                self._draft_bases.get(key, value),
+                replace(conflict) if conflict else None,
+            ),
         )
         return owner
 
@@ -98,11 +115,11 @@ class FieldEdits(QObject):
                 edit.committed_text = edit.raw
                 edit.initial_draft = None
                 self.errors.pop(edit.key, None)
-                self._draft(edit.key, None)
+                self._draft(edit.key, None, edit=edit)
             except ValueError as error:
                 self._draft_bases.setdefault(edit.key, edit.base)
                 self.errors[edit.key] = str(error)
-                self._draft(edit.key, edit.raw)
+                self._draft(edit.key, edit.raw, edit=edit)
                 success = False
         if finish:
             self._edits.pop(owner, None)
@@ -118,7 +135,7 @@ class FieldEdits(QObject):
             if current != conflict.observed:
                 conflict.observed = current
                 self.errors[key] = "Сохранённое значение снова изменилось: " + value_text(current)
-                self.changed.emit(key)
+                self._draft(key, self.drafts[key])
                 return False
             try:
                 value = self.parse(key, self.drafts[key])
@@ -126,7 +143,7 @@ class FieldEdits(QObject):
                     self.write(key, value)
             except ValueError as error:
                 self.errors[key] = str(error)
-                self.changed.emit(key)
+                self._draft(key, self.drafts[key])
                 return False
         for owner, edit in tuple(self._edits.items()):
             if edit.key == key:
@@ -138,7 +155,16 @@ class FieldEdits(QObject):
 
     def cancel(self, owner):
         edit = self._edits.pop(owner, None)
-        if edit is not None:
+        if edit is not None and self._draft_versions.get(edit.key) is edit.draft_version:
+            # Escape restores only this edit's publication, never a newer owner's draft.
+            if edit.initial_draft is not None:
+                error, base, conflict = edit.initial_status
+                self._draft_bases[edit.key] = base  # None is also a canonical baseline.
+                for state, value in ((self.errors, error), (self.conflicts, conflict)):
+                    if value is None:
+                        state.pop(edit.key, None)
+                    else:
+                        state[edit.key] = value
             self._draft(edit.key, edit.initial_draft)
         self.pending_changed.emit()
 
@@ -154,10 +180,11 @@ class FieldEdits(QObject):
         for owner, edit in tuple(self._edits.items()):
             if ids is None or edit.key[0] in ids:
                 self._edits.pop(owner)
-        for key in self.conflicts.keys() | self._draft_bases.keys():
+        for key in self.conflicts.keys() | self._draft_bases.keys() | self._draft_versions.keys():
             if ids is None or key[0] in ids:
                 self.conflicts.pop(key, None)
                 self._draft_bases.pop(key, None)
+                self._draft_versions.pop(key, None)
         for key in tuple(self.errors):
             if ids is None or key[0] in ids:
                 self.errors.pop(key, None)

@@ -1,15 +1,21 @@
-# LODANDSY — итерация7
+# LODANDSY — стабильная база итерации7
 
-1. Прочитать AGENTS.md, docs/MVP.md и утверждённый пакет
-   docs/iterations/2026-11-20-iteration-7/CODEX-ITERATION-7.md полностью.
-2. Учитывать обязательное дополнение владельца о Card Editor, ADR-030/031/032
-   и границы владельцев ADR-027. Linear — существующие задачи и зависимости.
-3. Использовать подтверждённый baseline834c593/Windows CI44608087811; не повторять
-   baseline suite. Реализовать A→G непрерывно: проекты/MOW → Card → defaults карты →
-   presentation → vector fog → conflict drafts → final validation/distribution.
-4. Targeted batches после функциональных блоков, failed subset сначала; полный gate
-   и Windows locked build после стабилизации. Не выдавать Qt render за native capture
-   или физическую multi-display проверку. ARU-64 требует чистой Windows без Python.
-5. Обновить фактические ADR/MVP/Linear, docs/architecture/LODANDSY.drawio,
-   итоговый report и чек-лист12 исправлений+3новых возможностей+Card addendum+conflicts.
-6. Git — только в конце после финальной проверки согласно последнему указанию владельца.
+1. Прочитать AGENTS.md, docs/MVP.md, ADR-027/030/031/032 и
+   docs/validation/2026-11-20-iteration-7-stabilization.md. Итерация7 в целом принята;
+   не выполнять пакет A–G заново. Сначала проверить фактический HEAD/working tree/CI.
+2. Следующую разработку вести отдельными функциональными модулями от main,
+   в рамках текущей задачи Linear и её зависимостей. Cards/Tables/Maps/Dice сохраняют
+   независимых владельцев; общие Core/Resources/Media/navigation — узкие контракты.
+3. Каждый runtime-файл, включая helpers/presentation/fog, явно классифицирован в
+   test_module_boundaries.py. Изменения ownership/существенных контрактов фиксировать
+   в ADR и согласовывать, если они не утверждены текущей задачей. Архитектуру не
+   перестраивать ради каталогов. SQLite14/Card5/Map6/Table3/UIstate4; legacy нет.
+4. Structured drafts: cancel старого owner не меняет чужое новое поколение;
+   raw/base/observed/error согласованы, None baseline сохраняется. Autosave/Ctrl+S
+   сохраняют только валидный канон, конфликт разрешается явно.
+5. Проверять завершённые блоки целевыми пакетами, полный gate после стабилизации.
+   Не повторять baseline/full build без изменений и необходимости. Обновлять
+   фактические ADR/MVP/Linear/report и draw.io при изменении архитектуры.
+6. Git по явному разрешению владельца. Native Qt/offscreen не заменяют физические
+   DPI/monitor tests; ARU-64 требует реальной Windows без Python. Публичный release
+   и чистая Windows приёмка не следуют автоматически из merge в main.

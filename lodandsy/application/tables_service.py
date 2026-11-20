@@ -22,6 +22,8 @@ class CellEdit:
     raw: str
     committed_text: str
     initial_draft: object = None
+    draft_version: object = None
+    initial_status: tuple = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +51,7 @@ class TablesService(QObject):
         self._errors = {}
         self.conflicts = {}
         self._draft_bases = {}
+        self._draft_versions = {}
         self._lookups = {}
         self._ref_rows = {}
         self._table_edges = {}
@@ -147,12 +150,17 @@ class TablesService(QObject):
     def draft_table_ids(self):
         return tuple(key for key, values in self._drafts.items() if values)
 
-    def notify_drafts(self, key):
+    def notify_drafts(self, key, *, edit=None, touched=()):
         current = self.drafts(key)
         before = self._draft_snapshots.get(key, {})
         changed = frozenset(
             cell for cell in current.keys() | before.keys() if current.get(cell) != before.get(cell)
         )
+        for cell in changed | set(touched):
+            identity = key, *cell
+            version = self._draft_versions[identity] = object()
+            if edit is not None and (edit.row_id, edit.column_id) == cell:
+                edit.draft_version = version
         for identity in self.conflicts.keys() | self._draft_bases.keys():
             if identity[0] == key and identity[1:] not in current:
                 self.conflicts.pop(identity, None)
@@ -181,6 +189,7 @@ class TablesService(QObject):
         self._errors.clear()
         self.conflicts.clear()
         self._draft_bases.clear()
+        self._draft_versions.clear()
         self._lookups.clear()
         self._ref_rows.clear()
         self._table_edges.clear()
@@ -191,10 +200,13 @@ class TablesService(QObject):
 
     def _deleted(self, keys):
         for key in keys:
-            for identity in self.conflicts.keys() | self._draft_bases.keys():
+            for identity in (
+                self.conflicts.keys() | self._draft_bases.keys() | self._draft_versions.keys()
+            ):
                 if identity[0] == key:
                     self.conflicts.pop(identity, None)
                     self._draft_bases.pop(identity, None)
+                    self._draft_versions.pop(identity, None)
             self._drafts.pop(key, None)
             self._draft_snapshots.pop(key, None)
             self._lookups.pop(key, None)
@@ -277,6 +289,8 @@ class TablesService(QObject):
         document, row, column = self._cell(key, row_id, column_id)
         raw = self.drafts(key).get((row_id, column_id), display_value(row.value(column_id)))
         owner = str(uuid4())
+        identity = key, row_id, column_id
+        conflict = self.conflicts.get(identity)
         self._edits[owner] = CellEdit(
             key,
             row_id,
@@ -285,6 +299,12 @@ class TablesService(QObject):
             raw,
             raw,
             self.drafts(key).get((row_id, column_id)),
+            self._draft_versions.get(identity),
+            (
+                self._errors.get(key, {}).get((row_id, column_id)),
+                self._draft_bases.get(identity, row.value(column_id)),
+                replace(conflict) if conflict else None,
+            ),
         )
         return owner
 
@@ -312,7 +332,7 @@ class TablesService(QObject):
         self._orphans.clear()
         self.pending_changed.emit()
 
-    def reject_draft(self, key, row_id, column_id, raw, error):
+    def reject_draft(self, key, row_id, column_id, raw, error, *, edit=None):
         try:
             self._cell(key, row_id, column_id)
         except ValueError:
@@ -325,7 +345,7 @@ class TablesService(QObject):
             self._draft_bases.setdefault(identity, error.base)
         self.drafts(key)[(row_id, column_id)] = raw
         self._errors.setdefault(key, {})[(row_id, column_id)] = str(error)
-        self.notify_drafts(key)
+        self.notify_drafts(key, edit=edit, touched=((row_id, column_id),))
 
     def draft_error(self, key, row_id, column_id):
         return self._errors.get(key, {}).get((row_id, column_id), "")
@@ -352,11 +372,13 @@ class TablesService(QObject):
             edit.initial_draft = None
             self.drafts(edit.table_id).pop((edit.row_id, edit.column_id), None)
             self._errors.get(edit.table_id, {}).pop((edit.row_id, edit.column_id), None)
-            self.notify_drafts(edit.table_id)
+            self.notify_drafts(edit.table_id, edit=edit, touched=((edit.row_id, edit.column_id),))
             success = True
         except ValueError as error:
             self._draft_bases.setdefault(identity, edit.base)
-            self.reject_draft(edit.table_id, edit.row_id, edit.column_id, edit.raw, error)
+            self.reject_draft(
+                edit.table_id, edit.row_id, edit.column_id, edit.raw, error, edit=edit
+            )
             success = False
         if finish:
             self._edits.pop(owner, None)
@@ -391,7 +413,7 @@ class TablesService(QObject):
         self.conflicts.pop(identity, None)
         self._draft_bases.pop(identity, None)
         self._errors.get(key, {}).pop((row_id, column_id), None)
-        self.notify_drafts(key)
+        self.notify_drafts(key, touched=((row_id, column_id),))
         self.pending_changed.emit()
         return True
 
@@ -399,13 +421,27 @@ class TablesService(QObject):
         edit = self._edits.pop(owner, None)
         if edit is None:
             return
+        identity = edit.table_id, edit.row_id, edit.column_id
+        if self._draft_versions.get(identity) is not edit.draft_version:
+            self.pending_changed.emit()
+            return
         try:
             values = self.drafts(edit.table_id)
             if edit.initial_draft is None:
                 values.pop((edit.row_id, edit.column_id), None)
             else:
                 values[(edit.row_id, edit.column_id)] = edit.initial_draft
-            self.notify_drafts(edit.table_id)
+                error, base, conflict = edit.initial_status
+                self._draft_bases[identity] = base
+                for state, key, value in (
+                    (self._errors.setdefault(edit.table_id, {}), identity[1:], error),
+                    (self.conflicts, identity, conflict),
+                ):
+                    if value is None:
+                        state.pop(key, None)
+                    else:
+                        state[key] = value
+            self.notify_drafts(edit.table_id, touched=(identity[1:],))
         except ValueError:
             pass
         self.pending_changed.emit()

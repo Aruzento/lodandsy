@@ -3,21 +3,45 @@
 import argparse
 import ast
 import json
+from importlib.util import resolve_name
 from pathlib import Path
 
 
-def dependency_graph(root):
-    modules = {".".join(p.with_suffix("").parts): p for p in root.rglob("*.py")}
+def module_imports(name, path):
+    """Resolve import syntax, including package aliases, without evaluating any code."""
+    package = name if path.name == "__init__.py" else name.rpartition(".")[0]
+    imports = set()
+    for node in ast.walk(ast.parse(path.read_text("utf-8-sig"))):
+        if isinstance(node, ast.Import):
+            imports.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            base = (
+                resolve_name("." * node.level + (node.module or ""), package)
+                if node.level
+                else node.module
+            )
+            if base:
+                imports.add(base)
+                imports.update(f"{base}.{a.name}" for a in node.names if a.name != "*")
+    return imports
+
+
+def module_paths(root):
     result = {}
-    for name, path in modules.items():
-        imports = set()
-        for node in ast.walk(ast.parse(path.read_text("utf-8-sig"))):
-            if isinstance(node, ast.Import):
-                imports.update(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                imports.add(node.module)
-        result[name] = sorted(item for item in imports if item in modules)
+    for path in root.rglob("*.py"):
+        parts = path.relative_to(root).with_suffix("").parts
+        if parts[-1] == "__init__":
+            parts = parts[:-1]
+        result[".".join((root.name, *parts))] = path
     return result
+
+
+def dependency_graph(root):
+    modules = module_paths(root)
+    return {
+        name: sorted((module_imports(name, path) & modules.keys()) - {name})
+        for name, path in modules.items()
+    }
 
 
 def cycles(graph):

@@ -37,8 +37,10 @@ LODANDSY — нативное локальное Windows-приложение д
 
 ## Рабочий цикл
 
-Активна утверждённая итерация7: docs/iterations/2026-11-20-iteration-7/CODEX-ITERATION-7.md.
-Выполнять A–G непрерывно. Прямое дополнение владельца о Card Editor обязательно.
+Итерация7 в целом принята владельцем. Финальная стабилизация ARU-46/78/84:
+docs/validation/2026-11-20-iteration-7-stabilization.md. Новая разработка ведётся
+от стабильного main отдельными функциональными модулями по задачам Linear.
+Утверждённый контракт7 и прямое дополнение о Card Editor остаются обязательными.
 ADR-027 сохраняет независимых владельцев Cards/Tables/Maps/Dice. Core/Resources/Media/
 navigation и transactional ProjectActions собираются только composition root. Никаких
 private widgets/worker соседних модулей и общих ModuleController/ModuleSession.
@@ -59,6 +61,10 @@ coalescing250ms/max2s, generation/section UUID управляют времене
 Structured input commit Enter/Tab/blur/Escape/Ctrl+S, не каждая буква. Conflict draft
 не становится authoritative после reopen/blur/flush: явные UseSaved/ApplyMine,
 проверка нового canonical value; валидные данные сохраняются независимо. ADR-032.
+Cancel/Escape восстанавливает только своё поколение draft, не очищает и не возвращает
+чужой более новый черновик; raw/base/observed/error восстанавливаются согласованно.
+В test_module_boundaries каждый runtime-файл имеет явного владельца; проверки всех
+feature helpers, presentation/fog и relative imports обязательны при модульной разработке.
 
 Maps владеет Viewer/Editor/Presentation и FogState в единственном MapPayload/SQLite.
 MapView roles разделяют сцены и overlays, но используют общий канон и bounded tile/media

@@ -83,6 +83,10 @@ raw/base/observed независимо от native editor. Reopen/blur/unchanged
 не применяют конфликт молча. «Использовать сохранённое» не пишет в канон;
 «Применить мой вариант» повторно проверяет canonical value, третья правка требует
 нового разрешения. Действия доступны в Card/Inspector и embedded/standalone Tables.
+Cancel/Escape старого редактора не очищает и не восстанавливает черновик другого
+редактора, опубликованный позже, в том числе после semantic flush(finish=False).
+Отмена собственных изменений возвращает согласованные raw/base/observed/error;
+пустой canonical baseline None сохраняется. Форматы SQLite/payload не меняются.
 Escape возвращает исходный draft, явный discard удаляет его. Другие валидные изменения
 продолжают сохраняться. Нет широкого reset/потери Undo/caret ради уведомления.
 

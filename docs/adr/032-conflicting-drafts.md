@@ -29,3 +29,20 @@ conflict state. Metadata/draft notifications Card не hide/reinsert embedded Ta
 rich section UUID notification, включая discard, продолжает синхронизировать документ.
 Новый native reproducer сначала удалял активный QLineEdit при summary update,
 после адресного body refresh сохраняет editor/raw и не делает ранний commit.
+
+## Финальная стабилизация после приёмки итерации7
+
+ARU-46/78, audit9e06c0b: B commit(finish=False), затем A conflict, cancel(B)
+удалял чужой draftA. Начальный snapshot редактора больше не означает владение текущим
+draft. FieldEdits и TablesService отмечают каждую публикацию новым session-only token;
+owner хранит последний увиденный/опубликованный token. Cancel восстанавливает snapshot
+только при совпадении token, иначе завершает лишь локального owner. Повторная публикация
+того же raw и изменение observed/error тоже меняют token: сравнения строк недостаточно.
+Snapshot включает error/base/conflict copy, поэтому Escape возвращает согласованный
+статус; None остаётся настоящим baseline, а не признаком отсутствия. Явный resolve
+удаляет stale owners, project reset очищает поколения. Persistence/UI формат не меняется.
+
+Regression tests проверяют оба сервиса, finishFalse/True, flush, UseSaved/ApplyMine,
+старый initial draft, third canonical edit и None baseline. Native Qt keyboard tests:
+Ctrl+S→conflict→Escape→blur, Card и оба направления embedded/standalone Table;
+сохранение оставляет канон B, draft A доступен до явного решения.

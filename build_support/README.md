@@ -1,6 +1,8 @@
 # Windows portable — итерация7,20.11.2026
 
-Кандидат: `LODANDSY-Iteration7-2026-11-20.zip` и `.zip.sha256` в `.prototype-deps`.
+Стабилизированная сборка: `LODANDSY-Iteration7-Stable-2026-11-20.zip` и `.zip.sha256`
+в `.prototype-deps`. Владелец принял итерацию7 в целом; точечная доработка ARU-46/78/84
+и её проверки описаны в `docs/validation/2026-11-20-iteration-7-stabilization.md`.
 Распаковать целиком в новую папку и запустить `LODANDSY.exe`. Python для запуска
 не требуется по структуре frozen package; фактическая clean Windows приёмка этой
 версии ещё обязательна. Прежний W2 preflight её не заменяет.
@@ -16,7 +18,7 @@ python -m pip install -r requirements-build.lock
 powershell -File build_support/build_windows.ps1 -Python .venv/Scripts/python.exe -SkipPackage
 .prototype-deps/mvp-dist/LODANDSY/LODANDSY.exe --self-test --report .prototype-deps/frozen-smoke.json
 python -m build_support.verify_frozen --report .prototype-deps/frozen-source.json
-python -m build_support.package_windows --archive LODANDSY-Iteration7-2026-11-20.zip
+python -m build_support.package_windows --archive LODANDSY-Iteration7-Stable-2026-11-20.zip
 ```
 
 Locked stack: CPython3.14.8 x64/PySide6 6.11.2/Qt ADS5.1.1/pyvips3.2.0/
@@ -71,6 +73,8 @@ CI: полный suite на Windows QPA плюс targeted offscreen geometry/dat
 
 |Сценарий|Ожидание|Результат|
 |---|---|---|
+|B commit(finish=False)/Ctrl+S, A conflict, Escape/cancel B, затем blur|Канон B и чужой draft A сохраняются в Card и embedded/standalone Table. UseSaved/ApplyMine доступны до явного решения.|□|
+|Редактор открыт на старом draft, другой редактор публикует новый draft или меняет observed value|Cancel старого редактора не очищает и не восстанавливает более старый draft/status.|□|
 |Одно поле Card в Editor/Inspector: A draft, B saved, A conflict; reopen/blur/unchanged Enter/Ctrl+S|Канон B сохранён; raw A остаётся конфликтом, нет silent overwrite; другие валидные изменения autosave.|□|
 |UseSaved и ApplyMine, затем третья canonical правка C до применения|UseSaved не пишет; ApplyMine требует повторного разрешения после C. Escape/close/discard согласованы, stale owner не применяет старый raw.|□|
 |Одна Table embedded/standalone, оба порядка передачи фокуса; number/entity picker conflict|Оба views показывают conflict actions; reopen/flush не перезаписывает B. Активный ввод, Undo/caret и background save ACK сохраняются.|□|

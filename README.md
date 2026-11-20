@@ -7,6 +7,7 @@ pyvips3.2.0 + pyvips-binary8.18.7; Qt Widgets без web runtime.
 Итерация7: [требования A–G](docs/iterations/2026-11-20-iteration-7/CODEX-ITERATION-7.md),
 [действующий MVP](docs/MVP.md), [архитектура draw.io](docs/architecture/LODANDSY.drawio),
 [проверки/ограничения](docs/validation/2026-11-20-iteration-7.md),
+[финальная стабилизация](docs/validation/2026-11-20-iteration-7-stabilization.md),
 [сборка и ручная приёмка](build_support/README.md). План/состояние — существующие задачи Linear.
 
 Cards/Tables/Maps/Dice сохраняют отдельных владельцев ADR-027. Composition root
@@ -30,8 +31,9 @@ Table inventory — item UUID, positive integer quantity и живые descripti
 без копирования derived cells. Semantic input commit Enter/Tab/blur/Escape/Ctrl+S;
 конфликтный raw draft переживает reopen и не перезаписывает канон. UseSaved/ApplyMine
 доступны в Card/Inspector/embedded и standalone Table, третья правка требует
-повторного разрешения. Invalid draft не блокирует валидный autosave. URI — только
-lodandsy://entity/UUID; контролируемый HTML/asset security ADR-014 сохраняются.
+повторного разрешения. Invalid draft не блокирует валидный autosave.
+Cancel старого редактора сохраняет чужой более новый draft, включая semantic flush.
+URI — только lodandsy://entity/UUID; контролируемый HTML/asset security ADR-014 сохраняются.
 
 Map Viewer/Editor/Presentation читают один MapDocument/Undo и shared tiles/media.
 Новый Map имеет «Слой1», grid default opacity0.25, Token ПКМ — OpenCard/DeleteToken.
@@ -71,7 +73,7 @@ python -m ruff check .
 python -m pip check
 git diff --check
 powershell -File build_support/build_windows.ps1 -Python .venv/Scripts/python.exe -SkipPackage
-python -m build_support.package_windows --archive LODANDSY-Iteration7-2026-11-20.zip
+python -m build_support.package_windows --archive LODANDSY-Iteration7-Stable-2026-11-20.zip
 ```
 
 Build использует requirements-build.lock, лицензии/источники входят в portable ZIP.

@@ -76,4 +76,25 @@ A targets30passed6.18s; integration63passed/1 stale test API assertion, worker g
 (8.98s); устаревший доступ Map.get_table перенесён в TablesService, проверяется узко.
 Итоговые числа/проверка реального ввода и draw.io фиксируются после B–E.
 
+## Gate перед дальнейшей модульной разработкой
+
+Финальная стабилизация7, ARU-84: test_module_boundaries содержит полный явный ownership
+runtime-файлов Cards/Tables/Maps/Dice, включая bindings/codecs/helpers и Maps presentation/
+fog. Новый или удалённый файл требует обновления owner table; пакеты также учитываются.
+AST resolver нормализует __init__ и absolute/relative/from-package alias imports,
+включая локальные/отложенные imports; код приложения при анализе не выполняется.
+Проверяются все reachable edges через собственные и общие helpers, не только controller/
+service. Domain остаётся без Qt/SQL/application/UI; прикладные helpers/services не
+получают UI транзитивно. Negative fixtures доказывают обнаружение каждого варианта.
+
+Built-in integration allowlist: main/AppController/ProjectController, ProjectActions,
+save/store/workspace, domain.document_payloads и фиксированные shell adapters
+AppShell/Inspector/Tree. Feature code не получает свободный доступ к composition:
+разрешены лишь существующие CardCollection→document_payloads, CardInspectorBinding→
+Inspector и WindowManager→AppShell edges. Единственный узкий cross-domain контракт
+MapDocument→card_schema.CARD_TYPES валидирует сохранённый тип token override; импорт
+других Card symbols не разрешён. Entity picker/semantic edits/conflict bar/media/Core
+остаются shared. Архитектура/каталоги и production dependencies не перестраивались;
+draw.io остаётся актуальной схемой владельцев.
+
 Итог6: полный pytest394passed/1skip64.76s, после финальных local fixes targeted29passed3.66s (включая новый constraint regression) и22passed2.52s portrait/layout. Ruff/pip/diff clean. Actual imports83modules/174edges/0cycles; draw.io и JSON в docs/architecture. Подробные measurements/build/native limitations — единый отчёт6.
