@@ -174,11 +174,13 @@ def test_visual_shortcuts_affect_only_focused_card(project, qtbot):
     first, second = app.open_card_editor(a.id).widget(), app.open_card_editor(b.id).widget()
     first.text_edit.setPlainText("First")
     second.text_edit.setPlainText("Second")
-    second.text_edit.selectAll()
-    app.window.activateWindow()
+    with qtbot.waitActive(app.window):
+        app.window.activateWindow()
     second.text_edit.setFocus()
-    qtbot.waitUntil(app.window.isActiveWindow)
-    qtbot.keyClick(second.text_edit, Qt.Key.Key_B, Qt.KeyboardModifier.ControlModifier)
+    qtbot.waitUntil(second.text_edit.hasFocus)
+    second.text_edit.selectAll()
+    with qtbot.waitSignal(second.format_toolbar.actions_by_name["bold"].triggered):
+        qtbot.keyClick(second.text_edit, Qt.Key.Key_B, Qt.KeyboardModifier.ControlModifier)
     assert second.text_edit.currentCharFormat().fontWeight() == QFont.Weight.Bold
     first.text_edit.selectAll()
     assert not first.text_edit.currentCharFormat().font().bold()

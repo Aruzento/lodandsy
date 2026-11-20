@@ -128,11 +128,12 @@ def test_search_is_opened_from_button_and_shortcut_without_duplicate_menu(projec
     qtbot.mouseClick(panel.search_button, Qt.MouseButton.LeftButton)
     assert app._search_dialog.isVisible()
     app._search_dialog.close()
-    app.window.activateWindow()
+    with qtbot.waitActive(app.window):
+        app.window.activateWindow()
     panel.tree_view.setFocus()
-    qtbot.waitUntil(app.window.isActiveWindow)
+    qtbot.waitUntil(panel.tree_view.hasFocus)
     qtbot.keyClick(panel.tree_view, Qt.Key.Key_F, Qt.KeyboardModifier.ControlModifier)
-    assert app._search_dialog.isVisible()
+    qtbot.waitUntil(app._search_dialog.isVisible)
 
 
 def test_selected_row_buttons_open_and_child_creation_is_contextual(project, qtbot, monkeypatch):
