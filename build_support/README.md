@@ -1,6 +1,6 @@
-# Windows portable — Cards / Actors / 5e14,21.11.2026
+# Windows portable — исправление UI-приёмки,21.11.2026
 
-Стабилизированная сборка: `LODANDSY-Cards-Actors-5e14-2026-11-21.zip` и `.zip.sha256`
+Новая сборка: `LODANDSY-UI-Acceptance-Fix-2026-11-21.zip` и `.zip.sha256`
 в `.prototype-deps`. Владелец принял итерацию7 в целом; точечная доработка ARU-46/78/84
 и её проверки описаны в `docs/validation/2026-11-20-iteration-7-stabilization.md`.
 Распаковать целиком в новую папку и запустить `LODANDSY.exe`. Python для запуска
@@ -18,7 +18,7 @@ python -m pip install -r requirements-build.lock
 powershell -File build_support/build_windows.ps1 -Python .venv/Scripts/python.exe -SkipPackage
 .prototype-deps/mvp-dist/LODANDSY/LODANDSY.exe --self-test --report .prototype-deps/frozen-smoke.json
 python -m build_support.verify_frozen --report .prototype-deps/frozen-source.json
-python -m build_support.package_windows --archive LODANDSY-Cards-Actors-5e14-2026-11-21.zip
+python -m build_support.package_windows --archive LODANDSY-UI-Acceptance-Fix-2026-11-21.zip
 ```
 
 Locked stack: CPython3.14.8 x64/PySide6 6.11.2/Qt ADS5.1.1/pyvips3.2.0/
@@ -115,3 +115,15 @@ SRD5.1 attribution включена в LICENSES/SRD-5.1-NOTICE.txt и source/bui
 
 Старые schema14 worlds не открываются: использовать новый disposable тестовый мир,
 не удалять реальные проекты. Physical checks здесь не выполнены автоматически.
+
+## Повторная UI-приёмка A–F / U01–U18
+
+Новый ZIP `LODANDSY-UI-Acceptance-Fix-2026-11-21.zip` заменяет для приёмки Cards-Actors ZIP.
+Его SHA256 — внешний `.zip.sha256`; отчёт `docs/validation/2026-11-21-ui-acceptance-fix.md`
+включает U01–U18 и снимки синтетического мира. «Характеристики» Card/Creature/Object,
+«Модификаторы» Item, технический Card Inspector, оперативный Actor Inspector и gear
+«Игровая система и правила…» проверяются совместно. Полный physical checklist выше
+остаётся обязательным. DPI100/125/150/200%, floating/maximize, второй монитор и чистая
+Windows без Python здесь автоматически не пройдены. Сохранять текущие schema15 миры.
+Текущие HP, база/effective, +2CON 44→49→44, typed examples, preview/cancel/conflict и
+неизменность UUID должны наблюдаться в новом мире. Не закрывать ARU-65/80/83 до результата.

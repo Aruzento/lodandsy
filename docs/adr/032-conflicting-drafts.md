@@ -54,3 +54,12 @@ FieldEdits принимает ValueAddress(card_id,field_id,actor_id optional), 
 semantic commit/generation ownership. Удаление Actor retire только его адреса после
 commit. Formula editor имеет локальные drafts и preview по rules revision+state serial;
 Apply/Reset атомарны, preview не авторитетен после смены проекта/входов.
+
+
+## Дополнение UI-приёмки — ADR-034
+
+Новые формы используют тот же FieldEdits с явным ValueAddress и owner generation.
+Переключение Actor завершает только ввод своего binding; чужой conflict draft не
+переназначается и не перезаписывается. Системная page не создаёт RichDocument и не
+меняет Undo обычных UUID секций. Item modifiers применяются явно, typed dialog
+сохраняет UUID; отмена формы не пишет канон. Rules draft отдельно guarded preview.

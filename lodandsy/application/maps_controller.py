@@ -39,6 +39,7 @@ class MapsController(QObject):
         self.window, self.windows, self.service, self.cards = window, windows, service, cards
         self.resources, self.media, self.actions = resources, media, actions
         self.open_card, self.ensure_project = open_card, ensure_project
+        self.open_participant = None
         self.tasks = BackgroundTasks(self, workers=2, name="map-images")
         self.request_card_creation = request_card_creation
         self.queries = queries
@@ -699,4 +700,7 @@ class MapsController(QObject):
             except ValueError:
                 self._error("Карточка размещения отсутствует")
                 return
-            self.open_card(token.card_id)
+            if token.actor_id and self.open_participant:
+                self.open_participant(token.card_id, token.actor_id)
+            else:
+                self.open_card(token.card_id)

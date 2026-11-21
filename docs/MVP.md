@@ -45,7 +45,8 @@ Backup/restore находятся в gear правого rail у Inspector; ве
 
 Тип выбирается при создании и затем неизменяем в сервисе, collection и generic payload
 mutation. Поддерживаются текущие note/article/character/location/item/object/folder
-и их typed fields; прежних templates/tags нет. Характеристики редактируются в Inspector.
+и их typed fields; прежних templates/tags нет. Характеристики редактируются в системной
+вкладке карточки, технические свойства — в Inspector (переопределение ADR-034).
 
 Обязательная нативная Qt компоновка: крупный квадратный portrait слева132–220 logical px,
 справа read-only type badge, одно крупное title, inline summary. Отдельная строка
@@ -176,8 +177,9 @@ Toggle Player предупреждает и требует выбора existing
 Удаление последнего token/map/layer сохраняет Actor. Actor/Card удаляются явно с
 перечнем зависимостей. Во «Связях» видны и участники без размещений.
 
-Inspector: Tree/Card — база, Token/Actor — имя, current/temp HP и индивидуальные
-final overrides, отдельно read-only effective/auto/source/dependencies. Native Card
+«Характеристики»: явный выбор базы или участника, current/temp HP и индивидуальные
+final overrides, отдельно read-only effective/auto/source/dependencies. Inspector Card
+технический; Token/Actor Inspector сохраняет оперативные поля карты. Native Card
 Editor layout/QTextDocument/UUID/Undo/drafts сохраняются. Скорость хранится в ft,
 метры и клетки вычисляются по известному feet_per_cell карты. HP абсолютные целые≥0,
 процент производный. При росте max current не лечится, при снижении ограничивается
@@ -191,14 +193,14 @@ HP auto: только сохранённая single-class die history с кор�
 CR auto, class features, other movement, slots/remaining hit dice, attunement,
 полноценные conditions/combat/расход/отдых не реализованы и не выдаются за расчёт.
 
-Item modifiers редактируются Inspector: set/multiply/add/minimum/maximum, stable UUID,
+Item modifiers редактируются во вкладке «Модификаторы»: set/multiply/add/minimum/maximum, stable UUID,
 явная stacking group/policy/priority. Активность — ручное заявление GM. Индивидуальный
 inventory клонируется один раз с новыми row/column UUID и общими Item refs; Item cost/
 description проецируются live. Qty влияет на вес, не множит бонус; удалённый Item
 остаётся soft ref, неполные значения диагностируются. Новые источники расширяют тот же
 контракт, без effects engine. Нет глобального equipped на Item Card.
 
-Проектные формулы — отдельное native окно из Inspector: локальный draft, пример,
+Проектные формулы — отдельное native окно из шестерёнки правого rail: локальный draft, пример,
 preview/ошибки/ожидаемые HP clamps, явные apply/reset. Без eval/exec/исполнения AST;
 ограниченные грамматика/типы/DAG/бюджеты ADR-033. Manual HP/AC/speed — итоговый override,
 auto остаётся видимым. Shipped defaults неизменны, overrides/revision — один канон.
@@ -213,3 +215,10 @@ Scalar/deletion Undo, перенос NPC между картами и други
 Приёмка: T01–T29 и физический checklist в validation report/build_support/README.
 Только проверенный целостный кандидат; чистая Windows/два монитора/mixed DPI остаются
 отдельными физическими проверками, не заменяются pytest или программным smoke.
+
+Исправление UI-приёмки A–F: ADR-034; виртуальные `system:attributes`/`system:modifiers`
+без Section/миграции. Ресурсы сверху, плитки модификатор (итог), база и источники,
+адаптивные 6/3/2 колонки. Русские UI labels/choices/errors без перевода канонических ID.
+История хитов по уровням, закрытый каталог целей модификаторов, typed rule examples,
+табличный preview до/после и clamp; закрытие несохранённых правил подтверждается.
+Ручная приёмка U01–U18 относится к новому ZIP; прошлый пакет её не заменяет.

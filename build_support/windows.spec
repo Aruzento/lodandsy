@@ -1,11 +1,14 @@
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all
+from PySide6.QtCore import QLibraryInfo
 
 root = Path(SPECPATH).parent
 datas, binaries, hiddenimports = collect_all("PySide6QtAds")
 vips_data, vips_binary, vips_hidden = collect_all("pyvips")
 datas += vips_data
+datas += [(str(Path(QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath))
+               / "qtbase_ru.qm"), "PySide6/translations")]
 binaries += vips_binary
 hiddenimports += vips_hidden + ["_libvips", "_cffi_backend"]
 a = Analysis(

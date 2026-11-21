@@ -86,8 +86,11 @@ class CardDocumentState:
 
     def load_ui_values(self, values):
         from lodandsy.domain.card import validate_card_id
+        from lodandsy.ui.game_labels import SYSTEM_PAGES
 
         key = values.get("active_section")
+        if isinstance(key, str) and key in SYSTEM_PAGES:
+            self.active_section = key
         try:
             validate_card_id(key)
             self.active_section = key

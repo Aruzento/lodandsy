@@ -34,4 +34,6 @@ class PlayerDialog(QDialog):
         )
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("Применить")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Отмена")
         layout.addWidget(buttons)

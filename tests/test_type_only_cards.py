@@ -24,15 +24,19 @@ def test_real_inspector_add_offers_only_absent_allowed_fields_and_type_hides_old
 
     def select(parent, title, label, items, *args):
         labels.extend(items)
-        return "AC", True
+        return "Важная карточка", True
 
     monkeypatch.setattr(QInputDialog, "getItem", select)
     app.window.inspector_panel.add_field.click()
-    assert "HP" not in labels and "AC" in labels and "Редкость" not in labels
+    assert (
+        "Максимум хитов" not in labels and "Важная карточка" in labels and "Редкость" not in labels
+    )
     assert app.cards.get(card.id).value("hp_max") == 15
     with pytest.raises(ValueError):
         app.cards_service.update_card(card.id, card_type="article")
-    assert "hp_max" in app.window.inspector_panel.field_form.controls
+    assert "hp_max" not in app.window.inspector_panel.field_form.controls
+    editor = app.card_views.open_game_sheet(card.id).widget()
+    assert "hp_max" in editor.game_sheet.controls
     assert app.cards.get(card.id).value("hp_max") == 15
 
 

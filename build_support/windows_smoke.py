@@ -6,13 +6,13 @@ import sys
 import tempfile
 import time
 from contextlib import ExitStack
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import PySide6
 from PySide6.QtCore import QEvent, QSettings, Qt
 from PySide6.QtGui import QImage, QKeyEvent, QPainterPath
-from PySide6.QtWidgets import QApplication, QLineEdit
+from PySide6.QtWidgets import QApplication, QDialogButtonBox, QLineEdit
 
 from lodandsy.application.app_controller import AppController
 from lodandsy.application.project_controller import ProjectController
@@ -22,6 +22,8 @@ from lodandsy.application.workspace_state import capture_workspace
 from lodandsy.domain.map_document import MapGrid
 from lodandsy.domain.table_document import ColumnDefinition, RowRecord
 from lodandsy.ui.app_shell import AppShell
+from lodandsy.ui.game_labels import ATTRIBUTES_PAGE, MODIFIERS_PAGE
+from lodandsy.ui.modifier_editor import ModifierDialog
 from lodandsy.ui.theme import apply_theme
 
 
@@ -42,6 +44,8 @@ def main():
     args = parser.parse_args()
     app = QApplication([])
     apply_theme(app)
+    translated_buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
+    assert translated_buttons.buttons()[0].text() == "Отмена"
     window = AppShell()
     controller = AppController(window)
     catalogue = tempfile.TemporaryDirectory(prefix="lodandsy-smoke-user-")
@@ -152,6 +156,25 @@ def main():
                 own_table.id, own_table.rows[0].id, activity.id, True, parsed=True
             )
             assert controller.cards_service.effective(player_ref).get("constitution").value == 12
+            actor_editor = controller.card_views.open_game_sheet(b.id, player_ref.actor_id).widget()
+            assert actor_editor.current_section == ATTRIBUTES_PAGE
+            assert actor_editor.game_sheet.context.currentData() == player_ref.actor_id
+            game_binding = controller.card_views.game_bindings[b.id]
+            game_binding.buffer("hp_current", "65")
+            game_binding.commit("hp_current", "65")
+            assert controller.cards_service.get_actor(player_ref).value("hp_current") == 65
+            controller.maps.focus_token(document.id, item_token.id)
+            assert window.inspector_panel.field_form.controls["hp_current"].text() == "65"
+            item_editor = controller.card_views.open_game_sheet(item_card.id).widget()
+            assert item_editor.current_section == MODIFIERS_PAGE
+            modifier_dialog = ModifierDialog(asdict(Modifier("constitution", operand=2)), window)
+            modifier_dialog.search.setText("телосложение")
+            assert modifier_dialog.target.findData("constitution") >= 0
+            modifier_dialog.target.setCurrentIndex(modifier_dialog.target.findData("constitution"))
+            assert modifier_dialog.target.currentData() == "constitution"
+            assert not modifier_dialog.target.isEditable()
+            modifier_dialog.reject()
+            controller.window_manager.close_window(controller.card_editor_window_key(item_card.id))
             npc = controller.create_card("Goblin", card_type="creature")
             controller.cards_service.update_card_fields(npc.id, {"hp_max": 20})
             npc_token = controller.maps_service.add_token(other_map.id, npc.id, 200, 200)
@@ -167,7 +190,12 @@ def main():
                 == 20
             )
             rule_editor = controller.open_rules()
-            rule_editor.target.setCurrentText("initiative")
+            assert controller.rules_action.isEnabled()
+            rule_editor.select_formula("constitution_mod")
+            rule_editor.example_controls["constitution"].setText("16")
+            rule_editor.test_example()
+            assert rule_editor.status.text() == "Результат: 3"
+            rule_editor.select_formula("initiative")
             rule_editor.expression.setPlainText("dexterity_mod + 1")
             rule_editor.check_project()
             assert rule_editor.preview is not None
@@ -311,6 +339,9 @@ def main():
                 "canonical_card_fields": True,
                 "actors_player_npc_copy_inventory": True,
                 "project_formula_editor_and_overrides": True,
+                "virtual_game_pages_and_explicit_actor_context": True,
+                "typed_russian_modifier_catalog_and_rules_example": True,
+                "native_qt_russian_translation": True,
                 "unicode_paths": True,
                 "uuid_sections_child_inventory_crop": True,
                 "reference_inventory_projections_no_copies": True,

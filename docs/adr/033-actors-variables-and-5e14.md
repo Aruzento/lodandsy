@@ -123,3 +123,10 @@ Undo создания хранит receipt только созданного Act
 
 Доработки не меняют production dependencies/стек. Полный snapshot/синхронный backup
 сохраняют известную стоимость, без попытки скрыть её вторым writer/каноном.
+
+## Дополнение UI-приёмки — ADR-034
+
+Владелец заменил Inspector-only игровой ввод системными страницами Card Editor.
+Адресация, Actor/Token, вычисления, HP clamp, persistence и формат этого ADR сохранены.
+Правила открываются из gear, Item modifiers — компактный список/typed dialog.
+Подробности: ADR-034 и validation/2026-11-21-ui-acceptance-fix.md.

@@ -30,7 +30,7 @@ def test_item_projections_are_live_addressed_and_never_stored(project, tmp_path,
     app.cards_service.update_card_fields(item.id, {"summary": "Острый", "cost": 0})
     editor = app.open_card_editor(owner.id).widget()
     editor.select_section(section.id)
-    embedded = editor.table_layout.itemAt(0).widget()
+    embedded = editor._embedded_tables[section.id]
     view = app.tables.open_table(table.id).widget()
     changes = []
     view.model.dataChanged.connect(lambda a, b, *roles: changes.append((a.row(), a.column())))

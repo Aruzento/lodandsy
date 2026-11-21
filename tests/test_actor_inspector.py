@@ -63,19 +63,23 @@ def test_actor_native_edit_context_drafts_and_relations(project, qtbot):
     assert controller.draft_count == 0
 
 
-def test_item_modifier_editor_and_formula_preview_are_local_until_apply(project, qtbot):
+def test_item_modifier_editor_and_formula_preview_are_local_until_apply(
+    project, qtbot, monkeypatch
+):
     app, _ = project
     item = app.create_card("Amulet", card_type="item")
     app.cards_service.select_card(item.id)
-    panel = app.window.inspector_panel
-    panel.details_tabs.setCurrentIndex(2)
-    panel.modifiers.add_modifier()
+    editor = app.card_views.open_game_sheet(item.id).widget().item_page
+    monkeypatch.setattr(
+        "lodandsy.ui.modifier_editor.ModifierDialog.exec", lambda self: QDialog.DialogCode.Accepted
+    )
+    editor.modifiers.add_modifier()
     assert app.cards.get(item.id).value("modifiers") == ()
-    panel.modifiers.apply.click()
+    editor.modifiers.apply.click()
     assert app.cards.get(item.id).value("modifiers")[0].target == "constitution"
     widget = RulesEditor(app.cards_service, app.window)
     qtbot.addWidget(widget)
-    widget.target.setCurrentText("initiative")
+    widget.select_formula("initiative")
     widget.expression.setPlainText("dexterity_mod + 7")
     before = app.cards_service.rules
     widget.check_project()
@@ -87,7 +91,8 @@ def test_item_modifier_editor_and_formula_preview_are_local_until_apply(project,
     widget.check_project()
     app.cards_service.update_card_fields(item.id, {"summary": "concurrent"})
     widget.apply_project()
-    assert "Preview" in widget.status.text()
+    assert "устарел" in widget.status.text()
+    widget.close_for_project()
 
 
 def test_player_toggle_cancel_and_generic_current_above_max(project, monkeypatch):

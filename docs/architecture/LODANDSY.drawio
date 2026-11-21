@@ -1,5 +1,5 @@
 <?xml version='1.0' encoding='utf-8'?>
-<mxfile host="app.diagrams.net" agent="LODANDSY Cards Actors 5e14 / actual AST audit" version="24.7.17">
+<mxfile host="app.diagrams.net" agent="LODANDSY native game sheets / actual AST audit" version="24.7.17">
   <diagram id="owners" name="Owners — Cards Actors and canonical storage">
     <mxGraphModel dx="1440" dy="1000" grid="1" gridSize="10" page="1" pageWidth="1440" pageHeight="1100">
       <root>
@@ -8,7 +8,7 @@
         <mxCell id="root" value="AppController&#10;composition root / navigation / public feature contracts" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#202020;strokeColor=#777777;fontColor=#e5e5e3;fontSize=14;" vertex="1" parent="1">
           <mxGeometry as="geometry" x="430" y="30" width="570" height="80" />
         </mxCell>
-        <mxCell id="cards" value="CardsController / CardsService&#10;Card Editor + document states / fields / crop&#10;ActorState / variables / rules / Inspector" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#202020;strokeColor=#777777;fontColor=#e5e5e3;fontSize=14;" vertex="1" parent="1">
+        <mxCell id="cards" value="CardsController / CardsService&#10;Native Editor + virtual game/item pages&#10;GameSheetBinding / shared FieldEdits / ActorRef" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#202020;strokeColor=#777777;fontColor=#e5e5e3;fontSize=14;" vertex="1" parent="1">
           <mxGeometry as="geometry" x="30" y="210" width="320" height="100" />
         </mxCell>
         <mxCell id="tables" value="TablesController / TablesService&#10;standalone + embedded TableWidget&#10;references / projections / conflict drafts" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#202020;strokeColor=#777777;fontColor=#e5e5e3;fontSize=14;" vertex="1" parent="1">
@@ -47,7 +47,7 @@
         <mxCell id="history" value="ProjectHistory / QSettings&#10;LODANDSY user MRU / last directory&#10;not world / backup content" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#202020;strokeColor=#777777;fontColor=#e5e5e3;fontSize=14;" vertex="1" parent="1">
           <mxGeometry as="geometry" x="950" y="850" width="400" height="110" />
         </mxCell>
-        <mxCell id="audit" value="Actual AST: 96 modules / 220 imports / 0 cycles&#10;No ModuleController/ModuleSession/MOW runtime. No cross-feature private widgets." style="rounded=1;whiteSpace=wrap;html=0;fillColor=#202020;strokeColor=#777777;fontColor=#e5e5e3;fontSize=14;" vertex="1" parent="1">
+        <mxCell id="audit" value="Actual AST: 101 modules / 250 imports / 0 cycles&#10;No ModuleController/ModuleSession/MOW runtime. No cross-feature private widgets." style="rounded=1;whiteSpace=wrap;html=0;fillColor=#202020;strokeColor=#777777;fontColor=#e5e5e3;fontSize=14;" vertex="1" parent="1">
           <mxGeometry as="geometry" x="180" y="1010" width="1060" height="60" />
         </mxCell>
         <mxCell id="edge0" value="wires" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" source="root" target="cards" parent="1">
@@ -238,6 +238,41 @@
           <mxGeometry as="geometry" relative="1" />
         </mxCell>
         <mxCell id="e7" value="placement delta + guarded Undo" edge="1" source="f" target="c" parent="1" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;html=0;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="native-game-ui" name="UI acceptance — native pages / addressed edits">
+    <mxGraphModel dx="1440" dy="1000" grid="1" page="1" pageWidth="1440" pageHeight="1000">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="a" value="Card Editor — Cards UI&#10;system:attributes / system:modifiers&#10;virtual keys in UIstate4, no Section" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#202020;strokeColor=#888888;fontColor=#eeeeee;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="40" y="50" width="580" height="120" />
+        </mxCell>
+        <mxCell id="b" value="Inspector — operational Actor / Map&#10;current/temp HP + final overrides&#10;technical Card metadata" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#202020;strokeColor=#888888;fontColor=#eeeeee;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="750" y="50" width="580" height="120" />
+        </mxCell>
+        <mxCell id="c" value="GameSheetBinding / existing editor + Inspector bindings&#10;shared FieldEdits / ValueAddress / expected value&#10;only addressed owners, no reset" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#202020;strokeColor=#888888;fontColor=#eeeeee;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="380" y="270" width="580" height="120" />
+        </mxCell>
+        <mxCell id="d" value="CardsService / Card + Actor / effective queries&#10;unchanged rules, HP clamp, inventory ownership&#10;EntitySession → SQLite15 writer" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#202020;strokeColor=#888888;fontColor=#eeeeee;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="380" y="520" width="580" height="120" />
+        </mxCell>
+        <mxCell id="e" value="Right gear → single project RulesEditor&#10;local draft → typed example / preview table&#10;revision + serial + generation → explicit apply" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#202020;strokeColor=#888888;fontColor=#eeeeee;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="750" y="720" width="580" height="120" />
+        </mxCell>
+        <mxCell id="edge0" source="a" target="c" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;html=0;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="edge1" source="b" target="c" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;html=0;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="edge2" source="c" target="d" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;html=0;">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="edge3" source="e" target="d" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;html=0;">
           <mxGeometry as="geometry" relative="1" />
         </mxCell>
       </root>

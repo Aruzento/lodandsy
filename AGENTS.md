@@ -114,3 +114,14 @@ Manual HP/AC/speed final; снижение effective max атомарно clamp 
 Универсальный конструктор переменных, полный combat/effects/slots, multiclass HP,
 scalar/delete Undo и межкартовый перенос отложены. Только адресованная история map.
 Физическую приёмку нового ZIP и ARU-64 не объявлять пройденными по native Qt smoke.
+
+Дополнение UI-приёмки A–F / ADR-034: прежнее «характеристики только Inspector» отменено
+владельцем. Cards-owned виртуальные страницы Характеристики/Модификаторы используют
+те же FieldEdits/ValueAddress, без Section и изменения SQLite15/Card6/UIstate4. Явный
+контекст база/Actor, просмотр не создаёт участника. Технический Card Inspector и
+оперативный Actor/Map Inspector разделены. Русский UI catalog не меняет domain IDs;
+qtbase_ru входит в сборку. Typed Item dialog/история по уровням/примеры формул вместо
+пользовательского JSON. Правила — один native dialog текущего проекта из gear, guarded
+preview/apply. Отчёт/матрица: docs/validation/2026-11-21-ui-acceptance-fix.md и
+2026-11-21-ui-fields.md. До ручной приёмки ARU-65/80/83 остаются В работе. Commit/push/
+merge/release этим пакетом не разрешены. Частные вложения не включать в source ZIP.

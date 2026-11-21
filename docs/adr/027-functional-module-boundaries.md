@@ -107,3 +107,12 @@ validation до post-commit. ProjectActions объединяет Actor+inventory
 Maps получает participant resolver/addressed callbacks; Table остаётся общей таблицей.
 Нет нового registry/service locator/сессии. Actor events по Card+Actor ID; bounded
 derived cache не канон. Фактический AST96modules/220imports/0cycles, imports-cards5e14.json.
+
+
+## Дополнение UI-приёмки — ADR-034
+
+GameSheetBinding, game_sheet/game_labels/item_page/hit_history явно Cards-owned в
+AST gate. Системные страницы UI используют прежние addressed public contracts. Maps
+получает callback перехода к Card+ActorRef из composition root, не импортирует
+private Card widgets. Общие FieldEdits/ConflictBar/Qt theme остаются shared.
+Фактический граф: 101 модуль / 250 связей / 0 циклов (imports-ui-acceptance.json).

@@ -1,0 +1,428 @@
+{
+  "modules": 101,
+  "edges": 250,
+  "cycles": [],
+  "imports": {
+    "lodandsy.main": [
+      "lodandsy.application.app_controller",
+      "lodandsy.application.project_controller",
+      "lodandsy.ui.app_shell",
+      "lodandsy.ui.theme"
+    ],
+    "lodandsy": [],
+    "lodandsy.application.app_controller": [
+      "lodandsy.application.card_inspector_binding",
+      "lodandsy.application.cards_controller",
+      "lodandsy.application.cards_service",
+      "lodandsy.application.clipboard",
+      "lodandsy.application.dice_controller",
+      "lodandsy.application.entity_queries",
+      "lodandsy.application.entity_session",
+      "lodandsy.application.maps_controller",
+      "lodandsy.application.maps_service",
+      "lodandsy.application.media_service",
+      "lodandsy.application.project_actions",
+      "lodandsy.application.project_resources",
+      "lodandsy.application.tables_controller",
+      "lodandsy.application.tables_service",
+      "lodandsy.domain.actor_state",
+      "lodandsy.domain.card_collection",
+      "lodandsy.ui.card_search_dialog",
+      "lodandsy.ui.rules_editor",
+      "lodandsy.ui.window_manager"
+    ],
+    "lodandsy.application.background_tasks": [],
+    "lodandsy.application.cards_controller": [
+      "lodandsy.application.card_editor_binding",
+      "lodandsy.application.card_media_controller",
+      "lodandsy.application.game_sheet_binding",
+      "lodandsy.application.rich_html",
+      "lodandsy.domain.actor_state",
+      "lodandsy.domain.card",
+      "lodandsy.ui.card_creation_dialog",
+      "lodandsy.ui.card_document_state",
+      "lodandsy.ui.card_editor",
+      "lodandsy.ui.game_labels",
+      "lodandsy.ui.window_manager",
+      "lodandsy.ui.workspace_placement"
+    ],
+    "lodandsy.application.cards_service": [
+      "lodandsy.application.entity_session",
+      "lodandsy.application.field_edits",
+      "lodandsy.application.rich_html",
+      "lodandsy.domain.actor_state",
+      "lodandsy.domain.card",
+      "lodandsy.domain.card_collection",
+      "lodandsy.domain.card_schema",
+      "lodandsy.domain.entity_reference",
+      "lodandsy.domain.rules_5e14"
+    ],
+    "lodandsy.application.card_editor_binding": [
+      "lodandsy.application.cards_service",
+      "lodandsy.ui.card_editor",
+      "lodandsy.ui.game_labels"
+    ],
+    "lodandsy.application.card_inspector_binding": [
+      "lodandsy.application.cards_service",
+      "lodandsy.domain.actor_state",
+      "lodandsy.domain.card_schema",
+      "lodandsy.ui.card_fields",
+      "lodandsy.ui.game_labels",
+      "lodandsy.ui.inspector_panel",
+      "lodandsy.ui.player_dialog"
+    ],
+    "lodandsy.application.card_media_controller": [
+      "lodandsy.application.rich_text_codec",
+      "lodandsy.domain.card"
+    ],
+    "lodandsy.application.card_payload_codec": [
+      "lodandsy.application.rich_html",
+      "lodandsy.domain.actor_state",
+      "lodandsy.domain.card",
+      "lodandsy.domain.card_schema",
+      "lodandsy.domain.modifiers"
+    ],
+    "lodandsy.application.clipboard": [],
+    "lodandsy.application.dice_controller": [
+      "lodandsy.ui.dice_widget"
+    ],
+    "lodandsy.application.edit_conflict": [],
+    "lodandsy.application.entity_queries": [
+      "lodandsy.domain.entity_reference"
+    ],
+    "lodandsy.application.entity_session": [
+      "lodandsy.domain.entity"
+    ],
+    "lodandsy.application.field_edits": [
+      "lodandsy.application.edit_conflict"
+    ],
+    "lodandsy.application.fog_geometry": [
+      "lodandsy.domain.map_fog"
+    ],
+    "lodandsy.application.game_sheet_binding": [
+      "lodandsy.domain.actor_state",
+      "lodandsy.domain.card_schema",
+      "lodandsy.ui.game_labels",
+      "lodandsy.ui.player_dialog"
+    ],
+    "lodandsy.application.maps_controller": [
+      "lodandsy.application.background_tasks",
+      "lodandsy.application.fog_geometry",
+      "lodandsy.application.map_pyramid",
+      "lodandsy.application.map_tiles",
+      "lodandsy.domain.module_values",
+      "lodandsy.ui.map_editor",
+      "lodandsy.ui.map_presentation",
+      "lodandsy.ui.map_settings_dialogs",
+      "lodandsy.ui.map_widget"
+    ],
+    "lodandsy.application.maps_service": [
+      "lodandsy.application.entity_session",
+      "lodandsy.application.fog_geometry",
+      "lodandsy.domain.map_document",
+      "lodandsy.domain.map_fog"
+    ],
+    "lodandsy.application.map_pyramid": [
+      "lodandsy.application.resource_paths"
+    ],
+    "lodandsy.application.map_pyramid_worker": [
+      "lodandsy.application.map_pyramid"
+    ],
+    "lodandsy.application.map_tiles": [],
+    "lodandsy.application.media_service": [
+      "lodandsy.application.resource_paths"
+    ],
+    "lodandsy.application.project_actions": [
+      "lodandsy.application.field_edits",
+      "lodandsy.application.maps_service",
+      "lodandsy.domain.actor_state",
+      "lodandsy.domain.card",
+      "lodandsy.domain.card_schema",
+      "lodandsy.domain.document_payloads",
+      "lodandsy.domain.entity",
+      "lodandsy.domain.map_document",
+      "lodandsy.domain.module_values",
+      "lodandsy.domain.table_document"
+    ],
+    "lodandsy.application.project_controller": [
+      "lodandsy.application.app_controller",
+      "lodandsy.application.project_history",
+      "lodandsy.application.save_coordinator",
+      "lodandsy.application.sqlite_project_store",
+      "lodandsy.application.workspace_state",
+      "lodandsy.domain.actor_state",
+      "lodandsy.domain.card_collection",
+      "lodandsy.ui.project_chooser"
+    ],
+    "lodandsy.application.project_history": [],
+    "lodandsy.application.project_resources": [],
+    "lodandsy.application.resource_paths": [],
+    "lodandsy.application.rich_html": [
+      "lodandsy.domain.card"
+    ],
+    "lodandsy.application.rich_text_codec": [
+      "lodandsy.application.rich_html"
+    ],
+    "lodandsy.application.save_coordinator": [
+      "lodandsy.application.sqlite_project_store"
+    ],
+    "lodandsy.application.sqlite_project_store": [
+      "lodandsy.application.card_payload_codec",
+      "lodandsy.application.fog_geometry",
+      "lodandsy.application.table_column_codec",
+      "lodandsy.domain.card",
+      "lodandsy.domain.card_collection",
+      "lodandsy.domain.document_payloads",
+      "lodandsy.domain.entity",
+      "lodandsy.domain.map_document",
+      "lodandsy.domain.rules_5e14",
+      "lodandsy.domain.table_document"
+    ],
+    "lodandsy.application.tables_controller": [
+      "lodandsy.ui.table_widget"
+    ],
+    "lodandsy.application.tables_service": [
+      "lodandsy.application.edit_conflict",
+      "lodandsy.application.entity_session",
+      "lodandsy.domain.table_document"
+    ],
+    "lodandsy.application.table_column_codec": [
+      "lodandsy.domain.table_document"
+    ],
+    "lodandsy.application.workspace_state": [],
+    "lodandsy.application": [],
+    "lodandsy.domain.actor_state": [
+      "lodandsy.domain.card_schema",
+      "lodandsy.domain.module_values"
+    ],
+    "lodandsy.domain.card": [
+      "lodandsy.domain.actor_state",
+      "lodandsy.domain.card_schema",
+      "lodandsy.domain.rules_5e14"
+    ],
+    "lodandsy.domain.card_collection": [
+      "lodandsy.domain.card",
+      "lodandsy.domain.document_payloads"
+    ],
+    "lodandsy.domain.card_schema": [
+      "lodandsy.domain.modifiers",
+      "lodandsy.domain.module_values"
+    ],
+    "lodandsy.domain.dice": [],
+    "lodandsy.domain.document_payloads": [
+      "lodandsy.domain.card",
+      "lodandsy.domain.card_schema",
+      "lodandsy.domain.entity",
+      "lodandsy.domain.map_document",
+      "lodandsy.domain.modifiers",
+      "lodandsy.domain.rules_5e14",
+      "lodandsy.domain.table_document"
+    ],
+    "lodandsy.domain.entity": [
+      "lodandsy.domain.module_values"
+    ],
+    "lodandsy.domain.entity_reference": [],
+    "lodandsy.domain.formula": [],
+    "lodandsy.domain.map_document": [
+      "lodandsy.domain.card_schema",
+      "lodandsy.domain.map_fog",
+      "lodandsy.domain.module_values"
+    ],
+    "lodandsy.domain.map_fog": [
+      "lodandsy.domain.module_values"
+    ],
+    "lodandsy.domain.modifiers": [
+      "lodandsy.domain.formula",
+      "lodandsy.domain.module_values"
+    ],
+    "lodandsy.domain.module_values": [],
+    "lodandsy.domain.rules_5e14": [
+      "lodandsy.domain.actor_state",
+      "lodandsy.domain.card_schema",
+      "lodandsy.domain.formula",
+      "lodandsy.domain.modifiers"
+    ],
+    "lodandsy.domain.table_document": [
+      "lodandsy.domain.module_values"
+    ],
+    "lodandsy.domain": [],
+    "lodandsy.ui.app_shell": [
+      "lodandsy.ui.fixed_panel_host",
+      "lodandsy.ui.inspector_panel",
+      "lodandsy.ui.left_rail",
+      "lodandsy.ui.right_rail",
+      "lodandsy.ui.tree_panel",
+      "lodandsy.ui.workspace_host"
+    ],
+    "lodandsy.ui.card_creation_dialog": [
+      "lodandsy.domain.card_schema"
+    ],
+    "lodandsy.ui.card_document_state": [
+      "lodandsy.domain.card",
+      "lodandsy.ui.game_labels",
+      "lodandsy.ui.rich_document"
+    ],
+    "lodandsy.ui.card_editor": [
+      "lodandsy.application.rich_html",
+      "lodandsy.application.rich_text_codec",
+      "lodandsy.domain.card",
+      "lodandsy.domain.card_schema",
+      "lodandsy.ui.card_relations",
+      "lodandsy.ui.conflict_bar",
+      "lodandsy.ui.game_labels",
+      "lodandsy.ui.game_sheet",
+      "lodandsy.ui.icons",
+      "lodandsy.ui.item_page",
+      "lodandsy.ui.portrait_panel",
+      "lodandsy.ui.rich_document",
+      "lodandsy.ui.rich_toolbar",
+      "lodandsy.ui.semantic_edits"
+    ],
+    "lodandsy.ui.card_fields": [
+      "lodandsy.domain.card_schema",
+      "lodandsy.ui.game_labels",
+      "lodandsy.ui.hit_history",
+      "lodandsy.ui.semantic_edits"
+    ],
+    "lodandsy.ui.card_relations": [],
+    "lodandsy.ui.card_search_dialog": [
+      "lodandsy.application.rich_html",
+      "lodandsy.domain.card_schema"
+    ],
+    "lodandsy.ui.card_tree_view": [],
+    "lodandsy.ui.conflict_bar": [],
+    "lodandsy.ui.dice_widget": [
+      "lodandsy.application.clipboard",
+      "lodandsy.domain.dice",
+      "lodandsy.ui.icons"
+    ],
+    "lodandsy.ui.entity_picker": [],
+    "lodandsy.ui.fixed_panel_host": [],
+    "lodandsy.ui.fog_tools": [
+      "lodandsy.application.fog_geometry",
+      "lodandsy.domain.map_fog"
+    ],
+    "lodandsy.ui.game_labels": [
+      "lodandsy.domain.card_schema"
+    ],
+    "lodandsy.ui.game_sheet": [
+      "lodandsy.domain.card_schema",
+      "lodandsy.ui.card_fields",
+      "lodandsy.ui.conflict_bar",
+      "lodandsy.ui.game_labels",
+      "lodandsy.ui.semantic_edits"
+    ],
+    "lodandsy.ui.hit_history": [],
+    "lodandsy.ui.icons": [],
+    "lodandsy.ui.inspector_panel": [
+      "lodandsy.application.clipboard",
+      "lodandsy.domain.card_schema",
+      "lodandsy.ui.card_fields",
+      "lodandsy.ui.conflict_bar",
+      "lodandsy.ui.game_labels",
+      "lodandsy.ui.icons",
+      "lodandsy.ui.semantic_edits"
+    ],
+    "lodandsy.ui.item_page": [
+      "lodandsy.domain.modifiers",
+      "lodandsy.ui.card_fields",
+      "lodandsy.ui.conflict_bar",
+      "lodandsy.ui.modifier_editor"
+    ],
+    "lodandsy.ui.left_rail": [
+      "lodandsy.ui.icons"
+    ],
+    "lodandsy.ui.map_annotations": [],
+    "lodandsy.ui.map_editor": [
+      "lodandsy.ui.icons",
+      "lodandsy.ui.map_library",
+      "lodandsy.ui.map_widget"
+    ],
+    "lodandsy.ui.map_library": [],
+    "lodandsy.ui.map_presentation": [
+      "lodandsy.ui.map_widget"
+    ],
+    "lodandsy.ui.map_settings_dialogs": [
+      "lodandsy.domain.map_document"
+    ],
+    "lodandsy.ui.map_widget": [
+      "lodandsy.application.fog_geometry",
+      "lodandsy.domain.map_document",
+      "lodandsy.domain.map_fog",
+      "lodandsy.ui.fog_tools",
+      "lodandsy.ui.icons",
+      "lodandsy.ui.map_annotations",
+      "lodandsy.ui.project_tree_model"
+    ],
+    "lodandsy.ui.modifier_editor": [
+      "lodandsy.domain.modifiers",
+      "lodandsy.domain.rules_5e14",
+      "lodandsy.ui.game_labels"
+    ],
+    "lodandsy.ui.navigator_actions": [
+      "lodandsy.ui.icons",
+      "lodandsy.ui.project_tree_model"
+    ],
+    "lodandsy.ui.player_dialog": [],
+    "lodandsy.ui.portrait_crop_dialog": [],
+    "lodandsy.ui.portrait_panel": [
+      "lodandsy.ui.icons",
+      "lodandsy.ui.portrait_crop_dialog"
+    ],
+    "lodandsy.ui.project_chooser": [],
+    "lodandsy.ui.project_tree_model": [
+      "lodandsy.ui.icons"
+    ],
+    "lodandsy.ui.rich_document": [
+      "lodandsy.application.resource_paths",
+      "lodandsy.application.rich_html",
+      "lodandsy.application.rich_text_codec"
+    ],
+    "lodandsy.ui.rich_toolbar": [
+      "lodandsy.application.rich_html",
+      "lodandsy.ui.icons"
+    ],
+    "lodandsy.ui.right_rail": [
+      "lodandsy.ui.icons"
+    ],
+    "lodandsy.ui.rules_editor": [
+      "lodandsy.domain.card_schema",
+      "lodandsy.domain.formula",
+      "lodandsy.domain.rules_5e14",
+      "lodandsy.ui.game_labels",
+      "lodandsy.ui.hit_history"
+    ],
+    "lodandsy.ui.semantic_edits": [],
+    "lodandsy.ui.table_headers": [
+      "lodandsy.ui.icons"
+    ],
+    "lodandsy.ui.table_model": [
+      "lodandsy.domain.table_document"
+    ],
+    "lodandsy.ui.table_widget": [
+      "lodandsy.application.clipboard",
+      "lodandsy.domain.table_document",
+      "lodandsy.ui.conflict_bar",
+      "lodandsy.ui.entity_picker",
+      "lodandsy.ui.table_headers",
+      "lodandsy.ui.table_model"
+    ],
+    "lodandsy.ui.theme": [],
+    "lodandsy.ui.tree_panel": [
+      "lodandsy.ui.card_creation_dialog",
+      "lodandsy.ui.card_tree_view",
+      "lodandsy.ui.icons",
+      "lodandsy.ui.navigator_actions",
+      "lodandsy.ui.project_tree_model"
+    ],
+    "lodandsy.ui.window_manager": [
+      "lodandsy.ui.app_shell",
+      "lodandsy.ui.workspace_placement"
+    ],
+    "lodandsy.ui.workspace_host": [
+      "lodandsy.ui.workspace_placement"
+    ],
+    "lodandsy.ui.workspace_placement": [],
+    "lodandsy.ui": []
+  }
+}

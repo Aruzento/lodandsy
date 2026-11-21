@@ -85,7 +85,7 @@ class AppController:
             self.actions.title_edits,
         )
         self.inspector_binding.open_inventory = self.tables.open_table
-        self.card_views.actor_context = self.inspector_binding.show_actor
+        self.inspector_binding.open_sheet = self.card_views.open_game_sheet
         self.card_views.placements_query = self.actions.actor_placements
         self.card_views.locate_placement = self.maps.focus_token
         self.card_views.delete_actor = self.actions.delete_actor
@@ -96,7 +96,12 @@ class AppController:
             self.inspector_binding.update_actor_scale(ActorRef(card, actor), scale)
         )
         self._rules_editor = None
-        window.inspector_panel.rules_requested.connect(self.open_rules)
+        self.maps.open_participant = self.card_views.open_game_sheet
+        self.rules_action = QAction("Игровая система и правила…", window)
+        self.rules_action.setEnabled(False)
+        self.rules_action.triggered.connect(self.open_rules)
+        window.right_rail.settings_menu.addAction(self.rules_action)
+        window.right_rail.settings_menu.addSeparator()
         self.maps_service.map_changed.connect(self._placements_changed)
         self.maps_service.map_deleted.connect(self._placements_changed)
         self.navigator_selection = None
@@ -188,6 +193,14 @@ class AppController:
         self._rules_editor.activateWindow()
         return self._rules_editor
 
+    def close_rules(self, *, force=False):
+        if self._rules_editor is None:
+            return True
+        if force:
+            self._rules_editor.close_for_project()
+            return True
+        return self._rules_editor.close()
+
     def _placements_changed(self, map_id):
         for key in self.card_views.opened_ids:
             self.card_views.refresh_relations(key)
@@ -253,6 +266,7 @@ class AppController:
         self.window.tree_panel.set_entities(self.core.entities.summaries())
 
     def shutdown_features(self):
+        self.close_rules(force=True)
         self.maps.shutdown()
         self.media.shutdown()
 

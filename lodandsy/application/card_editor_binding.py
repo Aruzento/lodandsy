@@ -2,6 +2,7 @@ from lodandsy.application.cards_service import (
     CardsService,
 )
 from lodandsy.ui.card_editor import CardEditorWidget
+from lodandsy.ui.game_labels import error_text, field_label
 
 
 class CardEditorBinding:
@@ -27,6 +28,7 @@ class CardEditorBinding:
         self.editor.field_cancel_requested.connect(self._cancel_field)
 
         self.editor.conflicts.resolve_requested.connect(self._resolve_conflict)
+        self.editor.item_page.conflicts.resolve_requested.connect(self._resolve_conflict)
         self.session.field_edits.changed.connect(self._field_status)
         self.editor.content_changed.connect(self._on_content_changed)
 
@@ -50,14 +52,37 @@ class CardEditorBinding:
 
         self.editor.set_canonical(card, self.session.field_drafts, fields=fields)
         edits = self.session.field_edits
-        errors = [message for key, message in edits.errors.items() if key[0] == self.card_id]
+        errors = [
+            error_text(message)
+            for key, message in edits.errors.items()
+            if key[0] == self.card_id and getattr(key, "actor_id", None) is None
+        ]
         if errors:
             self.editor.validation_status.setText(errors[0])
         self.editor.conflicts.set_conflicts(
             [
-                (key, "Конфликт · " + key[1], edits.drafts.get(key, conflict.raw), edits.read(key))
+                (
+                    key,
+                    "Конфликт · " + field_label(key[1]),
+                    edits.drafts.get(key, conflict.raw),
+                    edits.read(key),
+                )
+                for key, conflict in edits.conflicts.items()
+                if key[0] == self.card_id and key[1] in {"title", "summary"}
+            ]
+        )
+        self.editor.item_page.conflicts.set_conflicts(
+            [
+                (
+                    key,
+                    "Конфликт · " + field_label(key[1]),
+                    edits.drafts.get(key, conflict.raw),
+                    edits.read(key),
+                )
                 for key, conflict in edits.conflicts.items()
                 if key[0] == self.card_id
+                and key[1] in {"rarity", "weight", "cost", "modifiers"}
+                and getattr(key, "actor_id", None) is None
             ]
         )
 

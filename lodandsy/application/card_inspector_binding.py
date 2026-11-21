@@ -1,4 +1,5 @@
 from lodandsy.application.cards_service import CardsService
+from lodandsy.ui.game_labels import field_label
 from lodandsy.ui.inspector_panel import InspectorPanel
 
 
@@ -18,6 +19,16 @@ class CardInspectorBinding:
         self._actor_ref = None
         self._feet_per_cell = None
         self.open_inventory = lambda key: None
+        self.open_sheet = lambda card_id, actor_id=None: None
+        inspector.sheet_requested.connect(
+            lambda: (
+                self.open_sheet(
+                    self.current_card_id, self._actor_ref.actor_id if self._actor_ref else None
+                )
+                if self.current_card_id
+                else None
+            )
+        )
         self._title_owner = None
         self._title_manager = None
         inspector.conflicts.resolve_requested.connect(self._resolve_conflict)
@@ -33,11 +44,6 @@ class CardInspectorBinding:
         form.buffer_changed.connect(self._buffer_field)
         form.commit_requested.connect(self._commit_field)
         form.cancel_requested.connect(self._cancel_field)
-        inspector.modifiers.raw_changed.connect(lambda raw: self._buffer_field("modifiers", raw))
-        inspector.modifiers.commit_requested.connect(
-            lambda raw: self._commit_field("modifiers", raw)
-        )
-        inspector.modifiers.cancel_requested.connect(lambda: self._cancel_field("modifiers"))
         inspector.base_requested.connect(self.show_base)
         inspector.inventory_requested.connect(self.show_inventory)
         inspector.title_edit.edit_started.connect(self._begin_title)
@@ -165,7 +171,9 @@ class CardInspectorBinding:
             ),
             "",
         )
-        self.inspector.validation_notice.setText(text)
+        from lodandsy.ui.game_labels import error_text
+
+        self.inspector.validation_notice.setText(error_text(text))
         self.inspector.validation_notice.setVisible(bool(text))
         self._sync_conflicts()
 
@@ -176,7 +184,7 @@ class CardInspectorBinding:
             [
                 (
                     identity,
-                    "Конфликт · " + identity[1],
+                    "Конфликт · " + field_label(identity[1]),
                     manager.drafts.get(identity, conflict.raw),
                     manager.read(identity),
                 )
@@ -259,16 +267,12 @@ class CardInspectorBinding:
                 self.inspector.title_edit.set_value(raw, force=not self.inspector.title_active())
             else:
                 self.inspector.set_metadata(card, self.session.field_drafts)
-                self.inspector.modifiers.set_value(
-                    card.value("modifiers"),
-                    raw=self.session.field_drafts.get((card.id, "modifiers")),
-                    active=self.session.field_edits.has(self._field_owners.get("modifiers")),
+            if self._actor_ref:
+                self.inspector.set_effective(
+                    self.session.effective(self._actor_ref or card.id),
+                    card.card_type,
+                    feet_per_cell=self._feet_per_cell if self._actor_ref else None,
                 )
-            self.inspector.set_effective(
-                self.session.effective(self._actor_ref or card.id),
-                card.card_type,
-                feet_per_cell=self._feet_per_cell if self._actor_ref else None,
-            )
             self._sync_conflicts()
         else:
             self.inspector.clear_metadata()
@@ -290,14 +294,19 @@ class CardInspectorBinding:
         from PySide6.QtWidgets import QInputDialog
 
         from lodandsy.domain.card_schema import available_fields
+        from lodandsy.ui.game_labels import field_label, field_surface
 
         key = self.current_card_id
         if not key or self._actor_ref:
             return
-        fields = available_fields(self.session.cards.get(key))
+        fields = [
+            f
+            for f in available_fields(self.session.cards.get(key))
+            if field_surface(f.key) == "inspector"
+        ]
         if not fields:
             return
-        labels = [f.label for f in fields]
+        labels = [field_label(f.key) for f in fields]
         label, ok = QInputDialog.getItem(self.inspector, "Поле", "Добавить:", labels, 0, False)
         if ok:
             self.session.add_card_field(key, fields[labels.index(label)].key)

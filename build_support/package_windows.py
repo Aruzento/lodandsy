@@ -67,6 +67,10 @@ def main():
             if path.is_file() and (
                 path.suffix in {".py", ".md", ".spec", ".ps1", ".json", ".txt", ".drawio"}
                 or path.is_relative_to(ROOT / "build_support/licenses")
+                or (
+                    path.suffix == ".png"
+                    and path.is_relative_to(ROOT / "docs/validation/2026-11-21-ui-acceptance")
+                )
             ):
                 target = source / path.relative_to(ROOT)
                 target.parent.mkdir(parents=True, exist_ok=True)

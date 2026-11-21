@@ -1,6 +1,6 @@
 # LODANDSY — Cards / Actors / 5e14 после итерации7
 
-1. Прочитать AGENTS.md, docs/MVP.md, ADR-027/030/031/032/033 и
+1. Прочитать AGENTS.md, docs/MVP.md, ADR-027/030/031/032/033/034 и
    docs/validation/2026-11-20-iteration-7-stabilization.md. Итерация7 в целом принята;
    не выполнять пакет A–G заново. Сначала проверить фактический HEAD/working tree/CI.
 2. Следующую разработку вести отдельными функциональными модулями от main,
@@ -26,3 +26,8 @@
    проходят тот же итоговый валидатор. Formula preview связан с revision+serial;
    HP clamp атомарен. Guarded placement Undo не откатывает последующие HP/inventory.
    Итоги и физические ограничения: docs/validation/2026-11-21-cards-actors-5e14.md.
+8. Исправление непройденной UI-приёмки A–F: docs/validation/2026-11-21-ui-acceptance-fix.md.
+   Игровые поля в системных страницах Card Editor, Item modifiers — отдельная native форма,
+   Inspector Card технический, Actor/Map оперативный. Правила открываются из gear справа.
+   Виртуальные keys разрешены в UIstate4, не являются UUID Section; формат мира не изменён.
+   Git-действия этим запросом не разрешены. ARU-65/80/83 остаются В работе до ручной приёмки.

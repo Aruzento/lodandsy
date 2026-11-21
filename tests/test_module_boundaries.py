@@ -25,13 +25,14 @@ FEATURES = {
     | modules(
         "application",
         "cards_controller cards_service card_editor_binding card_inspector_binding "
-        "card_media_controller card_payload_codec rich_html rich_text_codec",
+        "card_media_controller card_payload_codec rich_html rich_text_codec game_sheet_binding",
     )
     | modules(
         "ui",
         "card_editor card_document_state card_fields card_creation_dialog card_search_dialog "
         "portrait_panel portrait_crop_dialog rich_document rich_toolbar "
-        "player_dialog modifier_editor rules_editor card_relations",
+        "player_dialog modifier_editor rules_editor card_relations "
+        "game_labels game_sheet hit_history item_page",
         # Forms, item sources and project rules stay Cards-owned.
     ),
     "tables": modules("domain", "table_document")
@@ -265,10 +266,14 @@ def test_table_commit_updates_only_its_views_without_rebuilding_card(
     editor = app.open_card_editor(card.id).widget()
     editor.select_section(inventory.id)
     standalone = app.tables.open_table(table.id).widget()
-    before = editor.table_layout.itemAt(0).widget()
+    before = next(
+        editor.table_layout.itemAt(i).widget()
+        for i in range(editor.table_layout.count())
+        if hasattr(editor.table_layout.itemAt(i).widget(), "model")
+    )
     calls = []
     monkeypatch.setattr(editor, "set_canonical", lambda *args, **kwargs: calls.append(1))
     standalone.model.setData(standalone.model.index(0, 1), "12")
     assert before.model.data(before.model.index(0, 1)) == "12"
-    assert editor.table_layout.itemAt(0).widget() is before and not calls
+    assert editor._embedded_tables[inventory.id] is before and not calls
     assert app.tables_service.core is app.maps_service.core is app.cards_service.core

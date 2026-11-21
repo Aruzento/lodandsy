@@ -203,6 +203,7 @@ class ProjectController(QObject):
         return True
 
     def _update_status(self, *_args):
+        self.controller.rules_action.setEnabled(self.store is not None and not self.busy)
         labels = {
             SaveState.CLEAN: "Сохранено",
             SaveState.DIRTY: "Есть несохранённые изменения",
@@ -365,6 +366,8 @@ class ProjectController(QObject):
         return choice == QMessageBox.StandardButton.Discard
 
     def can_close(self):
+        if not self.controller.close_rules():
+            return False
         if not self._confirm_changes():
             return False
         try:

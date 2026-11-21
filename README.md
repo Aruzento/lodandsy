@@ -15,13 +15,20 @@ pyvips3.2.0 + pyvips-binary8.18.7; Qt Widgets без web runtime.
 Card хранит общую базу, Actor — индивидуальные HP/имя/инвентарь, Token — размещение.
 Player при новых размещениях использует выбранного Actor; NPC/Object создают
 независимых участников. Удаление размещения сохраняет участника во вкладке «Связи».
-Inspector редактирует базу или выбранного участника; инвентарь участника открывается
+Вкладка «Характеристики» редактирует базу или явно выбранного участника; инвентарь участника открывается
 отдельной Table. Активные Item modifiers пересчитывают зависимости, quantity не множит
 бонусы. Ручные HP max/AC/speed имеют окончательный приоритет.
-Формулы проекта открываются из Inspector, проверяются и применяются явно; shipped
+Формулы проекта открываются из шестерёнки справа («Игровая система и правила…»), проверяются и применяются явно; shipped
 формулы остаются доступны. Только 5e 2014: не заявляются полный бой, multiclass HP,
 слоты заклинаний/остатки Hit Dice, условия эффектов или конструктор новых переменных.
 Старый SQLite14 безопасно отклоняется без миграции и перезаписи.
+
+Исправление непройденной UI-приёмки: [ADR-034](docs/adr/034-native-game-sheets-and-russian-ui.md),
+[отчёт A–F / U01–U18](docs/validation/2026-11-21-ui-acceptance-fix.md),
+[матрица доступности полей](docs/validation/2026-11-21-ui-fields.md).
+Inspector карточки оставляет технические свойства; оперативный Inspector карты — состояние
+участника. Item имеет компактную вкладку «Модификаторы» с типизированной формой.
+Системные страницы не добавляют Section и не меняют формат SQLite15/Card6/UIstate4.
 
 Cards/Tables/Maps/Dice сохраняют отдельных владельцев ADR-027. Composition root
 связывает публичные контракты, Core/Resources/Media/Navigation и атомарные ProjectActions.
@@ -86,7 +93,7 @@ python -m ruff check .
 python -m pip check
 git diff --check
 powershell -File build_support/build_windows.ps1 -Python .venv/Scripts/python.exe -SkipPackage
-python -m build_support.package_windows --archive LODANDSY-Cards-Actors-5e14-2026-11-21.zip
+python -m build_support.package_windows --archive LODANDSY-UI-Acceptance-Fix-2026-11-21.zip
 ```
 
 Build использует requirements-build.lock, лицензии/источники входят в portable ZIP.

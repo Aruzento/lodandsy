@@ -211,14 +211,15 @@ class CardsService(QObject):
         effective = self.effective(reference)
         maximum, current = effective.get("hp_max"), actor.value("hp_current")
         max_text = str(maximum.value) if maximum.status == "ok" else "—"
-        summary = f"HP: {current if current is not None else '—'} / {max_text}"
+        summary = f"Хиты: {current if current is not None else '—'} / {max_text}"
         if actor.value("hp_temp"):
             summary += f" · временные {actor.value('hp_temp')}"
         if maximum.status == "ok" and maximum.value > 0 and current is not None:
             summary += f" · {100 * current / maximum.value:.1f}%"
         for key in ("ac", "speed"):
             value = effective.get(key)
-            summary += f" · {key.upper()}: {value.value if value.status == 'ok' else '—'}"
+            label = "КД" if key == "ac" else "Скорость, фт."
+            summary += f" · {label}: {value.value if value.status == 'ok' else '—'}"
         return actor.name, summary, actor.inventory_id
 
     def preview_rules(self, overrides, *, expected_revision=None):
