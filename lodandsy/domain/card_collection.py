@@ -1,7 +1,7 @@
 from dataclasses import replace
 
 from lodandsy.domain.card import Card
-from lodandsy.domain.document_payloads import project_entities
+from lodandsy.domain.document_payloads import project_entities, validate_project
 
 
 class CardCollection:
@@ -9,6 +9,8 @@ class CardCollection:
 
     def __init__(self, cards=(), *, entities=None):
         self.entities = entities if entities is not None else project_entities(cards)
+        if self.entities.validator is None:
+            self.entities.validator = validate_project
 
     def all(self):
         return tuple(self.get(e.id) for e in self.entities.summaries() if e.kind == "card")
@@ -37,6 +39,8 @@ class CardCollection:
                 card_type=p.card_type,
                 values=p.values,
                 sections=p.sections,
+                actors=p.actors,
+                default_actor_id=p.default_actor_id,
             ),
         )
 
@@ -78,6 +82,8 @@ class CardCollection:
             "portrait",
             "sections",
             "values",
+            "actors",
+            "default_actor_id",
         }:
             raise ValueError("Unsupported Card fields")
         current = self.get(key)

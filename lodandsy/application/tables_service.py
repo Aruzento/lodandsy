@@ -102,6 +102,65 @@ class TablesService(QObject):
             raise ValueError("Неподдерживаемые поля таблицы")
         return self.update_table(replace(self.get_table(key), **changes))
 
+    def clone_inventory(self, source_id, parent_id, title):
+        """Copy owned rows/columns, preserving soft Item refs and remapping local IDs."""
+        from lodandsy.domain.table_document import ColumnDefinition, RowRecord, inventory_columns
+
+        source = self.get_table(source_id) if source_id else None
+        original = source.columns if source else inventory_columns()
+        mapping = {column.id: str(uuid4()) for column in original}
+        columns = tuple(
+            replace(
+                column,
+                id=mapping[column.id],
+                source_column_id=mapping.get(column.source_column_id, column.source_column_id),
+            )
+            for column in original
+        )
+        if not any(column.key == "active" for column in columns):
+            columns += (
+                ColumnDefinition(
+                    "Активен", "bool", len(columns), key="active", required=True, default=False
+                ),
+            )
+        activity = next(column for column in columns if column.key == "active")
+        if activity.data_type != "bool":
+            raise ValueError("Столбец активности должен быть логическим")
+        columns = tuple(
+            replace(column, required=True, default=False) if column.id == activity.id else column
+            for column in columns
+        )
+        rows = tuple(
+            RowRecord(
+                row.position,
+                tuple(
+                    (mapping[key], value) for key, value in row.cells if mapping[key] != activity.id
+                )
+                + (
+                    (
+                        activity.id,
+                        any(
+                            mapping[key] == activity.id and value is True
+                            for key, value in row.cells
+                        ),
+                    ),
+                ),
+            )
+            for row in (source.rows if source else ())
+        )
+        document = TableDocument(title, columns=columns, rows=rows)
+        with self.core.transaction():
+            self.core.entities.create(
+                "table", title, TablePayload(columns, rows), parent_id, id=document.id
+            )
+            self.core.after_commit(lambda: self.core.entity_created.emit(document.id))
+            self.core.after_commit(
+                lambda: self.table_changed.emit(document.id, TableChange(structure=True))
+            )
+            self.core.after_commit(lambda: self.track_references(document.id))
+            self.core.mark_changed()
+        return document
+
     def update_table(self, document, *, expected=None):
         if not isinstance(document, TableDocument):
             raise ValueError("Ожидается валидированная таблица")
@@ -133,7 +192,7 @@ class TablesService(QObject):
             )
             self.core.entities.project(document.id, lambda e, p: document)
             self._lookups.pop(document.id, None)
-            self.track_references(document.id, change)
+            self.core.after_commit(lambda: self.track_references(document.id, change))
             self.core.after_commit(lambda: self.table_changed.emit(document.id, change))
             self.core.mark_changed()
         return document

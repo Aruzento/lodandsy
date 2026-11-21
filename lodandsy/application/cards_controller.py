@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QInputDialog
 from lodandsy.application.card_editor_binding import CardEditorBinding
 from lodandsy.application.card_media_controller import CardMediaController
 from lodandsy.application.rich_html import internal_entity_id
+from lodandsy.domain.actor_state import ActorRef
 from lodandsy.domain.card import EMPTY_DOCUMENT
 from lodandsy.ui.card_document_state import CardDocumentState
 from lodandsy.ui.card_editor import CardEditorWidget
@@ -51,8 +52,13 @@ class CardsController(QObject):
         self.documents = {}
         self.preferences = {}
         self._table_cards = {}
+        self.actor_context = lambda reference: None
+        self.placements_query = lambda reference: ()
+        self.locate_placement = lambda map_id, token_id: None
+        self.delete_actor = lambda reference, **kwargs: None
         self.images = CardMediaController(window, service, media, resources, ensure_project)
         service.card_changed.connect(self._on_card_changed)
+        service.actor_changed.connect(lambda key, actor, fields: self.refresh_relations(key))
         service.cards_deleted.connect(self._on_cards_deleted)
         service.cards_replaced.connect(self.reset)
         service.core.entity_changed.connect(self._link_entity_changed)
@@ -61,6 +67,10 @@ class CardsController(QObject):
     @property
     def cards(self):
         return self.service.cards
+
+    @property
+    def opened_ids(self):
+        return tuple(self.editors)
 
     @property
     def project_root(self):
@@ -205,6 +215,7 @@ class CardsController(QObject):
                 editor.refresh_links()
 
     def _on_card_changed(self, card_id: str, fields: frozenset[str]) -> None:
+        self.refresh_relations(card_id)
         if card_id not in self.editors:
             state = self.documents.get(card_id)
             if state is not None:
@@ -257,6 +268,14 @@ class CardsController(QObject):
                 state.load_ui_values(values)
             self.documents[card_id] = state
         editor = CardEditorWidget()
+        editor.relations.actor_requested.connect(
+            lambda actor_id: self.actor_context(ActorRef(card_id, actor_id))
+        )
+        editor.relations.placement_requested.connect(
+            lambda map_id, token_id: self.locate_placement(map_id, token_id)
+        )
+        editor.relations.inventory_requested.connect(lambda key: self.open_entity("table", key))
+        editor.relations.delete_requested.connect(lambda actor: self._delete_actor(card_id, actor))
         editor.pending_changed.connect(self.pending_changed)
         editor.document_state = state
         editor.table_factory = lambda section, previous=None: self.table_factory(
@@ -297,7 +316,48 @@ class CardsController(QObject):
         self.editors[card_id] = editor
         self.bindings[card_id] = binding
         self._index_links(card_id)
+        self.refresh_relations(card_id)
         return editor
+
+    def refresh_relations(self, card_id):
+        editor = self.editors.get(card_id)
+        if editor is None:
+            return
+        try:
+            card = self.service.get_card(card_id)
+            rows = []
+            for actor in sorted(card.actors, key=lambda a: a.name):
+                name, summary, inventory = self.service.participant_info(card_id, actor.id)
+                rows.append(
+                    (
+                        actor.id,
+                        name,
+                        summary,
+                        inventory,
+                        self.placements_query(ActorRef(card_id, actor.id)),
+                    )
+                )
+            editor.relations.set_rows(tuple(rows))
+        except ValueError:
+            editor.relations.set_rows(())
+
+    def _delete_actor(self, card_id, actor_id):
+        from PySide6.QtWidgets import QMessageBox
+
+        reference = ActorRef(card_id, actor_id)
+        actor = self.service.get_actor(reference)
+        count = len(self.placements_query(reference))
+        if (
+            QMessageBox.question(
+                self.window,
+                "Удалить участника?",
+                f"{actor.name}\nРазмещений: {count}. "
+                "Его индивидуальный инвентарь также будет удалён. "
+                "Карточка и остальные участники сохранятся.",
+            )
+            == QMessageBox.StandardButton.Yes
+        ):
+            self.delete_actor(reference, confirmed=True)
 
     def _section_action(self, card_id, action, key, value):
         from PySide6.QtWidgets import QMessageBox

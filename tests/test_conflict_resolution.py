@@ -19,7 +19,7 @@ def make_buffer(kind, *, numeric=False):
     if kind == "field":
         cards = CardsService()
         card = cards.create_card("Original", card_type="character")
-        field = "hp" if numeric else "title"
+        field = "hp_max" if numeric else "title"
         edits, key = cards.field_edits, (card.id, field)
         return SimpleNamespace(
             begin=lambda: edits.begin(key),

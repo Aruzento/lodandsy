@@ -19,6 +19,7 @@ from lodandsy.application.project_actions import ProjectActions
 from lodandsy.application.project_resources import ProjectResources
 from lodandsy.application.tables_controller import TablesController
 from lodandsy.application.tables_service import TablesService
+from lodandsy.domain.actor_state import ActorRef
 from lodandsy.domain.card_collection import CardCollection
 from lodandsy.ui.card_search_dialog import CardSearchDialog
 from lodandsy.ui.window_manager import WindowManager
@@ -83,13 +84,32 @@ class AppController:
             self.actions.update_entity,
             self.actions.title_edits,
         )
+        self.inspector_binding.open_inventory = self.tables.open_table
+        self.card_views.actor_context = self.inspector_binding.show_actor
+        self.card_views.placements_query = self.actions.actor_placements
+        self.card_views.locate_placement = self.maps.focus_token
+        self.card_views.delete_actor = self.actions.delete_actor
+        self.maps.show_actor = lambda card, actor, scale=None: self.inspector_binding.show_actor(
+            ActorRef(card, actor), feet_per_cell=scale
+        )
+        self.maps.update_actor_scale = lambda card, actor, scale: (
+            self.inspector_binding.update_actor_scale(ActorRef(card, actor), scale)
+        )
+        self._rules_editor = None
+        window.inspector_panel.rules_requested.connect(self.open_rules)
+        self.maps_service.map_changed.connect(self._placements_changed)
+        self.maps_service.map_deleted.connect(self._placements_changed)
         self.navigator_selection = None
         tree = window.tree_panel
         tree.deletion_reference_count = self.maps_service.placement_count
+        tree.deletion_details = self.actions.deletion_details
         tree.entity_selected.connect(self._on_navigator_selected)
         tree.entity_open_requested.connect(self.open_entity)
         tree.create_requested.connect(self._on_create_requested)
         tree.typed_create_requested.connect(self._on_create_requested)
+        tree.player_create_requested.connect(
+            lambda title, parent, kind: self._on_create_requested(title, parent, kind, player=True)
+        )
         tree.rename_requested.connect(self.rename_card)
         tree.delete_requested.connect(self.delete_card)
         tree.reparent_requested.connect(self._on_reparent_requested)
@@ -147,8 +167,30 @@ class AppController:
     def open_card_editor(self, key):
         return self.card_views.open_card_editor(key)
 
-    def create_card(self, title, parent_id=None, *, card_type="note"):
-        return self.cards_service.create_card(title, parent_id, card_type=card_type)
+    def create_card(self, title, parent_id=None, *, card_type="note", player=False):
+        with self.core.transaction():
+            card = self.cards_service.create_card(title, parent_id, card_type=card_type)
+            if player:
+                self.cards_service.set_player(card.id, True, create=True)
+        return self.cards_service.get_card(card.id)
+
+    def open_rules(self):
+        from lodandsy.ui.rules_editor import RulesEditor
+
+        if self.resources.store is None:
+            self.window.show_notice("Сначала создайте или откройте проект")
+            return
+        if self._rules_editor is None:
+            self._rules_editor = RulesEditor(self.cards_service, self.window)
+            self._rules_editor.finished.connect(lambda result: setattr(self, "_rules_editor", None))
+        self._rules_editor.show()
+        self._rules_editor.raise_()
+        self._rules_editor.activateWindow()
+        return self._rules_editor
+
+    def _placements_changed(self, map_id):
+        for key in self.card_views.opened_ids:
+            self.card_views.refresh_relations(key)
 
     def rename_card(self, key, title):
         return self.actions.update_entity(key, title=title)
@@ -288,6 +330,7 @@ class AppController:
         title: str,
         parent_id: object,
         card_type="note",
+        player=False,
     ) -> None:
         resolved_parent_id = self._optional_card_id(parent_id)
 
@@ -295,6 +338,7 @@ class AppController:
             title,
             resolved_parent_id,
             card_type=card_type,
+            player=player,
         )
 
     def _on_move_requested(self, card_id: str, parent_id: object, position: int) -> None:

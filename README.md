@@ -10,9 +10,22 @@ pyvips3.2.0 + pyvips-binary8.18.7; Qt Widgets без web runtime.
 [финальная стабилизация](docs/validation/2026-11-20-iteration-7-stabilization.md),
 [сборка и ручная приёмка](build_support/README.md). План/состояние — существующие задачи Linear.
 
+Пакет Cards/Actors/Variables/5e14: [ADR-033](docs/adr/033-actors-variables-and-5e14.md),
+[инженерный отчёт и T01–T29](docs/validation/2026-11-21-cards-actors-5e14.md).
+Card хранит общую базу, Actor — индивидуальные HP/имя/инвентарь, Token — размещение.
+Player при новых размещениях использует выбранного Actor; NPC/Object создают
+независимых участников. Удаление размещения сохраняет участника во вкладке «Связи».
+Inspector редактирует базу или выбранного участника; инвентарь участника открывается
+отдельной Table. Активные Item modifiers пересчитывают зависимости, quantity не множит
+бонусы. Ручные HP max/AC/speed имеют окончательный приоритет.
+Формулы проекта открываются из Inspector, проверяются и применяются явно; shipped
+формулы остаются доступны. Только 5e 2014: не заявляются полный бой, multiclass HP,
+слоты заклинаний/остатки Hit Dice, условия эффектов или конструктор новых переменных.
+Старый SQLite14 безопасно отклоняется без миграции и перезаписи.
+
 Cards/Tables/Maps/Dice сохраняют отдельных владельцев ADR-027. Composition root
 связывает публичные контракты, Core/Resources/Media/Navigation и атомарные ProjectActions.
-Один канон EntityCollection/SQLite14/Card5/Map6/Table3, assets отдельно, UI state4.
+Один канон EntityCollection/SQLite15/Card6/Map7/Actor1/Rules1/Table3, assets отдельно, UI state4.
 Legacy не адаптируется: несовместимый мир отклоняется без записи; пользовательские
 проекты автоматически не удаляются. MOW importer/source fields удалены.
 
@@ -36,7 +49,7 @@ Cancel старого редактора сохраняет чужой боле�
 URI — только lodandsy://entity/UUID; контролируемый HTML/asset security ADR-014 сохраняются.
 
 Map Viewer/Editor/Presentation читают один MapDocument/Undo и shared tiles/media.
-Новый Map имеет «Слой1», grid default opacity0.25, Token ПКМ — OpenCard/DeleteToken.
+Новый Map имеет «Слой1», grid default opacity0.25, Token ПКМ — OpenCard/CopyToken/DeleteToken.
 Object Cards — original aspect/alpha long-edge128. Viewer monitor открывает один
 отдельный player window; F11/double-click fullscreen, Escape выход, camera следует
 Viewer с letterbox. Первое открытие сохраняет GM focus. Player read-only и не входит
@@ -73,7 +86,7 @@ python -m ruff check .
 python -m pip check
 git diff --check
 powershell -File build_support/build_windows.ps1 -Python .venv/Scripts/python.exe -SkipPackage
-python -m build_support.package_windows --archive LODANDSY-Iteration7-Stable-2026-11-20.zip
+python -m build_support.package_windows --archive LODANDSY-Cards-Actors-5e14-2026-11-21.zip
 ```
 
 Build использует requirements-build.lock, лицензии/источники входят в portable ZIP.

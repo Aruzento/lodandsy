@@ -5,7 +5,8 @@ from dataclasses import replace
 from types import MappingProxyType
 
 from PySide6.QtCore import QObject, Signal
-from PySide6.QtGui import QUndoCommand, QUndoStack
+from PySide6.QtGui import QAction, QUndoCommand, QUndoStack
+from shiboken6 import isValid
 
 from lodandsy.application.entity_session import EntitySession
 from lodandsy.domain.map_document import (
@@ -29,27 +30,132 @@ def map_payload(document):
     )
 
 
+class GuardedUndoStack(QUndoStack):
+    blocked = Signal(str)
+
+    def undo(self):
+        if not self.canUndo():
+            return False
+        try:
+            self.command(self.index() - 1).check(False)
+        except ValueError as error:
+            self.blocked.emit(str(error))
+            return False
+        super().undo()
+        return True
+
+    def redo(self):
+        if not self.canRedo():
+            return False
+        try:
+            self.command(self.index()).check(True)
+        except ValueError as error:
+            self.blocked.emit(str(error))
+            return False
+        super().redo()
+        return True
+
+    def _action(self, parent, prefix, redo):
+        action = QAction(parent)
+        action.triggered.connect(self.redo if redo else self.undo)
+
+        def update():
+            if not isValid(self) or not isValid(action):
+                return
+            text = self.redoText() if redo else self.undoText()
+            action.setText(prefix + (" · " + text if text else ""))
+            action.setEnabled(self.canRedo() if redo else self.canUndo())
+
+        self.indexChanged.connect(update)
+        self.canUndoChanged.connect(update)
+        self.canRedoChanged.connect(update)
+        update()
+        return action
+
+    def createUndoAction(self, parent, prefix=""):
+        return self._action(parent, prefix, False)
+
+    def createRedoAction(self, parent, prefix=""):
+        return self._action(parent, prefix, True)
+
+
 class MapEdit(QUndoCommand):
     def __init__(self, session, before, after, title):
         super().__init__(title)
         self.session, self.before, self.after = session, before, after
+        self.generation = session.core.generation
+        self.fields = tuple(
+            key
+            for key in ("tokens", "grid", "layers", "objects", "layers_initialized", "fog")
+            if getattr(before, key) != getattr(after, key)
+        )
+
+    def candidate(self, redo):
+        if self.generation != self.session.core.generation:
+            raise ValueError("История относится к другому проекту")
+        source, target = (self.before, self.after) if redo else (self.after, self.before)
+        current = self.session.get_map(source.id)
+        changes = {}
+        for field in self.fields:
+            old, new, actual = (
+                getattr(source, field),
+                getattr(target, field),
+                getattr(current, field),
+            )
+            if field in {"tokens", "layers", "objects"}:
+                old_ids, new_ids = {v.id: v for v in old}, {v.id: v for v in new}
+                values = {v.id: v for v in actual}
+                touched = {
+                    key
+                    for key in old_ids.keys() | new_ids.keys()
+                    if old_ids.get(key) != new_ids.get(key)
+                }
+                if any(values.get(key) != old_ids.get(key) for key in touched):
+                    raise ValueError("Затронутый объект изменён независимо; отмена недоступна")
+                order = [
+                    value.id for value in actual if value.id not in touched or value.id in new_ids
+                ]
+                for key in touched:
+                    if key in new_ids:
+                        values[key] = new_ids[key]
+                    else:
+                        values.pop(key, None)
+                for index, value in enumerate(new):
+                    if value.id in touched and value.id not in order:
+                        order.insert(min(index, len(order)), value.id)
+                changes[field] = (
+                    tuple(sorted(values.values(), key=lambda v: v.position))
+                    if (field == "layers")
+                    else tuple(values[key] for key in order)
+                )
+            else:
+                if actual != old:
+                    raise ValueError("Компонент карты изменён независимо")
+                changes[field] = new
+        return replace(current, **changes)
+
+    def check(self, redo):
+        candidate = self.candidate(redo)
+        self.session.validate_change(candidate)
 
     def undo(self):
-        self.session._put_map(self.before)
+        self.session._put_map(self.candidate(False))
 
     def redo(self):
-        self.session._put_map(self.after)
+        self.session._put_map(self.candidate(True))
 
 
 class MapsService(QObject):
     map_changed = Signal(str)
     map_deleted = Signal(str)
+    history_blocked = Signal(str)
 
     def __init__(self, core=None, parent=None):
         super().__init__(parent)
         self.core = core if core is not None else EntitySession(parent=self)
         self._undo = {}
-        self._deleted_card_ids = set()
+        self.place_card = None
+        self.validate_change = lambda document: None
         self.core.replaced.connect(self.reset)
         self.core.entities_deleted.connect(self.notify_deleted)
         self.core.entity_changed.connect(self._entity_changed)
@@ -69,7 +175,6 @@ class MapsService(QObject):
             stack.clear()
             stack.deleteLater()
         self._undo.clear()
-        self._deleted_card_ids.clear()
 
     def _put(self, document):
         # Undo belongs to Map payload. Entity rename/reparent is a separate Core command.
@@ -104,7 +209,6 @@ class MapsService(QObject):
             self.map_changed.emit(key)
 
     def notify_deleted(self, deleted):
-        self._deleted_card_ids.update(deleted)
         for key in deleted:
             stack = self._undo.pop(key, None)
             if stack is not None:
@@ -113,15 +217,6 @@ class MapsService(QObject):
             self.map_deleted.emit(key)
 
     def _put_map(self, document):
-        tokens = []
-        for token in document.tokens:
-            if token.card_id in self._deleted_card_ids:
-                try:
-                    self.card(token.card_id)
-                except ValueError:
-                    continue
-            tokens.append(token)
-        document = replace(document, tokens=tuple(tokens))
         with self.core.transaction():
             self._put(document)
             self.core.after_commit(lambda: self.map_changed.emit(document.id))
@@ -152,9 +247,6 @@ class MapsService(QObject):
                 )
             )
 
-    def record_card_placement(self, before, after):
-        self.undo_stack(before.id).push(MapEdit(self, before, after, "Разместить новую карточку"))
-
     def plan_delete(self, deleted):
         return {
             document.id: map_payload(
@@ -176,12 +268,19 @@ class MapsService(QObject):
     def undo_stack(self, map_id):
         self.get_map(map_id)
         if map_id not in self._undo:
-            self._undo[map_id] = QUndoStack(self)
+            self._undo[map_id] = GuardedUndoStack(self)
+            self._undo[map_id].blocked.connect(self.history_blocked)
             self._undo[map_id].setUndoLimit(200)
         return self._undo[map_id]
 
+    def record_operation(self, map_id, command):
+        self.undo_stack(map_id).push(command)
+
     def get_map(self, map_id):
         return self._get(map_id, "map")
+
+    def commit_placements(self, map_id, tokens):
+        self._put_map(replace(self.get_map(map_id), tokens=tuple(tokens)))
 
     def edit_map(self, map_id, *, command="Изменить карту", **changes):
         if changes.keys() - {"tokens", "grid", "layers", "objects", "layers_initialized", "fog"}:
@@ -191,7 +290,9 @@ class MapsService(QObject):
             changes["layers_initialized"] = True
         after = replace(before, **changes)
         if before != after:
-            self.undo_stack(map_id).push(MapEdit(self, before, after, command))
+            operation = MapEdit(self, before, after, command)
+            operation.check(True)
+            self.undo_stack(map_id).push(operation)
 
     def edit_fog(self, map_id, path, *, erase=False):
         from lodandsy.application.fog_geometry import apply_fog
@@ -210,6 +311,8 @@ class MapsService(QObject):
         )
 
     def add_token(self, map_id, card_id, x, y, **values):
+        if self.place_card is not None:
+            return self.place_card(map_id, card_id, x, y, **values)
         self.card(card_id)
         document = self.get_map(map_id)
         token = TokenInstance(card_id, x, y, **values)

@@ -21,6 +21,7 @@ from lodandsy.application.rich_html import allowed_link, sanitize_html
 from lodandsy.application.rich_text_codec import serialize_document
 from lodandsy.domain.card import EMPTY_DOCUMENT
 from lodandsy.domain.card_schema import CARD_TYPES
+from lodandsy.ui.card_relations import CardRelations
 from lodandsy.ui.conflict_bar import ConflictBar
 from lodandsy.ui.icons import icon
 from lodandsy.ui.portrait_panel import PortraitPanel
@@ -185,6 +186,8 @@ class CardEditorWidget(QWidget):
         rich_layout.setSpacing(4)
         rich_layout.addWidget(self.format_toolbar)
         rich_layout.addWidget(self.text_edit, 1)
+        self.relations = CardRelations()
+        rich_layout.addWidget(self.relations)
         self.body.addWidget(rich)
         self.table_page = QWidget()
         self.table_layout = QVBoxLayout(self.table_page)
@@ -316,6 +319,7 @@ class CardEditorWidget(QWidget):
             if previous and self.body.currentIndex() == 0:
                 previous.capture_position(self)
         self.current_section = key
+        self.relations.setVisible(section.purpose == "relations")
         if self.document_state:
             self.document_state.active_section = key
         if section.kind == "rich_text":

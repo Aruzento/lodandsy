@@ -98,3 +98,12 @@ MapDocument→card_schema.CARD_TYPES валидирует сохранённый
 draw.io остаётся актуальной схемой владельцев.
 
 Итог6: полный pytest394passed/1skip64.76s, после финальных local fixes targeted29passed3.66s (включая новый constraint regression) и22passed2.52s portrait/layout. Ruff/pip/diff clean. Actual imports83modules/174edges/0cycles; draw.io и JSON в docs/architecture. Подробные measurements/build/native limitations — единый отчёт6.
+
+## Дополнение 21.11.2026 — ADR-033
+
+Cards владеет ActorState/default, FieldDefinition scopes, pure rules/formulas и actor
+DTO. Core settings opaque, prepare(final aggregate) внедряется composition root;
+validation до post-commit. ProjectActions объединяет Actor+inventory+placement receipt.
+Maps получает participant resolver/addressed callbacks; Table остаётся общей таблицей.
+Нет нового registry/service locator/сессии. Actor events по Card+Actor ID; bounded
+derived cache не канон. Фактический AST96modules/220imports/0cycles, imports-cards5e14.json.

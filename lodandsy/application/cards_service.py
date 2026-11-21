@@ -4,10 +4,18 @@ from PySide6.QtCore import QObject, Signal
 
 from lodandsy.application.entity_session import EntitySession
 from lodandsy.application.field_edits import FieldEdits
+from lodandsy.domain.actor_state import ActorRef, ActorState, ValueAddress, VariableValue
 from lodandsy.domain.card import EMPTY_DOCUMENT, Card
 from lodandsy.domain.card_collection import CardCollection
-from lodandsy.domain.card_schema import CARD_TYPES, FIELD_DEFINITIONS
+from lodandsy.domain.card_schema import (
+    ACTOR_TYPES,
+    CARD_TYPES,
+    FIELD_DEFINITIONS,
+    field_definition,
+    permitted_fields,
+)
 from lodandsy.domain.entity_reference import ReferenceInfo
+from lodandsy.domain.rules_5e14 import ProjectRules, calculate
 
 
 class CardsService(QObject):
@@ -17,6 +25,8 @@ class CardsService(QObject):
     card_changed = Signal(str, object)
     cards_deleted = Signal(object)
     cards_replaced = Signal()
+    actor_changed = Signal(str, str, object)
+    rules_changed = Signal()
 
     def __init__(self, cards=None, parent=None, *, core=None):
         super().__init__(parent)
@@ -30,14 +40,20 @@ class CardsService(QObject):
         from lodandsy.domain.card_schema import parse_field
 
         self.field_edits = FieldEdits(
-            lambda key: self.cards.get(key[0]).value(key[1]),
-            lambda key, value: self.update_card_fields(key[0], {key[1]: value}),
-            lambda key, text: parse_field(key[1], text),
+            self._read_edit,
+            self._write_edit,
+            lambda key, text: text if key[1] == "actor_name" else parse_field(key[1], text),
             self.field_drafts,
             self,
-            lambda key, raw: self.set_field_draft(key[0], key[1], raw),
+            self._publish_draft,
         )
+        self.field_edits.format_value = self.format_value
         self._reference_cache = {}
+        self.calculation_inputs = lambda card, actor: {}
+        self.create_inventory = lambda card_id, name: None
+        self._effective_cache = {}
+        self._published_effective = {}
+        self.core.prepare = self.reconcile
         self.current_entity_changed = self.core.selection_changed
         self.entity_changed = self.core.entity_changed
         self.entity_created = self.core.entity_created
@@ -71,6 +87,9 @@ class CardsService(QObject):
         self.field_edits.clear(set(keys))
         for key in keys:
             self._reference_cache.pop(key, None)
+        for identity in tuple(self._published_effective):
+            if identity[0] in keys:
+                self._published_effective.pop(identity)
         for identity in tuple(self.field_drafts):
             if identity[0] in keys:
                 self.field_drafts.pop(identity, None)
@@ -79,6 +98,8 @@ class CardsService(QObject):
     def _replaced(self):
         self.field_edits.clear()
         self._reference_cache.clear()
+        self._effective_cache.clear()
+        self._published_effective.clear()
         self.cards = CardCollection(entities=self.core.entities)
         self.field_drafts.clear()
         self.cards_replaced.emit()
@@ -88,6 +109,309 @@ class CardsService(QObject):
 
     def get_card(self, key):
         return self.cards.get(key)
+
+    @property
+    def rules(self):
+        return self.entities.settings or ProjectRules()
+
+    def effective(self, reference, *, rules=None):
+        card_id = reference.card_id if isinstance(reference, ActorRef) else reference
+        card = self.get_card(card_id)
+        actor = card.actor(reference.actor_id) if isinstance(reference, ActorRef) else None
+        inputs = self.calculation_inputs(card, actor)
+        rules = rules or self.rules
+        signature = (
+            card.id,
+            card.title,
+            card.card_type,
+            card.values,
+            actor,
+            rules,
+            tuple(sorted(inputs.items())),
+        )
+        value = self._effective_cache.get(signature)
+        if value is None:
+            value = calculate(card, actor, rules, **inputs)
+            if len(self._effective_cache) >= 2048:
+                self._effective_cache.clear()
+            self._effective_cache[signature] = value
+        return value
+
+    def reconcile(self, previous=None):
+        """Runs inside the outer transaction before validation/publication."""
+        live = {(card.id, actor.id) for card in self.cards.all() for actor in card.actors}
+        removed = {
+            (card_id, actor.id)
+            for card_id, payload in (previous or {}).items()
+            for actor in getattr(payload, "actors", ())
+            if (card_id, actor.id) not in live
+        }
+        if removed:
+
+            def retire():
+                addresses = {
+                    key
+                    for key in self.field_edits.keys
+                    if isinstance(key, ValueAddress) and (key.card_id, key.actor_id) in removed
+                }
+                self.field_edits.discard_keys(addresses)
+                for identity in removed:
+                    self._published_effective.pop(identity, None)
+
+            self.core.after_commit(retire)
+        for card in self.cards.all():
+            actors = []
+            for actor in card.actors:
+                effective = self.effective(ActorRef(card.id, actor.id))
+                maximum = effective.get("hp_max")
+                signature = tuple(
+                    (key, value.value, value.status, value.diagnostic)
+                    for key, value in effective.values.items()
+                    if key in effective.automatic
+                )
+                identity = card.id, actor.id
+                if self._published_effective.get(identity) != signature:
+
+                    def publish(key=identity, result=signature):
+                        self._published_effective[key] = result
+                        self.actor_changed.emit(*key, frozenset({"effective"}))
+
+                    self.core.after_commit(publish)
+                current = actor.value("hp_current")
+                if maximum.status == "ok" and current is not None and current > maximum.value:
+                    old_actor = next(
+                        (
+                            a
+                            for a in getattr((previous or {}).get(card.id), "actors", ())
+                            if a.id == actor.id
+                        ),
+                        None,
+                    )
+                    if old_actor is None or old_actor.value("hp_current") != current:
+                        raise ValueError("Введённое текущее HP превышает максимум")
+                    actor = actor.with_fields({"hp_current": maximum.value})
+                actors.append(actor)
+            if tuple(actors) != card.actors:
+                self._update_card(card.id, actors=tuple(actors))
+
+    @staticmethod
+    def format_value(key, value):
+        import json
+        from dataclasses import asdict
+
+        from lodandsy.application.field_edits import value_text
+
+        if key[1] == "modifiers":
+            return json.dumps([asdict(modifier) for modifier in value], ensure_ascii=False)
+        return value_text(value)
+
+    def participant_info(self, card_id, actor_id):
+        reference = ActorRef(card_id, actor_id)
+        actor = self.get_actor(reference)
+        effective = self.effective(reference)
+        maximum, current = effective.get("hp_max"), actor.value("hp_current")
+        max_text = str(maximum.value) if maximum.status == "ok" else "—"
+        summary = f"HP: {current if current is not None else '—'} / {max_text}"
+        if actor.value("hp_temp"):
+            summary += f" · временные {actor.value('hp_temp')}"
+        if maximum.status == "ok" and maximum.value > 0 and current is not None:
+            summary += f" · {100 * current / maximum.value:.1f}%"
+        for key in ("ac", "speed"):
+            value = effective.get(key)
+            summary += f" · {key.upper()}: {value.value if value.status == 'ok' else '—'}"
+        return actor.name, summary, actor.inventory_id
+
+    def preview_rules(self, overrides, *, expected_revision=None):
+        if expected_revision is not None and self.rules.revision != expected_revision:
+            raise ValueError("Правила изменились; обновите preview")
+        candidate = ProjectRules(revision=self.rules.revision + 1, overrides=tuple(overrides))
+        clamps = []
+        for card in self.cards.all():
+            contexts = (card.id, *(ActorRef(card.id, actor.id) for actor in card.actors))
+            for context in contexts:
+                values = self.effective(context, rules=candidate)
+                errors = [
+                    f"{key}: {value.diagnostic}"
+                    for key, value in values.automatic.items()
+                    if value.status == "error"
+                ]
+                if errors:
+                    raise ValueError(card.title + ": " + "; ".join(errors))
+                if isinstance(context, ActorRef):
+                    actor = card.actor(context.actor_id)
+                    maximum, current = values.get("hp_max"), actor.value("hp_current")
+                    if maximum.status == "ok" and current is not None and current > maximum.value:
+                        clamps.append((context, current, maximum.value))
+        return candidate, self.core.serial, tuple(clamps)
+
+    def apply_rules(self, preview):
+        candidate, serial, clamps = preview
+        if serial != self.core.serial or candidate.revision != self.rules.revision + 1:
+            raise ValueError("Preview устарел; повторите проверку")
+        with self.core.transaction():
+            self.entities.put_settings(candidate)
+            self.core.after_commit(self.rules_changed.emit)
+            self.core.mark_changed()
+        return clamps
+
+    def preview_effects(self, preview):
+        candidate, serial, _ = preview
+        if serial != self.core.serial or candidate.revision != self.rules.revision + 1:
+            raise ValueError("Preview устарел; повторите проверку")
+        changes = []
+        for card in self.cards.all():
+            if card.card_type not in ACTOR_TYPES:
+                continue
+            for context in (card.id, *(ActorRef(card.id, a.id) for a in card.actors)):
+                before, after = self.effective(context), self.effective(context, rules=candidate)
+                label = self.get_actor(context).name if isinstance(context, ActorRef) else "База"
+                for key, value in after.automatic.items():
+                    old = before.automatic[key]
+                    if (old.value, old.status) != (value.value, value.status):
+                        changes.append((card.title, label, key, old, value))
+        return tuple(changes)
+
+    def _read_edit(self, key):
+        if isinstance(key, ValueAddress) and key.actor_id is not None:
+            actor = self.get_actor(ActorRef(key.card_id, key.actor_id))
+            return actor.name if key.field_id == "actor_name" else actor.value(key.field_id)
+        return self.cards.get(key[0]).value(key[1])
+
+    def _write_edit(self, key, value):
+        if isinstance(key, ValueAddress) and key.actor_id is not None:
+            return self.update_actor(ActorRef(key.card_id, key.actor_id), {key.field_id: value})
+        return self.update_card_fields(key[0], {key[1]: value})
+
+    def _publish_draft(self, key, raw):
+        if isinstance(key, ValueAddress) and key.actor_id is not None:
+            if raw is None:
+                self.field_drafts.pop(key, None)
+            else:
+                self.field_drafts[key] = raw
+            self.actor_changed.emit(key.card_id, key.actor_id, frozenset({"draft"}))
+        else:
+            self.set_field_draft(key[0], key[1], raw)
+
+    def read_value(self, address):
+        if address.field_id == "actor_name" and address.actor_id is None:
+            raise ValueError("Имя участника требует Actor")
+        if address.field_id != "actor_name" and field_definition(address.field_id).scope != (
+            "actor" if address.actor_id else "card"
+        ):
+            raise ValueError("Неверный владелец значения")
+        value = self._read_edit(address)
+        owner = (
+            self.get_actor(ActorRef(address.card_id, address.actor_id))
+            if address.actor_id
+            else self.get_card(address.card_id)
+        )
+        present = address.field_id in dict(owner.values)
+        if address.field_id in {"title", "description", "actor_name"}:
+            return VariableValue(value, "present", "actor" if address.actor_id else "document")
+        return VariableValue(
+            value,
+            "null" if present and value is None else "present" if present else "absent",
+            ("actor" if address.actor_id else "card") if present else "default",
+        )
+
+    def read_effective(self, reference, field_id):
+        return self.effective(reference).get(field_id)
+
+    def update_values(self, owner, patch, *, expected_values=None):
+        if isinstance(owner, ActorRef):
+            return self.update_actor(owner, patch, expected_values=expected_values)
+        card = self.get_card(owner)
+        for key, expected in (expected_values or {}).items():
+            if card.value(key) != expected and patch.get(key) != card.value(key):
+                raise ValueError("Значение изменено другим представлением")
+        return self.update_card_fields(owner, patch)
+
+    def get_actor(self, reference):
+        return self.cards.get(reference.card_id).actor(reference.actor_id)
+
+    def list_actors(self, card_id):
+        return self.cards.get(card_id).actors
+
+    def create_actor(self, card_id, *, name=None, inventory_id=None, set_default=False):
+        with self.core.transaction():
+            card = self.get_card(card_id)
+            if card.card_type not in ACTOR_TYPES:
+                raise ValueError("Этот тип не поддерживает участников")
+            names = {actor.name for actor in card.actors}
+            number = 1
+            prefix = card.title[:1960]
+            while f"{prefix} №{number}" in names:
+                number += 1
+            name = name or f"{prefix} №{number}"
+            inventory_id = inventory_id or self.create_inventory(card_id, name)
+            reference = self._create_actor(
+                card_id, name=name, inventory_id=inventory_id, set_default=set_default
+            )
+        return reference
+
+    def _create_actor(self, card_id, *, name=None, inventory_id=None, set_default=False):
+        card = self.get_card(card_id)
+        if card.card_type not in ACTOR_TYPES:
+            raise ValueError("Этот тип не поддерживает участников")
+        actor = ActorState(
+            name,
+            (("hp_current", card.value("hp_max")), ("hp_temp", 0)),
+            inventory_id=inventory_id,
+        )
+        maximum = calculate(card, actor, self.rules, **self.calculation_inputs(card, actor)).get(
+            "hp_max"
+        )
+        actor = actor.with_fields(
+            {
+                "hp_current": maximum.value if maximum.status == "ok" else None,
+            }
+        )
+        self.update_card(
+            card_id,
+            actors=(*card.actors, actor),
+            default_actor_id=actor.id if set_default else card.default_actor_id,
+        )
+        return ActorRef(card_id, actor.id)
+
+    def update_actor(self, reference, changes, *, expected_values=None):
+        from dataclasses import replace
+
+        card = self.get_card(reference.card_id)
+        actor = card.actor(reference.actor_id)
+        for key, value in (expected_values or {}).items():
+            current = actor.name if key == "actor_name" else actor.value(key)
+            if current != value and changes.get(key) != current:
+                raise ValueError("Участник изменён в другом представлении")
+        name = changes.get("actor_name", actor.name)
+        values = {k: v for k, v in changes.items() if k != "actor_name"}
+        updated = replace(actor.with_fields(values), name=name)
+        maximum = calculate(
+            card, updated, self.rules, **self.calculation_inputs(card, updated)
+        ).get("hp_max")
+        if (
+            "hp_current" in changes
+            and maximum.status == "ok"
+            and updated.value("hp_current") is not None
+        ):
+            if updated.value("hp_current") > maximum.value:
+                raise ValueError("Текущее HP превышает максимум")
+        self.update_card(
+            card.id, actors=tuple(updated if a.id == actor.id else a for a in card.actors)
+        )
+        return updated
+
+    def set_player(self, card_id, enabled, *, actor_id=None, create=False):
+        with self.core.transaction():
+            card = self.get_card(card_id)
+            if enabled:
+                if create or not card.actors:
+                    reference = self.create_actor(card_id, set_default=True)
+                    actor_id = reference.actor_id
+                elif actor_id is None:
+                    raise ValueError("Выберите основного участника явно")
+                self.get_card(card_id).actor(actor_id)
+                self.update_card(card_id, default_actor_id=actor_id)
+            self.update_card_fields(card_id, {"player": enabled})
 
     def all(self):
         return self.cards.all()
@@ -118,8 +442,9 @@ class CardsService(QObject):
             preview = preview[:237] + "…"
         values = tuple(
             (name, card.value(name))
-            for name in FIELD_DEFINITIONS
+            for name in sorted(permitted_fields(card.card_type))
             if name not in {"description", "aliases"}
+            and field_definition(name).data_type not in {"modifier_list", "number_list"}
         )
         info = ReferenceInfo(
             card.id,
@@ -145,6 +470,8 @@ class CardsService(QObject):
                 (definition.label, key)
                 for key, definition in FIELD_DEFINITIONS.items()
                 if key not in {"aliases", "description"}
+                and definition.scope == "card"
+                and definition.data_type not in {"modifier_list", "number_list"}
             ),
         )
 
@@ -158,7 +485,8 @@ class CardsService(QObject):
 
     def update_card(self, card_id, **changes):
         with self.core.transaction():
-            return self._update_card(card_id, **changes)
+            self._update_card(card_id, **changes)
+        return self.get_card(card_id)
 
     def set_field_draft(self, key, field, raw):
         self.cards.get(key)
@@ -271,7 +599,7 @@ class CardsService(QObject):
         fields = frozenset(
             field
             for field in changes
-            if field not in {"position", "values", "content"}
+            if field not in {"position", "values", "content", "actors", "default_actor_id"}
             if getattr(previous, field) != getattr(card, field)
         )
         old_sections = {s.id: s for s in previous.sections}
@@ -283,13 +611,26 @@ class CardsService(QObject):
         }
         fields |= set(dict(previous.values)) ^ set(dict(card.values))
         fields |= {key for key in FIELD_DEFINITIONS if previous.value(key) != card.value(key)}
+        old_actors = {a.id: a for a in previous.actors}
+        new_actors = {a.id: a for a in card.actors}
+        actor_changes = {}
+        for key in old_actors.keys() | new_actors.keys():
+            if old_actors.get(key) != new_actors.get(key):
+                actor_changes[key] = frozenset({"state", "name", "inventory"})
+        if previous.default_actor_id != card.default_actor_id:
+            fields |= {"default_actor_id"}
         if previous_position is not None and previous_position != self.cards.position(card_id):
             fields |= {"position"}
-        if fields:
+        if fields or actor_changes:
             structural = fields & {"title", "parent_id", "position"}
             if structural:
                 self.core.after_commit(lambda: self.core.entity_changed.emit(card_id, structural))
-            self.core.after_commit(lambda: self.card_changed.emit(card_id, fields))
+            if fields:
+                self.core.after_commit(lambda: self.card_changed.emit(card_id, fields))
+            for actor_id, changed in actor_changes.items():
+                self.core.after_commit(
+                    lambda a=actor_id, f=changed: self.actor_changed.emit(card_id, a, f)
+                )
             for removed in old_sections.keys() - new_sections.keys():
                 self.field_drafts.pop((card_id, removed), None)
             self.core.mark_changed()

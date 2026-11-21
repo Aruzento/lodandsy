@@ -53,6 +53,6 @@ def test_token_context_contains_only_open_and_delete(project, tmp_path, qtbot, m
 
     monkeypatch.setattr("lodandsy.ui.map_annotations.QMenu", InspectMenu)
     viewer.view._tokens[0].contextMenuEvent(Event())
-    assert labels == ["Открыть карточку", "Удалить токен"]
+    assert labels == ["Открыть карточку", "Копировать токен", "Удалить токен"]
     assert app.cards.get(card.id)
     assert len(app.maps_service.get_map(document.id).tokens) == 1

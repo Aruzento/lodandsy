@@ -13,15 +13,17 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QStackedWidget,
+    QTabWidget,
     QToolButton,
     QWidget,
 )
 
 from lodandsy.application.clipboard import copy_text
-from lodandsy.domain.card_schema import CARD_TYPES
+from lodandsy.domain.card_schema import ACTOR_TYPES, CARD_TYPES, field_definition, permitted_fields
 from lodandsy.ui.card_fields import CardFieldsForm
 from lodandsy.ui.conflict_bar import ConflictBar
 from lodandsy.ui.icons import icon
+from lodandsy.ui.modifier_editor import ModifierEditor
 from lodandsy.ui.semantic_edits import SemanticLineEdit
 
 
@@ -31,6 +33,9 @@ class InspectorPanel(QDockWidget):
     fields_changed = Signal(str, object)
     add_field_requested = Signal()
     discard_drafts_requested = Signal()
+    base_requested = Signal()
+    inventory_requested = Signal()
+    rules_requested = Signal()
 
     def __init__(
         self,
@@ -92,7 +97,26 @@ class InspectorPanel(QDockWidget):
                 self.fields_changed.emit(self._card_id, changes) if self._card_id else None
             )
         )
-        form.addRow(self.field_form)
+        self.details_tabs = QTabWidget()
+        self.details_tabs.addTab(self.field_form, "Свойства")
+        effective = QWidget()
+        self.effective_form = QFormLayout(effective)
+        self.effective_labels = {}
+        self.details_tabs.addTab(effective, "Расчёты")
+        self.modifiers = ModifierEditor()
+        self.details_tabs.addTab(self.modifiers, "Модификаторы")
+        form.addRow(self.details_tabs)
+        self.base_button = QPushButton("Базовые свойства Card")
+        self.base_button.clicked.connect(self.base_requested)
+        self.inventory_button = QPushButton("Индивидуальный инвентарь")
+        self.inventory_button.clicked.connect(self.inventory_requested)
+        self.rules_button = QPushButton("Настройки правил проекта…")
+        self.rules_button.clicked.connect(self.rules_requested)
+        form.addRow(self.base_button)
+        form.addRow(self.inventory_button)
+        form.addRow(self.rules_button)
+        self.base_button.hide()
+        self.inventory_button.hide()
         self.add_field = QPushButton("Добавить поле…")
         self.add_field.clicked.connect(self.add_field_requested)
         self.discard = QPushButton("Отменить ошибочный ввод")
@@ -124,16 +148,33 @@ class InspectorPanel(QDockWidget):
         self.clear_card()
 
     def set_metadata(self, card, drafts):
-        from lodandsy.domain.card_schema import field_definition
-
+        self.fields_caption.setText("ХАРАКТЕРИСТИКИ")
         keys = [*CARD_TYPES[card.card_type].fields]
+        if card.card_type in ACTOR_TYPES:
+            keys = sorted(
+                permitted_fields(card.card_type)
+                - {
+                    "title",
+                    "description",
+                    "summary",
+                    "aliases",
+                },
+                key=lambda key: (field_definition(key).group, field_definition(key).label),
+            )
         keys += [
             key
             for key, value in card.values
             if field_definition(key).group in {"general", "links", "presentation"}
             and key not in {"summary", "aliases"}
         ]
+        keys = [key for key in keys if key != "modifiers"]
         self.field_form.set_card(card, tuple(dict.fromkeys(keys)), drafts)
+        self.details_tabs.show()
+        self.details_tabs.setTabVisible(1, card.card_type in ACTOR_TYPES)
+        self.details_tabs.setTabVisible(2, card.card_type == "item")
+        self.base_button.hide()
+        self.inventory_button.hide()
+        self.parent_combo.setEnabled(True)
         self.type_label.setText(CARD_TYPES[card.card_type].title)
         self.fields_caption.setVisible(bool(keys))
         self.field_form.show()
@@ -145,12 +186,83 @@ class InspectorPanel(QDockWidget):
             self.title_edit.set_value(raw, force=not self.title_active())
             del blocker
 
+    def set_actor_metadata(self, card, actor, drafts):
+        keys = sorted(
+            permitted_fields(card.card_type, "actor"), key=lambda key: field_definition(key).label
+        )
+        self.field_form.set_values(actor.id, actor.value, keys, drafts)
+        self.details_tabs.show()
+        self.details_tabs.setTabVisible(1, True)
+        self.details_tabs.setTabVisible(2, False)
+        self.type_label.setText("Участник · " + card.title)
+        self.fields_caption.setText("ИНДИВИДУАЛЬНЫЕ ЗНАЧЕНИЯ")
+        self.fields_caption.show()
+        self.field_form.show()
+        self.add_field.hide()
+        self.base_button.show()
+        self.inventory_button.setVisible(actor.inventory_id is not None)
+        self.parent_combo.setEnabled(False)
+
+    def set_effective(self, effective, card_type, *, feet_per_cell=None):
+        keys = tuple(effective.automatic)
+        if card_type == "object":
+            keys = tuple(
+                key
+                for key in keys
+                if key
+                in {
+                    "hp_max",
+                    "ac",
+                    "speed",
+                    "carried_weight",
+                }
+            )
+        if tuple(self.effective_labels) != keys:
+            while self.effective_form.rowCount():
+                self.effective_form.removeRow(0)
+            self.effective_labels.clear()
+            for key in keys:
+                label = QLabel()
+                label.setTextFormat(Qt.TextFormat.PlainText)
+                label.setWordWrap(True)
+                label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                self.effective_labels[key] = label
+                self.effective_form.addRow(key, label)
+        for key, label in self.effective_labels.items():
+            value, automatic = effective.get(key), effective.automatic[key]
+            label.setText(
+                (str(value.value) if value.status == "ok" else "— · " + value.status)
+                + " · "
+                + value.source
+            )
+            label.setToolTip(
+                value.diagnostic
+                + "\nАвтоматически: "
+                + (
+                    str(automatic.value)
+                    if automatic.status == "ok"
+                    else automatic.status + ": " + automatic.diagnostic
+                )
+                + "\nЗависимости: "
+                + ", ".join(sorted(map(str, value.dependencies)))
+            )
+            if key == "speed" and value.status == "ok":
+                conversion = f"{value.value} ft · {value.value * 0.3048:g} м"
+                if feet_per_cell is not None:
+                    conversion += f" · {value.value / feet_per_cell:g} клеток"
+                else:
+                    conversion += " · масштаб карты не задан"
+                label.setToolTip(label.toolTip() + "\n" + conversion)
+
     def clear_metadata(self):
         self.type_label.clear()
         self.fields_caption.hide()
         self.field_form.hide()
         self.add_field.hide()
         self.discard.hide()
+        self.details_tabs.hide()
+        self.base_button.hide()
+        self.inventory_button.hide()
 
     def set_card(
         self,

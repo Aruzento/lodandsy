@@ -155,12 +155,15 @@ def test_missing_map_image_remains_editable_and_keeps_links(project, tmp_path, q
     asset = project.store.import_asset(source)
     project.assets[asset.id] = asset
     document = app.maps_service.create_map("Map", asset.id)
-    app.maps_service.edit_map(document.id, tokens=(TokenInstance(str(uuid4()), 0.5, 0.5),))
+    with pytest.raises(ValueError):
+        app.maps_service.edit_map(document.id, tokens=(TokenInstance(str(uuid4()), 0.5, 0.5),))
+    card = app.create_card("Linked Card")
+    app.maps_service.add_token(document.id, card.id, 0.5, 0.5)
     (project.store.root / asset.path).unlink()
     widget = app.maps.open_map(document.id).widget()
     qtbot.waitUntil(lambda: "недоступно" in widget.message.text())
     assert len(widget.view._tokens) == 1
-    assert "Разорванная" in widget.view._tokens[0].toolTip()
+    assert widget.view._tokens[0].token.card_id == card.id
 
 
 def test_map_image_policy_rejects_svg_in_production_decoder(tmp_path):
@@ -224,9 +227,10 @@ def test_all_modules_backup_restore_and_future_payload_is_preserved(tmp_path):
     source.write_bytes(b"image bytes")
     store = SQLiteProjectStore.create(tmp_path / "world")
     asset = store.import_asset(source)
-    document = MapDocument("Map", asset.id, tokens=(TokenInstance(str(uuid4()), 0.1, 0.2),))
+    card = Card("Linked Card")
+    document = MapDocument("Map", asset.id, tokens=(TokenInstance(card.id, 0.1, 0.2),))
     table = text_table("Table", rows=("One", "Two"))
-    snapshot = ProjectSnapshot((), 1, (asset,), (document,), (table,))
+    snapshot = ProjectSnapshot((card,), 1, (asset,), (document,), (table,))
     store.save(snapshot)
     backup = tmp_path / "world.lodbackup"
     store.backup(backup)

@@ -1,10 +1,20 @@
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from functools import wraps
 from uuid import uuid4
 
 from lodandsy.domain.module_values import validate_id, validate_title
 
 DOCUMENT_KINDS = frozenset({"card", "map", "table"})
+
+
+def atomic_change(operation):
+    @wraps(operation)
+    def change(self, *args, **kwargs):
+        with self.atomic():
+            return operation(self, *args, **kwargs)
+
+    return change
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,7 +41,10 @@ class Entity:
 class EntityCollection:
     """One forest and one immutable module payload per ID. No Qt or persistence."""
 
-    def __init__(self, records=()):
+    def __init__(self, records=(), *, settings=None, validator=None):
+        self.settings = settings
+        self.validator = validator
+        self._depth = 0
         self._entities, self._payloads = {}, {}
         self._projections = {}
         for entity, payload in records:
@@ -61,6 +74,8 @@ class EntityCollection:
                 path.add(current)
                 current = self.get(current).parent_id
             complete.update(path)
+        if self.validator is not None:
+            self.validator(self, None)
 
     def get(self, key):
         try:
@@ -75,12 +90,26 @@ class EntityCollection:
             self._payloads.copy(),
             {k: dict(v) for k, v in self._children.items()},
             self._projections.copy(),
+            self.settings,
         )
+        self._depth += 1
         try:
             yield self
+            if self._depth == 1 and self.validator is not None:
+                self.validator(self, before[1])
         except Exception:
-            self._entities, self._payloads, self._children, self._projections = before
+            (self._entities, self._payloads, self._children, self._projections, self.settings) = (
+                before
+            )
             raise
+        finally:
+            self._depth -= 1
+
+    @atomic_change
+    def put_settings(self, settings):
+        if self.settings is not None and type(settings) is not type(self.settings):
+            raise ValueError("Project settings kind cannot change")
+        self.settings = settings
 
     def payload(self, key):
         self.get(key)
@@ -116,6 +145,7 @@ class EntityCollection:
             pending.extend(reversed(self._children[current]))
         return tuple(result)
 
+    @atomic_change
     def create(self, kind, title, payload, parent_id=None, *, id=None):
         if parent_id is not None:
             self.get(parent_id)
@@ -127,6 +157,7 @@ class EntityCollection:
         self._children[entity.id] = {}
         return entity
 
+    @atomic_change
     def update(self, key, **changes):
         if changes.keys() - {"title", "parent_id", "position"}:
             raise ValueError("Only title, parent_id and position may be changed")
@@ -156,6 +187,7 @@ class EntityCollection:
             self._entities[key] = after
         return self.get(key)
 
+    @atomic_change
     def put_payload(self, key, payload):
         self.get(key)
         previous = self._payloads[key]
@@ -167,6 +199,7 @@ class EntityCollection:
         if self._payloads[key] != payload:
             self._payloads[key] = payload
 
+    @atomic_change
     def delete(self, key):
         before = self.get(key)
         deleted = (key, *self.descendant_ids(key))

@@ -7,12 +7,12 @@ import tempfile
 import threading
 import zipfile
 from contextlib import closing
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from functools import wraps
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
-from lodandsy.application.card_payload_codec import decode_card, encode_card
+from lodandsy.application.card_payload_codec import decode_actor, decode_card, encode_card_aggregate
 from lodandsy.application.fog_geometry import decode_fog
 from lodandsy.application.table_column_codec import decode_column, encode_settings
 from lodandsy.domain.card import Card, validate_card_id
@@ -26,10 +26,11 @@ from lodandsy.domain.map_document import (
     PlacedAssetObject,
     TokenInstance,
 )
+from lodandsy.domain.rules_5e14 import ProjectRules
 from lodandsy.domain.table_document import RowRecord, TableDocument
 
 DATABASE_NAME = "project.sqlite3"
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 MAX_BACKUP_BYTES = 4 * 1024**3
 
 
@@ -75,9 +76,12 @@ class ProjectSnapshot:
     maps: tuple[MapDocument, ...] = ()
     tables: tuple[TableDocument, ...] = ()
     entities: tuple[Entity, ...] = ()
+    rules: ProjectRules = field(default_factory=ProjectRules)
 
     def entity_collection(self):
-        return project_entities(self.cards, self.maps, self.tables, self.entities)
+        return project_entities(
+            self.cards, self.maps, self.tables, self.entities, settings=self.rules
+        )
 
     def __post_init__(self):
         if not self.entities:
@@ -180,7 +184,7 @@ class SQLiteProjectStore:
                     "REFERENCES entity(id) ON DELETE CASCADE, asset_id TEXT NOT NULL "
                     "REFERENCES asset(id) DEFERRABLE INITIALLY DEFERRED, "
                     "payload_version INTEGER NOT NULL, "
-                    "tokens TEXT NOT NULL, grid TEXT NOT NULL, "
+                    "grid TEXT NOT NULL, "
                     "layers TEXT NOT NULL, objects TEXT NOT NULL, "
                     "layers_initialized INTEGER NOT NULL CHECK(layers_initialized IN (0,1)), "
                     "fog TEXT NOT NULL)"
@@ -191,6 +195,34 @@ class SQLiteProjectStore:
                     "payload_version INTEGER NOT NULL)"
                 )
                 connection.executescript("""
+                    CREATE TABLE card_actor(
+                      id TEXT PRIMARY KEY, card_id TEXT NOT NULL REFERENCES card_content(id)
+                        DEFERRABLE INITIALLY DEFERRED,
+                      inventory_id TEXT UNIQUE REFERENCES table_document(id)
+                        DEFERRABLE INITIALLY DEFERRED,
+                      payload_version INTEGER NOT NULL, state TEXT NOT NULL,
+                      UNIQUE(card_id,id));
+                    CREATE TABLE card_default_actor(
+                      card_id TEXT PRIMARY KEY REFERENCES card_content(id),
+                      actor_id TEXT NOT NULL,
+                      FOREIGN KEY(card_id,actor_id) REFERENCES card_actor(card_id,id)
+                        DEFERRABLE INITIALLY DEFERRED);
+                    CREATE TABLE map_token(
+                      id TEXT PRIMARY KEY, map_id TEXT NOT NULL REFERENCES map_document(id)
+                        DEFERRABLE INITIALLY DEFERRED,
+                      ordinal INTEGER NOT NULL CHECK(ordinal>=0),
+                      card_id TEXT NOT NULL REFERENCES card_content(id)
+                        DEFERRABLE INITIALLY DEFERRED,
+                      actor_id TEXT, placement TEXT NOT NULL,
+                      UNIQUE(map_id,ordinal),
+                      FOREIGN KEY(card_id,actor_id) REFERENCES card_actor(card_id,id)
+                        DEFERRABLE INITIALLY DEFERRED);
+                    CREATE INDEX token_actor ON map_token(actor_id);
+                    CREATE TABLE project_rules(
+                      id INTEGER PRIMARY KEY CHECK(id=1), payload_version INTEGER NOT NULL,
+                      ruleset TEXT NOT NULL, rules_version INTEGER NOT NULL,
+                      revision INTEGER NOT NULL, overrides TEXT NOT NULL);
+                    INSERT INTO project_rules VALUES(1,1,'dnd_5e_2014',1,0,'[]');
                     CREATE TABLE table_column(
                       id TEXT PRIMARY KEY, table_id TEXT NOT NULL REFERENCES table_document(id),
                       name TEXT NOT NULL, data_type TEXT NOT NULL, position INTEGER NOT NULL,
@@ -259,8 +291,43 @@ class SQLiteProjectStore:
                         "SELECT id,kind,title,parent_id,position FROM entity ORDER BY position,id"
                     )
                 )
+                actor_rows = {}
+                for key, owner, inventory_id, version, state in connection.execute(
+                    "SELECT id,card_id,inventory_id,payload_version,state "
+                    "FROM card_actor ORDER BY id"
+                ):
+                    actor_rows.setdefault(owner, []).append(
+                        decode_actor(key, inventory_id, version, state)
+                    )
+                defaults = dict(
+                    connection.execute("SELECT card_id,actor_id FROM card_default_actor")
+                )
+                rules_rows = connection.execute(
+                    "SELECT payload_version,ruleset,rules_version,revision,overrides "
+                    "FROM project_rules"
+                ).fetchall()
+                if len(rules_rows) != 1 or rules_rows[0][0] != 1:
+                    raise ProjectError("Unsupported project rules payload")
+                _, ruleset, rules_version, rules_revision, overrides = rules_rows[0]
+                decoded_overrides = json.loads(overrides)
+                if not isinstance(decoded_overrides, list):
+                    raise ProjectError("Invalid rules overrides")
+                rules = ProjectRules(
+                    ruleset,
+                    rules_version,
+                    rules_revision,
+                    tuple(tuple(pair) for pair in decoded_overrides),
+                )
                 cards = tuple(
-                    decode_card(title, key, parent, payload_version, content)
+                    decode_card(
+                        title,
+                        key,
+                        parent,
+                        payload_version,
+                        content,
+                        actors=tuple(actor_rows.get(key, ())),
+                        default_actor_id=defaults.get(key),
+                    )
                     for key, title, parent, payload_version, content in connection.execute(
                         "SELECT e.id,e.title,e.parent_id,c.payload_version,c.content "
                         "FROM entity e JOIN card_content c ON e.id=c.id WHERE e.kind='card'"
@@ -268,7 +335,7 @@ class SQLiteProjectStore:
                 )
                 maps, tables = self._load_modules(connection)
                 snapshot = ProjectSnapshot(
-                    tuple(cards), metadata[0][0], assets, maps, tables, envelopes
+                    tuple(cards), metadata[0][0], assets, maps, tables, envelopes, rules
                 )
                 collection = snapshot.entity_collection()
                 ordered_cards = CardCollection(entities=collection).all()
@@ -289,17 +356,18 @@ class SQLiteProjectStore:
                     maps,
                     tables,
                     collection.summaries(),
+                    rules,
                 )
         except sqlite3.Error as error:
             raise ProjectError(f"Cannot read project: {error}") from error
-        except ValueError as error:
+        except (ValueError, TypeError, KeyError, RecursionError) as error:
             if isinstance(error, ProjectError):
                 raise
             raise ProjectError(f"Cannot read project: {error}") from error
 
     @staticmethod
     def _require_version(actual, expected, kind):
-        if actual != expected:
+        if type(actual) is not int or actual != expected:
             raise ProjectError(f"Unsupported {kind} payload version: {actual}")
         return True
 
@@ -307,12 +375,33 @@ class SQLiteProjectStore:
     def _load_modules(connection):
         maps, tables = [], []
         try:
+            token_rows = {}
+            for key, map_id, ordinal, card_id, actor_id, placement in connection.execute(
+                "SELECT id,map_id,ordinal,card_id,actor_id,placement FROM map_token "
+                "ORDER BY map_id,ordinal"
+            ):
+                entries = token_rows.setdefault(map_id, [])
+                if ordinal != len(entries):
+                    raise ValueError("Non-contiguous token order")
+                values = json.loads(placement)
+                if not isinstance(values, dict) or values.keys() != {
+                    "x",
+                    "y",
+                    "cells_w",
+                    "cells_h",
+                    "z",
+                    "label_override",
+                    "image_override",
+                    "kind_override",
+                    "layer_id",
+                }:
+                    raise ValueError("Invalid Token placement fields")
+                entries.append(TokenInstance(card_id, id=key, actor_id=actor_id, **values))
             for (
                 key,
                 title,
                 asset,
                 version,
-                tokens,
                 grid,
                 layers,
                 objects,
@@ -320,19 +409,19 @@ class SQLiteProjectStore:
                 fog,
             ) in connection.execute(
                 "SELECT m.id,e.title,m.asset_id,m.payload_version,"
-                "m.tokens,m.grid,m.layers,m.objects,m.layers_initialized,m.fog "
+                "m.grid,m.layers,m.objects,m.layers_initialized,m.fog "
                 "FROM map_document m JOIN entity e ON e.id=m.id ORDER BY e.position,e.id"
             ):
-                SQLiteProjectStore._require_version(version, 6, "Map")
-                tokens, grid = json.loads(tokens), json.loads(grid)
-                if not isinstance(tokens, list) or not isinstance(grid, dict):
+                SQLiteProjectStore._require_version(version, 7, "Map")
+                grid = json.loads(grid)
+                if not isinstance(grid, dict):
                     raise ValueError("Invalid map payload")
                 maps.append(
                     MapDocument(
                         title,
                         asset,
                         key,
-                        tuple(TokenInstance(**token) for token in tokens),
+                        tuple(token_rows.get(key, ())),
                         MapGrid(**grid),
                         tuple(MapLayer(**layer) for layer in json.loads(layers)),
                         tuple(PlacedAssetObject(**o) for o in json.loads(objects)),
@@ -409,11 +498,15 @@ class SQLiteProjectStore:
             for asset in snapshot.assets:
                 if existing_assets.get(asset.id) != asset:
                     self._verify_asset(asset)
-            encoded_cards = [(c.id, *encode_card(c)) for c in cards]
+            card_parts = [(c, encode_card_aggregate(c)) for c in cards]
+            encoded_cards = [(c.id, parts[0], parts[1]) for c, parts in card_parts]
             for table in (
                 "table_cell",
                 "table_row",
                 "table_column",
+                "map_token",
+                "card_default_actor",
+                "card_actor",
                 "card_content",
                 "map_document",
                 "table_document",
@@ -431,13 +524,12 @@ class SQLiteProjectStore:
             )
             connection.executemany("INSERT INTO card_content VALUES(?,?,?)", encoded_cards)
             connection.executemany(
-                "INSERT INTO map_document VALUES(?,?,?,?,?,?,?,?,?)",
+                "INSERT INTO map_document VALUES(?,?,?,?,?,?,?,?)",
                 [
                     (
                         m.id,
                         m.asset_id,
-                        6,
-                        json.dumps([asdict(token) for token in m.tokens], ensure_ascii=False),
+                        7,
                         json.dumps(asdict(m.grid)),
                         json.dumps([asdict(layer) for layer in m.layers], ensure_ascii=False),
                         json.dumps([asdict(o) for o in m.objects], ensure_ascii=False),
@@ -450,6 +542,36 @@ class SQLiteProjectStore:
             connection.executemany(
                 "INSERT INTO table_document VALUES(?,?)",
                 [(t.id, 3) for t in snapshot.tables],
+            )
+            connection.executemany(
+                "INSERT INTO card_actor VALUES(?,?,?,?,?)",
+                [row for card, parts in card_parts for row in parts[2]],
+            )
+            connection.executemany(
+                "INSERT INTO card_default_actor VALUES(?,?)",
+                [(card.id, parts[3]) for card, parts in card_parts if parts[3] is not None],
+            )
+            connection.executemany(
+                "INSERT INTO map_token VALUES(?,?,?,?,?,?)",
+                [
+                    (
+                        token.id,
+                        document.id,
+                        ordinal,
+                        token.card_id,
+                        token.actor_id,
+                        json.dumps(
+                            {
+                                k: v
+                                for k, v in asdict(token).items()
+                                if k not in {"id", "card_id", "actor_id"}
+                            },
+                            ensure_ascii=False,
+                        ),
+                    )
+                    for document in snapshot.maps
+                    for ordinal, token in enumerate(document.tokens)
+                ],
             )
             connection.executemany(
                 "INSERT INTO table_column VALUES(?,?,?,?,?,?)",
@@ -473,6 +595,16 @@ class SQLiteProjectStore:
                 ],
             )
             connection.execute("UPDATE metadata SET revision=?", (snapshot.revision,))
+            connection.execute(
+                "UPDATE project_rules SET ruleset=?,rules_version=?,revision=?,overrides=? "
+                "WHERE id=1",
+                (
+                    snapshot.rules.ruleset,
+                    snapshot.rules.version,
+                    snapshot.rules.revision,
+                    json.dumps(snapshot.rules.overrides, ensure_ascii=False),
+                ),
+            )
 
     @project_operation
     def import_asset(

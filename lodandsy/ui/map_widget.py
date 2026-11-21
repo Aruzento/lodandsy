@@ -83,6 +83,7 @@ class MapView(QGraphicsView):
     card_dropped = Signal(str, float, float)
     token_moved = Signal(str, float, float)
     token_action = Signal(str, str)
+    token_selected = Signal(str)
     token_add_requested = Signal(float, float)
     tool_changed = Signal(str)
 
@@ -115,6 +116,7 @@ class MapView(QGraphicsView):
         self._tokens = []
         self._objects = {}
         self._grid = None
+        self.scene().selectionChanged.connect(self._selection_changed)
         if role == "player":
             self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
             self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -207,7 +209,17 @@ class MapView(QGraphicsView):
         if self.role == "player":
             self.follow_camera(self._source_rect)
 
-    def set_annotations(self, document, card_resolver, root, assets, provider, *, fog_path=None):
+    def set_annotations(
+        self,
+        document,
+        card_resolver,
+        root,
+        assets,
+        provider,
+        *,
+        fog_path=None,
+        participant_resolver=None,
+    ):
         if self.role == "player":
             self._display_ready = False
         if self._fog_state != document.fog or fog_path is not None:
@@ -231,6 +243,13 @@ class MapView(QGraphicsView):
             except ValueError:
                 card = None
             presentation = resolve_token(token, card)
+            if self.role != "player" and token.actor_id and participant_resolver:
+                from dataclasses import replace
+
+                name, summary, inventory = participant_resolver(token.card_id, token.actor_id)
+                presentation = replace(
+                    presentation, label=token.label_override or name, summary=summary
+                )
             asset = assets.get(presentation.asset_id)
             path = asset.path if asset else None
 
@@ -250,6 +269,7 @@ class MapView(QGraphicsView):
                 item.set_value(token, presentation, root, path, provider)
             items.append(item)
         self._tokens = items
+
         layers = {layer.id: layer for layer in document.layers}
         for item in items:
             item.setVisible(item.token.layer_id is None or layers[item.token.layer_id].visible)
@@ -282,6 +302,39 @@ class MapView(QGraphicsView):
                     bounds = bounds.united(item.sceneBoundingRect())
             self.scene().setSceneRect(bounds)
         self.viewport().update()
+
+    def _selection_changed(self):
+        if self.role == "player":
+            return
+        for item in self.scene().selectedItems():
+            if isinstance(item, TokenItem):
+                self.token_selected.emit(item.token.id)
+                break
+
+    def select_token(self, token_id):
+        for item in self._tokens:
+            item.setSelected(item.token.id == token_id)
+            if item.token.id == token_id:
+                self.centerOn(item)
+
+    def selected_token_id(self):
+        return next(
+            (item.token.id for item in self.scene().selectedItems() if isinstance(item, TokenItem)),
+            None,
+        )
+
+    def refresh_participant(self, card_id, actor_id, resolver):
+        if self.role == "player":
+            return
+        from dataclasses import replace
+
+        name, summary, inventory = resolver(card_id, actor_id)
+        for item in self._tokens:
+            if item.token.card_id == card_id and item.token.actor_id == actor_id:
+                presentation = replace(
+                    item.presentation, label=item.token.label_override or name, summary=summary
+                )
+                item.set_value(item.token, presentation, item.root, item.asset_path, item.provider)
 
     def _drag_card(self, event):
         if (

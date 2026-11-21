@@ -162,22 +162,22 @@ def test_header_and_inspector_typing_do_not_publish_per_character(project, qtbot
     qtbot.wait(810)
     assert title.text() == "New title" and title.hasFocus()
     title.setSelection(0, 3)
-    app.cards_service.update_card_fields(card.id, {"hp": 42})
+    app.cards_service.update_card_fields(card.id, {"hp_max": 42})
     assert title.selectedText() == "New"
     qtbot.keyClick(title, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
     qtbot.waitUntil(lambda: app.cards.get(card.id).title == "New title")
     assert title.hasFocus() and title.selectedText() == "New" and title.isUndoAvailable()
-    hp = app.window.inspector_panel.field_form.controls["hp"]
+    hp = app.window.inspector_panel.field_form.controls["hp_max"]
     hp.setFocus()
     qtbot.waitUntil(hp.hasFocus)
     hp.selectAll()
     qtbot.keyClicks(hp, "100")
-    assert hp.text() == "100" and app.cards.get(card.id).value("hp") == 42
+    assert hp.text() == "100" and app.cards.get(card.id).value("hp_max") == 42
     qtbot.keyClick(hp, Qt.Key.Key_Return)
-    assert app.cards.get(card.id).value("hp") == 100
+    assert app.cards.get(card.id).value("hp_max") == 100
     hp.selectAll()
     qtbot.keyClicks(hp, "nan")
     qtbot.keyClick(hp, Qt.Key.Key_Return)
-    assert app.cards.get(card.id).value("hp") == 100 and project.draft_count == 1
+    assert app.cards.get(card.id).value("hp_max") == 100 and project.draft_count == 1
     assert project.save_current()
-    assert project.store.load().cards[0].value("hp") == 100
+    assert project.store.load().cards[0].value("hp_max") == 100

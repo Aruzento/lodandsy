@@ -19,7 +19,7 @@ def test_fields_roundtrip_unset_false_zero_refs_and_type_change():
         {
             "name": "Same title",
             "summary": "Summary",
-            "hp": 0,
+            "hp_max": 0,
             "ac": None,
             "featured": False,
             "aliases": ("A",),
@@ -28,21 +28,23 @@ def test_fields_roundtrip_unset_false_zero_refs_and_type_change():
         }
     )
     assert card.value("title") == card.value("name") == "Same title"
-    assert card.value("hp") == 0 and card.value("featured") is False
+    assert card.value("hp_max") == 0 and card.value("featured") is False
     assert card.value("ac") is None and card.value("speed") is None
     assert card.content == card.value("description") == EMPTY_DOCUMENT
-    changed = replace(card, card_type="article")
+    with pytest.raises(ValueError):
+        replace(card, card_type="article")
+    changed = card
     assert changed.sections == card.sections and changed.values == card.values
     version, data = encode_card(changed)
-    assert version == 5 and decode_card(changed.title, card.id, None, version, data) == changed
+    assert version == 6 and decode_card(changed.title, card.id, None, version, data) == changed
 
 
 @pytest.mark.parametrize(
     "key,value",
     [
         ("unknown", 1),
-        ("hp", True),
-        ("hp", float("nan")),
+        ("hp_max", True),
+        ("hp_max", float("nan")),
         ("cost", -1),
         ("featured", 0),
         ("aliases", ["x"]),
@@ -72,10 +74,10 @@ def test_session_addressed_events_search_and_backup(project, tmp_path, qtbot):
         card.id,
         {
             "summary": "River guardian",
-            "hp": 0,
+            "hp_max": 0,
         },
     )
-    assert events[-1] == (card.id, frozenset({"summary", "hp"}))
+    assert events[-1] == (card.id, frozenset({"summary", "hp_max"}))
     notes = card.sections[-1]
     app.cards_service.update_section(card.id, notes.id, content=text_document("A quiet hero"))
     assert notes.id in events[-1][1]
@@ -94,7 +96,7 @@ def test_session_addressed_events_search_and_backup(project, tmp_path, qtbot):
     restored.close()
     with pytest.raises(ValueError):
         app.cards_service.update_card(card.id, card_type="note")
-    assert app.cards.get(card.id).value("hp") == 0
+    assert app.cards.get(card.id).value("hp_max") == 0
 
 
 def test_unknown_duplicate_or_unsafe_card_payload_refuses():
@@ -117,7 +119,7 @@ def test_unknown_duplicate_or_unsafe_card_payload_refuses():
     with pytest.raises(ValueError):
         card.with_fields({"name": "A", "title": "B"})
     assert set(FIELD_DEFINITIONS) >= {
-        "hp",
+        "hp_max",
         "ac",
         "speed",
         "rarity",

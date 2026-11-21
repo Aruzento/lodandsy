@@ -50,15 +50,20 @@ class MapsController(QObject):
         self._map_ui = {}
         self._map_editor_ui = {}
         self._card_maps = {}
+        self._actor_maps = {}
+        self.show_actor = lambda card_id, actor_id, scale=None: None
+        self.update_actor_scale = lambda card_id, actor_id, scale: None
         self.progress = None
         self.importing = False
         service.map_changed.connect(self._refresh_map)
+        service.history_blocked.connect(window.show_notice)
         service.map_deleted.connect(self.close_presentation)
         service.map_deleted.connect(lambda key: self.windows.close_window(f"map:{key}"))
         service.map_deleted.connect(lambda key: self.windows.close_window(f"map-editor:{key}"))
         service.core.replaced.connect(self.reset)
         cards.card_created.connect(self.card_changed)
         cards.card_changed.connect(self.card_changed)
+        cards.actor_changed.connect(self._actor_changed)
 
     def reset(self):
         for key in tuple(self.presentations):
@@ -72,6 +77,7 @@ class MapsController(QObject):
         self._map_ui.clear()
         self._map_editor_ui.clear()
         self._card_maps.clear()
+        self._actor_maps.clear()
         self._compiled_fog.clear()
         if self.importing:
             if self.progress:
@@ -277,6 +283,9 @@ class MapsController(QObject):
                 widget.view.token_action.connect(
                     lambda token, action: self._token_action(map_id, token, action)
                 )
+                widget.view.token_selected.connect(
+                    lambda token: self._select_participant(map_id, token)
+                )
                 widget.view.token_add_requested.connect(lambda x, y: self._add_token(map_id, x, y))
                 widget.view.card_exists = self._is_card
                 widget.view.card_dropped.connect(
@@ -431,8 +440,12 @@ class MapsController(QObject):
             )
         for ids in self._card_maps.values():
             ids.discard(key)
+        for ids in self._actor_maps.values():
+            ids.discard(key)
         for token in document.tokens:
             self._card_maps.setdefault(token.card_id, set()).add(key)
+            if token.actor_id:
+                self._actor_maps.setdefault((token.card_id, token.actor_id), set()).add(key)
         project = self.resources
         for window in windows:
             if not window:
@@ -447,9 +460,42 @@ class MapsController(QObject):
                 project.assets,
                 self.media.cached_preview,
                 fog_path=cached[1],
+                participant_resolver=self.cards.participant_info,
             )
             if editor:
                 widget.set_document(document)
+            selected = widget.view.selected_token_id()
+            if selected:
+                token = next((t for t in document.tokens if t.id == selected), None)
+                if token and token.actor_id:
+                    self.update_actor_scale(
+                        token.card_id, token.actor_id, document.grid.feet_per_cell
+                    )
+
+    def _select_participant(self, map_id, token_id):
+        token = next((t for t in self.service.get_map(map_id).tokens if t.id == token_id), None)
+        if token and token.actor_id:
+            self.show_actor(
+                token.card_id, token.actor_id, self.service.get_map(map_id).grid.feet_per_cell
+            )
+
+    def focus_token(self, map_id, token_id):
+        widget = self.open_map(map_id).widget()
+        widget.view.select_token(token_id)
+        self._select_participant(map_id, token_id)
+
+    def _actor_changed(self, card_id, actor_id, fields):
+        try:
+            self.cards.participant_info(card_id, actor_id)
+        except ValueError:
+            return
+        for map_id in tuple(self._actor_maps.get((card_id, actor_id), ())):
+            for prefix in ("map:", "map-editor:"):
+                window = self.windows.find_window(prefix + map_id)
+                if window:
+                    window.widget().view.refresh_participant(
+                        card_id, actor_id, self.cards.participant_info
+                    )
 
     def _edit_layer(self, map_id, key, changes):
         try:
@@ -598,11 +644,15 @@ class MapsController(QObject):
                 map_id, cards[choices.index(choice) - 1].id, max(0, x), max(0, y)
             )
         else:
-            title, kind, ok = self.request_card_creation(self.window)
+            title, kind, player, ok = self.request_card_creation(self.window)
             if ok:
-                self.create_card_token(map_id, None, title, max(0, x), max(0, y), card_type=kind)
+                self.create_card_token(
+                    map_id, None, title, max(0, x), max(0, y), card_type=kind, player=player
+                )
 
-    def create_card_token(self, map_id, source, title, x, y, *, card_type="character"):
+    def create_card_token(
+        self, map_id, source, title, x, y, *, card_type="character", player=False
+    ):
         self.cards.prepare_card(title, card_type=card_type)
         self.service.get_map(map_id)
 
@@ -613,7 +663,13 @@ class MapsController(QObject):
             if map_id not in self.service.maps:
                 return False
             token = self.actions.create_card_placement(
-                map_id, title, x, y, card_type=card_type, asset_id=asset.id if asset else None
+                map_id,
+                title,
+                x,
+                y,
+                card_type=card_type,
+                asset_id=asset.id if asset else None,
+                player=player,
             )
             window = self.windows.find_window(f"map:{map_id}")
             if window:
@@ -632,6 +688,11 @@ class MapsController(QObject):
             return
         if action == "delete":
             self.service.delete_token(map_id, token_id)
+        elif action == "copy":
+            try:
+                self.actions.copy_token(map_id, token_id)
+            except ValueError as error:
+                self._error(str(error))
         elif action == "open":
             try:
                 self.cards.get_card(token.card_id)
