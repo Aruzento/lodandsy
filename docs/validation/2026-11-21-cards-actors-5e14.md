@@ -234,3 +234,24 @@ Git финализируется только после итоговых тес
 точные commit/PR/remote CI фиксируются отдельным handoff, без изменения проверенного
 runtime. Публичного release нет. Существенных неразрешённых продуктовых вопросов нет;
 остатки перечислены как согласованные границы и физические gates, без дублирования задач.
+
+## Дополнение после первого merge: точность DPR-выборки
+
+Implementation3014352: push CI44910864561 и PR CI44910930171 success
+(native477passed/offscreen43). Первый main merge89eaf86: native477passed, но
+CI44911321425 offscreen показал1failed/42passed в существующем fog-edge DPR2 test.
+Тест преждевременно округлял mapFromScene до QPoint, затем умножал на DPR. На
+дробном масштабе72/103 world299.99→exact384.701748logical, rounded385logical;
+выборка770physical уже вне fog, exact769physical чёрная. Детерминированный native
+renderer probe подтвердил ошибку координат теста, runtime/fog не изменены.
+
+Исправлено только sampling: viewportTransform().map(QPointF) с дробью до перевода
+в physical pixel. Дополнительный regression проверяет непрозрачный чёрный внутри и
+непокрытую darkCyan точку снаружи. Проверка alpha255/black сохранена, tolerance/skip
+не добавлены. Offscreen final44passed (3.90s), один прежний fixture warning.
+Окончательный local native gate477passed/1permission symlink skip,83.98s;
+Ruff/diff green. Remote CI и Git refs — в квитанции рядом с ZIP.
+
+Изменение только tests/docs: новый EXE не требуется.98modules/source parity и
+runtime идентичность подтверждаются повторно; ZIP перепаковывается с актуальными
+тестами/отчётом и новым SHA256, старый checksum кандидата больше не актуален.

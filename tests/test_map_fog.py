@@ -177,9 +177,40 @@ def test_player_opaque_edges_at_device_pixel_ratios(project, tmp_path, qtbot, dp
         QPointF(200, 299.99),
         QPointF(200, 200),
     ]:
-        pixel = view.mapFromScene(point)
+        # Preserve fractions until conversion to the target image's physical pixels.
+        # mapFromScene returns QPoint: rounding first can sample outside the fog at DPR>1.
+        pixel = view.viewportTransform().map(point)
         color = image.pixelColor(int(pixel.x() * dpr), int(pixel.y() * dpr))
         assert color.name() == "#000000" and color.alpha() == 255
+
+
+def test_player_fog_at_fractional_viewport_transform(qtbot):
+    from PySide6.QtCore import QPoint
+    from PySide6.QtGui import QImage, QPainter, QTransform
+
+    view = MapView("player")
+    qtbot.addWidget(view)
+    view.resize(700, 500)
+    view._source_rect = QRectF(0, 0, 500, 400)
+    view.setSceneRect(view._source_rect)
+    view.scene().setBackgroundBrush(Qt.GlobalColor.darkCyan)
+    view._fog_path = rectangle(100, 100, 200, 200)
+    view.show()
+    qtbot.waitExposed(view)
+    view.setTransform(QTransform.fromScale(72 / 103, 72 / 103))
+    # Exercise foreground rendering directly, independent of media/worker readiness.
+    view._display_ready = True
+    image = QImage(
+        view.viewport().width() * 2, view.viewport().height() * 2, QImage.Format.Format_ARGB32
+    )
+    image.setDevicePixelRatio(2)
+    painter = QPainter(image)
+    view.viewport().render(painter, QPoint())
+    painter.end()
+    for point, expected in [(QPointF(299.99, 200), "#000000"), (QPointF(320, 200), "#008080")]:
+        pixel = view.viewportTransform().map(point)
+        color = image.pixelColor(int(pixel.x() * 2), int(pixel.y() * 2))
+        assert color.name() == expected and color.alpha() == 255
 
 
 def test_native_gesture_commit_escape_panel_and_selection(project, tmp_path, qtbot):
