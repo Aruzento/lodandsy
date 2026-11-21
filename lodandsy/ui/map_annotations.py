@@ -208,6 +208,7 @@ class TokenItem(QGraphicsItem):
         menu = QMenu()
         for label, name in [
             ("Открыть карточку", "open"),
+            ("Копировать токен", "copy"),
             ("Удалить токен", "delete"),
         ]:
             action = menu.addAction(label)

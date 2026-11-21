@@ -80,7 +80,7 @@ Qt дизайн нейтральный graphite #191919/#202020. Private мак�
 item UUID, positive integer count, live description/cost без stored derived cells.
 Object Cards library, original alpha/aspect long-edge128; front layer сверху.
 Full snapshot writer/synchronous backup4GiB и libvips tiles сохраняются.
-Схема по факту: SQLite14/Card5/Map6/Table3, UI state4; legacy/migration adapters нет.
+Схема по факту: SQLite15/Card6/Map7/Actor1/Rules1/Table3, UI state4; legacy/migration adapters нет.
 Targeted batches после блоков, общий gate/build после стабилизации; report/draw.io/checklist.
 Git-действия только в конце после проверки по последним указаниям владельца.
 
@@ -98,3 +98,19 @@ python -m pip check
 GUI-тесты pytest-qt и offscreen не заменяют ручную проверку Windows: focus, docking, floating, maximize/restore, mixed DPI, второй монитор, установленная сборка. Не заявляй о запуске тестов или сборки без фактического результата. Не считай количество тестов эквивалентом качества.
 
 Каждый отчёт о блоке: цель и ID Linear; изменения и затронутые файлы; команды и фактические результаты; что проверено и не проверено; риски и решение владельца (если нужно); состояние задач и следующий блок. Если есть блокер, укажи точную причину и условие продолжения. Продолжай до согласованного результата, а не до первой компилирующейся версии.
+
+## Cards / Actors / Variables / 5e14 (21.11.2026)
+
+Утверждённый пакет A–I и ADR-033 расширяют итерацию7. CardPayload owns immutable
+ActorState/default; Actor не Tree Entity, Token ссылается на Card+Actor. Только
+Character/Creature/Object создают Actor. Player toggle не перепривязывает существующие
+размещения; NPC copy получает нового Actor и template inventory. Последний token/map
+не удаляет состояние. Actor inventory — отдельная обычная Table с явной активностью.
+Item modifiers применяются один раз на row/modifier, qty не множитель; soft refs
+диагностируются. Maps читает participant DTO, не владеет HP. Core хранит opaque settings;
+правила 5e14 и bounded AST evaluator принадлежат Cards. Никакого исполнения AST.
+Manual HP/AC/speed final; снижение effective max атомарно clamp current, рост не лечит.
+Формулы применяются только после preview с revision+state serial, не на каждую букву.
+Универсальный конструктор переменных, полный combat/effects/slots, multiclass HP,
+scalar/delete Undo и межкартовый перенос отложены. Только адресованная история map.
+Физическую приёмку нового ZIP и ARU-64 не объявлять пройденными по native Qt smoke.

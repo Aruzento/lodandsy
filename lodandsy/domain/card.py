@@ -2,7 +2,14 @@ import math
 from dataclasses import dataclass, field, replace
 from uuid import UUID, uuid4
 
-from lodandsy.domain.card_schema import CARD_TYPES, available_fields, field_definition
+from lodandsy.domain.actor_state import ActorState
+from lodandsy.domain.card_schema import (
+    ACTOR_TYPES,
+    CARD_TYPES,
+    available_fields,
+    field_definition,
+    validate_fields,
+)
 
 DOCUMENT_HEADER = (
     '<head><meta name="qrichtext" content="1">'
@@ -67,7 +74,7 @@ class CardSection:
             or self.position < 0
         ):
             raise ValueError("Invalid section title/order")
-        if self.purpose not in {None, "description", "inventory"}:
+        if self.purpose not in {None, "description", "inventory", "relations"}:
             raise ValueError("Invalid section purpose")
         if self.kind == "rich_text":
             if (
@@ -102,7 +109,9 @@ class CardPayload:
     portrait: Portrait | None = None
     card_type: str = "note"
     values: tuple = ()
-    version: int = field(default=5, init=False)
+    actors: tuple = ()
+    default_actor_id: str | None = None
+    version: int = field(default=6, init=False)
 
     def validate_replacement(self, previous):
         if self.card_type != previous.card_type:
@@ -130,6 +139,29 @@ class CardPayload:
             raise ValueError("Card rich text exceeds 4 MiB")
         if not isinstance(self.values, tuple):
             raise ValueError("Card fields must be immutable")
+        validate_fields(self.card_type, self.values)
+        from lodandsy.domain.rules_5e14 import DEFAULT_FORMULAS
+
+        for modifier in dict(self.values).get("modifiers", ()):
+            if modifier.target not in DEFAULT_FORMULAS:
+                raise ValueError("Unknown modifier target: " + modifier.target)
+        if (
+            not isinstance(self.actors, tuple)
+            or not all(isinstance(actor, ActorState) for actor in self.actors)
+            or len(self.actors) > 10000
+        ):
+            raise ValueError("Invalid Actor collection")
+        if self.actors and self.card_type not in ACTOR_TYPES:
+            raise ValueError("Card type does not support Actors")
+        if len({a.id for a in self.actors}) != len(self.actors):
+            raise ValueError("Duplicate Actor UUID")
+        object.__setattr__(self, "actors", tuple(sorted(self.actors, key=lambda a: a.id)))
+        for actor in self.actors:
+            validate_fields(self.card_type, actor.values, "actor")
+        if self.default_actor_id is not None and self.default_actor_id not in {
+            a.id for a in self.actors
+        }:
+            raise ValueError("Default Actor is missing")
         keys = set()
         for key, value in self.values:
             definition = field_definition(key)
@@ -151,6 +183,8 @@ class Card:
     portrait: Portrait | None
     card_type: str
     values: tuple
+    actors: tuple
+    default_actor_id: str | None
 
     def __init__(
         self,
@@ -162,6 +196,8 @@ class Card:
         card_type="note",
         values=(),
         sections=None,
+        actors=(),
+        default_actor_id=None,
     ):
         identity = str(uuid4()) if id is None else id
         validate_card_id(identity)
@@ -183,7 +219,7 @@ class Card:
                 )
         elif content is not None:
             raise ValueError("Content is stored only in sections")
-        payload = CardPayload(sections, portrait, card_type, values)
+        payload = CardPayload(sections, portrait, card_type, values, actors, default_actor_id)
         for key, value in dict(
             title=title.strip(),
             id=identity,
@@ -192,6 +228,8 @@ class Card:
             portrait=portrait,
             card_type=card_type,
             values=payload.values,
+            actors=payload.actors,
+            default_actor_id=default_actor_id,
         ).items():
             object.__setattr__(self, key, value)
 
@@ -206,7 +244,20 @@ class Card:
         return next((s.id for s in self.sections if s.purpose == "description"), None)
 
     def payload(self):
-        return CardPayload(self.sections, self.portrait, self.card_type, self.values)
+        return CardPayload(
+            self.sections,
+            self.portrait,
+            self.card_type,
+            self.values,
+            self.actors,
+            self.default_actor_id,
+        )
+
+    def actor(self, key):
+        try:
+            return next(actor for actor in self.actors if actor.id == key)
+        except StopIteration:
+            raise ValueError("Actor отсутствует") from None
 
     def section(self, key):
         try:

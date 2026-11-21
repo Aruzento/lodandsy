@@ -12,7 +12,7 @@ def test_invalid_card_and_table_drafts_do_not_block_valid_save_or_ack(project, t
     project.create_project(tmp_path / "world")
     card = app.create_card("Character", card_type="character")
     editor = app.open_card_editor(card.id).widget()
-    app.cards_service.update_card_fields(card.id, {"hp": 15})
+    app.cards_service.update_card_fields(card.id, {"hp_max": 15})
     editor.title_edit.setText("")
     editor.title_edit.finish()
     assert (

@@ -23,14 +23,23 @@ class EntitySession(QObject):
         self._depth = 0
         self._notifications = []
         self._dirty = False
+        self.serial = 0
+        self.prepare = None
 
     @contextmanager
     def transaction(self):
         start, dirty = len(self._notifications), self._dirty
+        before_payloads = (
+            {e.id: self.entities.payload(e.id) for e in self.entities.summaries()}
+            if self._depth == 0
+            else None
+        )
         self._depth += 1
         try:
             with self.entities.atomic():
                 yield
+                if self._depth == 1 and self.prepare is not None:
+                    self.prepare(before_payloads)
         except Exception:
             del self._notifications[start:]
             self._dirty = dirty
@@ -43,6 +52,7 @@ class EntitySession(QObject):
             for callback in notifications:
                 callback()
             if changed:
+                self.serial += 1
                 self.committed.emit()
 
     def after_commit(self, callback):
@@ -55,6 +65,7 @@ class EntitySession(QObject):
         if self._depth:
             self._dirty = True
         else:
+            self.serial += 1
             self.committed.emit()
 
     def select(self, key):

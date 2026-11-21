@@ -122,6 +122,7 @@ class ProjectController(QObject):
             tuple(self.controller.maps_service.maps.values()),
             tuple(self.controller.tables_service.tables.values()),
             self.controller.core.entities.summaries(),
+            self.controller.cards_service.rules,
         )
 
     @property
@@ -159,7 +160,20 @@ class ProjectController(QObject):
         if dialog.clickedButton() is fix:
             session = self.controller.cards_service
             if session.field_drafts:
-                key, field = next(iter(session.field_drafts))
+                address = next(iter(session.field_drafts))
+                key, field = address
+                if getattr(address, "actor_id", None) is not None:
+                    from lodandsy.domain.actor_state import ActorRef
+
+                    self.controller.inspector_binding.show_actor(ActorRef(key, address.actor_id))
+                    widget = (
+                        self.window.inspector_panel.title_edit
+                        if field == "actor_name"
+                        else self.window.inspector_panel.field_form.controls.get(field)
+                    )
+                    if widget:
+                        widget.setFocus()
+                    return False
                 editor = self.controller.open_card_editor(key).widget()
                 if field in {s.id for s in session.cards.get(key).sections}:
                     editor.select_section(field)

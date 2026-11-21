@@ -46,3 +46,11 @@ Regression tests проверяют оба сервиса, finishFalse/True, flu
 старый initial draft, third canonical edit и None baseline. Native Qt keyboard tests:
 Ctrl+S→conflict→Escape→blur, Card и оба направления embedded/standalone Table;
 сохранение оставляет канон B, draft A доступен до явного решения.
+
+## Дополнение 21.11.2026 — ADR-033
+
+FieldEdits принимает ValueAddress(card_id,field_id,actor_id optional), Actor contexts
+изолированы от базы и других участников. Тот же optimistic/explicit resolve путь,
+semantic commit/generation ownership. Удаление Actor retire только его адреса после
+commit. Formula editor имеет локальные drafts и preview по rules revision+state serial;
+Apply/Reset атомарны, preview не авторитетен после смены проекта/входов.

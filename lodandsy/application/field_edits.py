@@ -20,7 +20,13 @@ class FieldEdit:
 
 
 def value_text(value):
-    return "" if value is None else ", ".join(value) if isinstance(value, tuple) else str(value)
+    return (
+        ""
+        if value is None
+        else ", ".join(map(str, value))
+        if isinstance(value, tuple)
+        else str(value)
+    )
 
 
 class FieldEdits(QObject):
@@ -41,6 +47,7 @@ class FieldEdits(QObject):
         self.conflicts = {}
         self._draft_bases = {}
         self._draft_versions = {}
+        self.format_value = lambda key, value: value_text(value)
 
     def _draft(self, key, raw, *, edit=None):
         version = self._draft_versions[key] = object()
@@ -60,7 +67,7 @@ class FieldEdits(QObject):
 
     def begin(self, key):
         value = self.read(key)
-        raw = self.drafts.get(key, value_text(value))
+        raw = self.drafts.get(key, self.format_value(key, value))
         owner = str(uuid4())
         conflict = self.conflicts.get(key)
         self._edits[owner] = FieldEdit(
@@ -195,6 +202,24 @@ class FieldEdits(QObject):
         for key in tuple(self.drafts):
             if ids is None or key[0] in ids:
                 self._draft(key, None)
+
+    def discard_keys(self, keys):
+        keys = set(keys)
+        for owner, edit in tuple(self._edits.items()):
+            if edit.key in keys:
+                self._edits.pop(owner)
+        for key in keys:
+            self._draft(key, None)
+        self.pending_changed.emit()
+
+    @property
+    def keys(self):
+        return (
+            {edit.key for edit in self._edits.values()}
+            | self.drafts.keys()
+            | self.errors.keys()
+            | self.conflicts.keys()
+        )
 
     def remove_entities(self, ids):
         self.clear(set(ids))

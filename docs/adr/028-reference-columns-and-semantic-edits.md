@@ -41,3 +41,5 @@ dirty/saving/ACK и I/O error различаются. Window не disabling ра
 unsupported schema получает отказ без записи. Full snapshot/sync backup4GiB не переписаны.
 
 Итог6: полный pytest394passed/1skip64.76s, после финальных local fixes targeted29passed3.66s (включая новый constraint regression) и22passed2.52s portrait/layout. Ruff/pip/diff clean. Actual imports83modules/174edges/0cycles; draw.io и JSON в docs/architecture. Подробные measurements/build/native limitations — единый отчёт6.
+
+Дополнено ADR-033: Actor inventory active sources и ValueAddress; live projections/semantic drafts сохраняются.

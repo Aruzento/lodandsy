@@ -1,4 +1,4 @@
-# LODANDSY — действующий MVP, итерация7
+# LODANDSY — действующий MVP: итерация7 + Cards/Actors/5e14
 
 Утверждённый [пакет A–G](iterations/2026-11-20-iteration-7/CODEX-ITERATION-7.md)
 и прямое дополнение владельца о Card Editor определяют текущую приёмку.
@@ -11,7 +11,7 @@
 Map Editor, Table и Dice одновременно. Qt Widgets/Python3.14/PySide6/Qt ADS,
 модульный монолит без сервера/облака/web runtime. Ручной туман и отдельный player
 экран приняты в итерации7. За пределами: multiplayer, streaming server, LOS,
-освещение, автоматизация правил, per-player visibility и внешний plugin SDK.
+освещение, полная автоматизация боя/эффектов, per-player visibility и внешний plugin SDK.
 
 Общее правило: не сохранять устаревшее без текущей обоснованной необходимости.
 Разрешена потеря тестовых данных; legacy Markdown, старые режимы/редакторы/адаптеры
@@ -105,7 +105,7 @@ Object Card library принимает только object с main image; import
 Размещение сохраняет original aspect/alpha, long-edge128 без portrait crop. MapGrid
 по умолчанию opacity0.25; explicit user settings сохраняются, world coordinates не
 зависят от zoom/DPI, snap отменён. TokenInstance обязательно ссылается на Card;
-ПКМ ровно «Открыть карточку»/«Удалить токен». Удаление токена не удаляет Card или
+ПКМ «Открыть карточку»/«Копировать токен»/«Удалить токен». Удаление токена не удаляет Card или
 другие размещения. Подтверждённое удаление Card атомарно удаляет её TokenInstances;
 неожиданные broken references диагностируются. Доменные footprint/overrides сохранены.
 
@@ -148,7 +148,7 @@ shared tileLRU64MiB; rebuild/cancel/checksum/version/atomic publish сохран
 
 ## Хранение, проверка и поставка
 
-Один канон EntityCollection и SQLite14/Card5/Map6/Table3 через sqlite3, assets отдельно
+Один канон EntityCollection и SQLite15/Card6/Map7/Actor1/Rules1/Table3 через sqlite3, assets отдельно
 с относительными путями; UI state4 отдельно. FK на каждом connection, составные
 операции транзакционны. Autosave/Ctrl+S — SaveCoordinator с упорядоченными ревизиями
 и ACK после commit; pending/dirty/saving/error/draft видимы. Safe close/switch,
@@ -162,3 +162,54 @@ Targeted batches после блоков, полный pytest/Ruff/pip/diff/arch
 Нативный Qt render/test не заменяет физический монитор. Clean Windows без Python,
 ручная визуальная/multi-display/mixedDPI приёмка этой сборки остаются отдельными
 результатами владельца; ARU-64 не закрывается по smoke на машине с Python.
+
+## Утверждённое дополнение Cards / Actors / Variables / 5e14
+
+Пакет владельца 21.11.2026 R01–R10 заменяет прежнее откладывание формул,
+индивидуальных inventory и состояний. ADR-033 и validation report фиксируют реализацию.
+Card — база без обязательного размещения; Actor — сохранённое имя/состояние, UUID и
+inventory, принадлежащие Card; Token — размещение. Character/Creature/Object имеют
+Actor, остальные типы сохраняют Card-only placements. Все 12 типов и immutable type
+сохраняются. Player при новом размещении/копии использует выбранного основного Actor;
+NPC/Object создают нового с template inventory и current=effective max либо unknown.
+Toggle Player предупреждает и требует выбора existing/new, не меняет старые refs.
+Удаление последнего token/map/layer сохраняет Actor. Actor/Card удаляются явно с
+перечнем зависимостей. Во «Связях» видны и участники без размещений.
+
+Inspector: Tree/Card — база, Token/Actor — имя, current/temp HP и индивидуальные
+final overrides, отдельно read-only effective/auto/source/dependencies. Native Card
+Editor layout/QTextDocument/UUID/Undo/drafts сохраняются. Скорость хранится в ft,
+метры и клетки вычисляются по известному feet_per_cell карты. HP абсолютные целые≥0,
+процент производный. При росте max current не лечится, при снижении ограничивается
+атомарно; null не становится 0. Невалидные и конфликтные drafts не становятся каноном.
+
+Каталог: scores default10, level/XP, шесть modifiers/saves, proficiency1–20, 18skills
+с proficiency/expertise, passive Perception±5, initiative, scalar weapon/spell inputs,
+AC без/лёгкая/средняя/тяжёлая броня и один shield, speed и carrying Small/Medium.
+HP auto: только сохранённая single-class die history с корректным полным первым die;
+недостаточные входы unknown, multiclass и история с minimum-edge unsupported/manual.
+CR auto, class features, other movement, slots/remaining hit dice, attunement,
+полноценные conditions/combat/расход/отдых не реализованы и не выдаются за расчёт.
+
+Item modifiers редактируются Inspector: set/multiply/add/minimum/maximum, stable UUID,
+явная stacking group/policy/priority. Активность — ручное заявление GM. Индивидуальный
+inventory клонируется один раз с новыми row/column UUID и общими Item refs; Item cost/
+description проецируются live. Qty влияет на вес, не множит бонус; удалённый Item
+остаётся soft ref, неполные значения диагностируются. Новые источники расширяют тот же
+контракт, без effects engine. Нет глобального equipped на Item Card.
+
+Проектные формулы — отдельное native окно из Inspector: локальный draft, пример,
+preview/ошибки/ожидаемые HP clamps, явные apply/reset. Без eval/exec/исполнения AST;
+ограниченные грамматика/типы/DAG/бюджеты ADR-033. Manual HP/AC/speed — итоговый override,
+auto остаётся видимым. Shipped defaults неизменны, overrides/revision — один канон.
+
+Составные изменения валидируются до post-commit; SQLite15 нормализует Actors/tokens/
+default/rules, один snapshot writer и durable ACK. Schema14 и старые payload безопасно
+отклоняются без автоперезаписи. Backup/restore сохраняют UUID/rules/manual/activity.
+Undo/Redo размещения/копии/движения адресован, preflight до смены индекса; последующие
+HP/inventory/rules не откатываются. Creation inverse с новыми зависимостями блокируется.
+Scalar/deletion Undo, перенос NPC между картами и другие rulesets вне этого пакета.
+
+Приёмка: T01–T29 и физический checklist в validation report/build_support/README.
+Только проверенный целостный кандидат; чистая Windows/два монитора/mixed DPI остаются
+отдельными физическими проверками, не заменяются pytest или программным smoke.

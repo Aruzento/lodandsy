@@ -37,6 +37,7 @@ class TreePanel(QDockWidget):
 
     create_requested = Signal(str, object)
     typed_create_requested = Signal(str, object, str)
+    player_create_requested = Signal(str, object, str)
     rename_requested = Signal(str, str)
     delete_requested = Signal(str)
     reparent_requested = Signal(str, object)
@@ -50,6 +51,7 @@ class TreePanel(QDockWidget):
         super().__init__("Проект", parent)
 
         self.deletion_reference_count = lambda ids: 0
+        self.deletion_details = lambda ids: ""
         self.setObjectName("treePanel")
         self.map_creation_enabled = True
         self.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea)
@@ -286,6 +288,7 @@ class TreePanel(QDockWidget):
         )
 
         placements = self.deletion_reference_count(deleting_ids)
+        message += self.deletion_details(deleting_ids)
         if placements:
             message += (
                 f"\n\nРазмещений токенов: {placements}. Они будут удалены вместе "
@@ -309,7 +312,7 @@ class TreePanel(QDockWidget):
         self,
         parent_id: str | None,
     ) -> None:
-        title, card_type, accepted = CardCreationDialog.get_card(self)
+        title, card_type, player, accepted = CardCreationDialog.get_card(self)
 
         if not accepted:
             return
@@ -319,7 +322,8 @@ class TreePanel(QDockWidget):
         if not title:
             return
 
-        self.typed_create_requested.emit(
+        signal = self.player_create_requested if player else self.typed_create_requested
+        signal.emit(
             title,
             parent_id,
             card_type,

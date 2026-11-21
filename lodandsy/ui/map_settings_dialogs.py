@@ -30,6 +30,9 @@ class MapGridDialog(QDialog):
         self.y = number(self, grid.offset_y, -1e9, 1e9)
         self.opacity = number(self, grid.opacity * 100, 0, 100)
         self.color = QLineEdit(grid.color)
+        self.scale_known = QCheckBox("Масштаб в футах известен")
+        self.scale_known.setChecked(grid.feet_per_cell is not None)
+        self.feet = number(self, grid.feet_per_cell or 5, 0.01, 1e9)
         for label, widget in [
             ("", self.enabled),
             ("Клетка (px карты):", self.cell),
@@ -37,6 +40,8 @@ class MapGridDialog(QDialog):
             ("Смещение Y:", self.y),
             ("Непрозрачность (%):", self.opacity),
             ("Цвет (#RRGGBB):", self.color),
+            ("", self.scale_known),
+            ("Футов на клетку:", self.feet),
         ]:
             layout.addRow(label, widget)
         self.buttons = dialog_buttons(self, layout)
@@ -58,6 +63,7 @@ class MapGridDialog(QDialog):
             self.y.value(),
             self.opacity.value() / 100,
             self.color.text(),
+            self.feet.value() if self.scale_known.isChecked() else None,
         )
 
 

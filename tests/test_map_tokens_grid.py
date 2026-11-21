@@ -118,17 +118,28 @@ def test_ui_import_properties_canonical_images_and_multi_map(project, qtbot, tmp
     other = app.maps_service.create_map("Other", document.asset_id)
     app.maps_service.add_token(other.id, card.id, 200, 200)
     second_widget = app.maps.open_map(other.id).widget()
-    app.cards_service.update_card_fields(card.id, {"title": "Renamed", "hp": 0, "summary": "HP 0"})
-    assert all(i.presentation.label == "Renamed" for i in widget.view._tokens)
-    assert second_widget.view._tokens[0].presentation.label == "Renamed"
-    app.cards_service.update_card_fields(card.id, {"hp": 17})
-    assert "HP: 17" in second_widget.view._tokens[0].presentation.summary
+    app.cards_service.update_card_fields(
+        card.id, {"title": "Renamed", "hp_max": 0, "summary": "HP 0"}
+    )
+    assert all(
+        i.presentation.label == app.cards.get(card.id).actor(i.token.actor_id).name
+        for i in widget.view._tokens
+    )
+    assert (
+        second_widget.view._tokens[0].presentation.label
+        == app.cards.get(card.id).actor(second_widget.view._tokens[0].token.actor_id).name
+    )
+    app.cards_service.update_card_fields(card.id, {"hp_max": 17})
+    assert " / 17" in second_widget.view._tokens[0].presentation.summary
     app.cards_service.update_card(card.id, portrait=None)
     assert second_widget.view._tokens[0].presentation.asset_id is None
 
     app.maps_service.edit_token(document.id, first.id, label_override="Local", cells_w=2, cells_h=3)
     assert widget.view._tokens[0].presentation.label == "Local"
-    assert widget.view._tokens[1].presentation.label == "Renamed"
+    assert (
+        widget.view._tokens[1].presentation.label
+        == app.cards.get(card.id).actor(widget.view._tokens[1].token.actor_id).name
+    )
     assert len(project.assets) == 2
     app.maps._token_action(document.id, first.id, "open")
     assert app.window_manager.find_window(app.card_editor_window_key(card.id))

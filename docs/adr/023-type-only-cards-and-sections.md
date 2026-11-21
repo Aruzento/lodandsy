@@ -23,3 +23,5 @@ views используют ModuleSession и общий draft dictionary, адр�
 Portrait — явный единственный media contract asset+нормализованный crop (C), не мёртвая
 ветка FieldDefinition. Metadata alt/caption удалены. Source assets неизменяемы; unsafe URI/
 resources остаются запрещены. Результаты targeted/native/backup — в отчёте5.
+
+Дополнено ADR-033: scopes/Actors/relations/HPmax, Card6; immutable type сохраняется.

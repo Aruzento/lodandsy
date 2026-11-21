@@ -1,0 +1,12 @@
+LODANDSY uses the 2014 rules reference (SRD 5.1), not the 2024 rules.
+Only the supported calculations documented in ADR-033 are implemented.
+
+This work includes material taken from the System Reference Document 5.1
+(“SRD 5.1”) by Wizards of the Coast LLC and available at
+https://dnd.wizards.com/resources/systems-reference-document. The SRD 5.1 is
+licensed under the Creative Commons Attribution 4.0 International License
+available at https://creativecommons.org/licenses/by/4.0/legalcode.
+
+Source: https://media.wizards.com/2023/downloads/dnd/SRD_CC_v5.1.pdf
+LODANDSY adds its own implementation, formulas, manual modes and product HP policy.
+No commercial rulebooks, artwork or private attachments are distributed.

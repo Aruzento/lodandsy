@@ -23,6 +23,7 @@ class MapGrid:
     offset_y: float = 0
     opacity: float = 0.25
     color: str = "#ffffff"
+    feet_per_cell: float | None = None
 
     def __post_init__(self):
         if type(self.enabled) is not bool:
@@ -38,6 +39,8 @@ class MapGrid:
         _number(self.offset_x, -1e9, 1e9, "смещение X")
         _number(self.offset_y, -1e9, 1e9, "смещение Y")
         _number(self.opacity, 0, 1, "прозрачность")
+        if self.feet_per_cell is not None:
+            _number(self.feet_per_cell, 0.01, 1e9, "футов на клетку")
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,11 +56,12 @@ class TokenInstance:
     image_override: str | None = None
     kind_override: str | None = None
     layer_id: str | None = None
+    actor_id: str | None = None
 
     def __post_init__(self):
         for value in (self.id, self.card_id):
             validate_id(value)
-        for value in (self.image_override, self.layer_id):
+        for value in (self.image_override, self.layer_id, self.actor_id):
             if value is not None:
                 validate_id(value)
         if self.kind_override not in {None, "character", "item"}:
@@ -112,7 +116,7 @@ def resolve_token(token, card):
                     card.value("summary"),
                     *(
                         f"{key.upper()}: {card.value(key)}"
-                        for key in ("hp", "ac", "speed")
+                        for key in ("hp_max", "ac", "speed")
                         if card.value(key) is not None
                     ),
                 ],
@@ -224,7 +228,7 @@ class MapPayload:
     objects: tuple = ()
     layers_initialized: bool = True
     fog: FogState = field(default_factory=FogState)
-    version: int = field(default=6, init=False)
+    version: int = field(default=7, init=False)
 
     def __post_init__(self):
         validate_id(self.asset_id)

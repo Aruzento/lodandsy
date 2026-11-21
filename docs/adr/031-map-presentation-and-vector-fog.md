@@ -59,3 +59,11 @@ baseline6 измерял один explicit render без полного двух
 Presentation — independent top-level без QWidget parent AppShell. WA_ShowWithoutActivating
 на первом показе предотвращает поздний native focus-out, закрывавший следующий Table
 editor; повторный open явно activateWindow. Регрессионный native test прошёл без задержек.
+
+## Дополнение 21.11.2026 — ADR-033
+
+MapPayload7 хранит только card_id/actor_id ссылки у Token; Actor state принадлежит
+Cards. GM participant DTO/name/HP обновляется адресно, сцена не сбрасывается.
+Copy NPC создаёт Actor, Player использует default, placement Undo preflight
+проходит до изменения индекса. Масштаб feet_per_cell optional — только конверсия.
+ПКМ Token: OpenCard/CopyToken/DeleteToken. Player blackout/fog/camera не ослаблены.

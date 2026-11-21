@@ -129,10 +129,56 @@ def main():
                 document.id, b.id, 220, 230, kind_override="item", cells_w=2, cells_h=2
             )
             assert item_token.card_id == b.id
+            controller.cards_service.update_card_fields(a.id, {"summary": "Canonical summary"})
+            assert map_widget.view._tokens[0].presentation.summary == "Canonical summary"
+            from lodandsy.domain.actor_state import ActorRef
+            from lodandsy.domain.modifiers import Modifier
+
+            controller.cards_service.update_card_fields(b.id, {"hp_max": 100})
+            player_ref = ActorRef(b.id, item_token.actor_id)
+            controller.cards_service.update_actor(player_ref, {"hp_current": 70})
+            controller.cards_service.set_player(b.id, True, actor_id=player_ref.actor_id)
+            other_map = controller.maps_service.create_map("Actor links", document.asset_id)
+            shared = controller.maps_service.add_token(other_map.id, b.id, 100, 100)
+            assert shared.actor_id == item_token.actor_id
             controller.cards_service.update_card_fields(
-                a.id, {"hp": 0, "summary": "Canonical summary"}
+                item_card.id, {"modifiers": (Modifier("constitution", operand=2),)}
             )
-            assert map_widget.view._tokens[0].presentation.summary == "Canonical summary · HP: 0"
+            own_table = controller.tables_service.get_table(
+                controller.cards_service.get_actor(player_ref).inventory_id
+            )
+            activity = next(c for c in own_table.columns if c.key == "active")
+            controller.tables_service.set_cell(
+                own_table.id, own_table.rows[0].id, activity.id, True, parsed=True
+            )
+            assert controller.cards_service.effective(player_ref).get("constitution").value == 12
+            npc = controller.create_card("Goblin", card_type="creature")
+            controller.cards_service.update_card_fields(npc.id, {"hp_max": 20})
+            npc_token = controller.maps_service.add_token(other_map.id, npc.id, 200, 200)
+            controller.cards_service.update_actor(
+                ActorRef(npc.id, npc_token.actor_id), {"hp_current": 7}
+            )
+            copied = controller.actions.copy_token(other_map.id, npc_token.id)
+            assert copied.actor_id != npc_token.actor_id
+            assert (
+                controller.cards_service.get_actor(ActorRef(npc.id, copied.actor_id)).value(
+                    "hp_current"
+                )
+                == 20
+            )
+            rule_editor = controller.open_rules()
+            rule_editor.target.setCurrentText("initiative")
+            rule_editor.expression.setPlainText("dexterity_mod + 1")
+            rule_editor.check_project()
+            assert rule_editor.preview is not None
+            rule_editor.apply_project()
+            assert (
+                dict(controller.cards_service.rules.overrides)["initiative"] == "dexterity_mod + 1"
+            )
+            rule_editor.reject()
+            app.processEvents()
+            window.activateWindow()
+            print("Smoke: actors, inventory and project rules passed", flush=True)
             layer = controller.maps_service.add_layer(document.id, "Decor")
             other_layer = controller.maps_service.add_layer(document.id, "Upper")
             controller.maps_service.add_object(
@@ -177,6 +223,12 @@ def main():
                 ),
             )
             table_widget = controller.tables.open_table(table.id).widget()
+            wait(app, table_widget.isVisible)
+            window.raise_()
+            window.activateWindow()
+            wait(app, window.isActiveWindow)
+            table_widget.table.setFocus()
+            wait(app, table_widget.table.hasFocus)
             table_widget.table.setCurrentIndex(table_widget.model.index(0, 0))
             table_widget.table.edit(table_widget.model.index(0, 0))
             app.processEvents()
@@ -223,6 +275,7 @@ def main():
             assert second.dock.floatingDockContainer().isWindow()
             assert project.save_current()
             expected = project.store.load()
+            print("Smoke: snapshot saved", flush=True)
             project._save_ui_state()
             assert capture_workspace(controller)["documents"]
             backup = root / "backup.lodbackup"
@@ -256,6 +309,8 @@ def main():
                 "card_placements_cascade_atomically": True,
                 "layers_raster_objects": True,
                 "canonical_card_fields": True,
+                "actors_player_npc_copy_inventory": True,
+                "project_formula_editor_and_overrides": True,
                 "unicode_paths": True,
                 "uuid_sections_child_inventory_crop": True,
                 "reference_inventory_projections_no_copies": True,
@@ -272,6 +327,7 @@ def main():
             args.report.write_text(
                 json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8"
             )
+            print("Smoke: passed; report " + str(args.report), flush=True)
     finally:
         window.close_guard = None
         window.close()

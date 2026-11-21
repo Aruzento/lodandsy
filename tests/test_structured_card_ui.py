@@ -17,21 +17,21 @@ def test_one_field_model_from_header_and_inspector_and_invalid_draft(project, qt
     editor.title_edit.textEdited.emit("Renamed")
     editor.title_edit.finish()
     assert app.cards_service.entities.get(card.id).title == inspector.title_edit.text() == "Renamed"
-    app.cards_service.update_card_fields(card.id, {"hp": 15, "summary": "Guardian"})
-    assert inspector.field_form.controls["hp"].text() == "15"
-    hp = inspector.field_form.controls["hp"]
+    app.cards_service.update_card_fields(card.id, {"hp_max": 15, "summary": "Guardian"})
+    assert inspector.field_form.controls["hp_max"].text() == "15"
+    hp = inspector.field_form.controls["hp_max"]
     hp.setText("0")
     hp.editingFinished.emit()
-    assert app.cards.get(card.id).value("hp") == 0
+    assert app.cards.get(card.id).value("hp_max") == 0
     assert not hasattr(editor, "fields_form")
     hp.setText("nan")
     hp.editingFinished.emit()
-    assert app.cards.get(card.id).value("hp") == 0 and app.cards_service.field_drafts
+    assert app.cards.get(card.id).value("hp_max") == 0 and app.cards_service.field_drafts
     assert project.save_current()
     assert editor.validation_status.text()
     app.window_manager.close_window(app.card_editor_window_key(card.id))
     editor = app.open_card_editor(card.id).widget()
-    assert inspector.field_form.controls["hp"].text() == "nan"
+    assert inspector.field_form.controls["hp_max"].text() == "nan"
     editor.discard_drafts_requested.emit()
     assert not app.cards_service.field_drafts and project.save_current()
 

@@ -1,0 +1,22 @@
+{
+  "mode": "shared",
+  "modern": false,
+  "placements": 1000,
+  "actors": 0,
+  "tables": 0,
+  "setup_seconds": 0.5708024999912595,
+  "edit_render_p50_ms": 94.04634999373229,
+  "edit_render_p95_ms": 100.27680000348482,
+  "actor_events_for_20_edits": 0,
+  "token_items_reused": true,
+  "save_ms": 41.48909999639727,
+  "load_snapshot_ms": 9.801200008951128,
+  "reopen_map_ready_ms": 264.54329999978654,
+  "memory": {
+    "peak_mib": 119.6640625,
+    "working_mib": 117.25390625
+  },
+  "platform": "windows",
+  "same_background_pixels": 960000,
+  "note": "Native programmatic render/events; not physical smoothness or SLA"
+}

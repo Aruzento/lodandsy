@@ -41,3 +41,10 @@ Windows/automation не получают нормального самостоя
 New folder dialog использует видимый chooser как host, ошибка создания показывается
 в нём inline. Обычный Open chooser остаётся модальным к видимому AppShell.
 Это проверено native Welcome cancel/fail/success tests; ручной capture учитывается отдельно.
+
+## Дополнение 21.11.2026 — ADR-033
+
+Действующий формат SQLite15/Card6/Map7/Actor1/Rules1/Table3/UIstate4. Schema14
+безопасно отклоняется без миграции/записи. Guards ProjectController/MRU/backup
+сохраняются. Card Editor header/type/layout не меняется; relations-purpose rich
+section дополнена адресованным списком Actor, включая без размещений.

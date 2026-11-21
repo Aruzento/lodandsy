@@ -19,7 +19,9 @@ def modules(layer, names):
 
 # Every runtime file has an explicit owner; a new helper cannot silently escape the gate.
 FEATURES = {
-    "cards": modules("domain", "card card_collection card_schema")
+    "cards": modules(
+        "domain", "card card_collection card_schema actor_state formula modifiers rules_5e14"
+    )
     | modules(
         "application",
         "cards_controller cards_service card_editor_binding card_inspector_binding "
@@ -28,7 +30,9 @@ FEATURES = {
     | modules(
         "ui",
         "card_editor card_document_state card_fields card_creation_dialog card_search_dialog "
-        "portrait_panel portrait_crop_dialog rich_document rich_toolbar",
+        "portrait_panel portrait_crop_dialog rich_document rich_toolbar "
+        "player_dialog modifier_editor rules_editor card_relations",
+        # Forms, item sources and project rules stay Cards-owned.
     ),
     "tables": modules("domain", "table_document")
     | modules("application", "tables_controller tables_service table_column_codec")
@@ -135,8 +139,14 @@ def test_import_boundaries_and_acyclic_graph():
         if name.startswith("lodandsy.domain."):
             assert not any(
                 target.startswith(
-                    ("PySide6", "PySide6QtAds", "shiboken6", "sqlite3", "lodandsy.ui",
-                     "lodandsy.application")
+                    (
+                        "PySide6",
+                        "PySide6QtAds",
+                        "shiboken6",
+                        "sqlite3",
+                        "lodandsy.ui",
+                        "lodandsy.application",
+                    )
                 )
                 for target in imports
             ), name
@@ -165,10 +175,16 @@ def test_import_boundaries_and_acyclic_graph():
         ("ui.rich_document", "import lodandsy.ui.dice_widget as dice", "ui.dice_widget"),
         ("ui.table_model", "from ..application import map_tiles", "application.map_tiles"),
         ("ui.dice_widget", "from lodandsy.domain import map_fog", "domain.map_fog"),
-        ("application.fog_geometry", "from .tables_service import TablesService",
-         "application.tables_service"),
-        ("application.card_media_controller", "from .app_controller import AppController",
-         "application.app_controller"),
+        (
+            "application.fog_geometry",
+            "from .tables_service import TablesService",
+            "application.tables_service",
+        ),
+        (
+            "application.card_media_controller",
+            "from .app_controller import AppController",
+            "application.app_controller",
+        ),
     ],
 )
 def test_boundary_gate_rejects_helper_imports_including_relative(

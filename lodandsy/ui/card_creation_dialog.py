@@ -1,4 +1,5 @@
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -6,7 +7,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
 )
 
-from lodandsy.domain.card_schema import CARD_TYPES
+from lodandsy.domain.card_schema import ACTOR_TYPES, CARD_TYPES
 
 
 class CardCreationDialog(QDialog):
@@ -20,6 +21,10 @@ class CardCreationDialog(QDialog):
         layout = QFormLayout(self)
         layout.addRow("Название:", self.title_edit)
         layout.addRow("Тип:", self.card_type)
+        self.player = QCheckBox("Постоянный игрок — создать участника")
+        self.player.setEnabled(False)
+        self.card_type.currentIndexChanged.connect(self._type_changed)
+        layout.addRow(self.player)
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel, self
         )
@@ -30,6 +35,12 @@ class CardCreationDialog(QDialog):
         self.title_edit.textChanged.connect(lambda text: self.ok.setEnabled(bool(text.strip())))
         layout.addRow(buttons)
 
+    def _type_changed(self):
+        enabled = self.card_type.currentData() in ACTOR_TYPES
+        self.player.setEnabled(enabled)
+        if not enabled:
+            self.player.setChecked(False)
+
     @classmethod
     def get_card(cls, parent):
         dialog = cls(parent)
@@ -37,5 +48,6 @@ class CardCreationDialog(QDialog):
         return (
             dialog.title_edit.text().strip(),
             dialog.card_type.currentData(),
+            dialog.player.isChecked(),
             accepted,
         )

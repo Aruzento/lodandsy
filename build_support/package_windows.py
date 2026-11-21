@@ -22,6 +22,7 @@ def main():
         raise RuntimeError("Build the executable first")
     licenses = APP / "LICENSES"
     licenses.mkdir(exist_ok=True)
+    shutil.copy2(ROOT / "build_support/SRD-5.1-NOTICE.txt", licenses / "SRD-5.1-NOTICE.txt")
     for path in (CACHE / "license-texts").glob("*.txt"):
         shutil.copy2(path, licenses / path.name)
     shutil.copytree(ROOT / "build_support/licenses", licenses / "libvips", dirs_exist_ok=True)
@@ -57,6 +58,11 @@ def main():
     for folder in ["lodandsy", "build_support", "tests", "docs", "prototypes"]:
         for path in (ROOT / folder).rglob("*"):
             if "references" in path.relative_to(ROOT).parts:
+                continue
+            # Pre-existing local proposal, superseded by ADR-033; not approved source.
+            if path.relative_to(ROOT).as_posix() == (
+                "docs/architecture/2026-11-21-cards-variables-audit.md"
+            ):
                 continue
             if path.is_file() and (
                 path.suffix in {".py", ".md", ".spec", ".ps1", ".json", ".txt", ".drawio"}
