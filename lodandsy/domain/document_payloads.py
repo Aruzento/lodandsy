@@ -1,6 +1,7 @@
 from lodandsy.domain.card import Card
 from lodandsy.domain.card_schema import ACTOR_TYPES, field_definition
 from lodandsy.domain.entity import Entity, EntityCollection
+from lodandsy.domain.equipment import EquipmentEntry, resolve_equipment
 from lodandsy.domain.map_document import MapDocument, MapPayload
 from lodandsy.domain.modifiers import ModifierSource
 from lodandsy.domain.rules_5e14 import ProjectRules, calculate
@@ -8,24 +9,44 @@ from lodandsy.domain.table_document import TableDocument, TablePayload
 
 
 def inventory_inputs(collection, card, actor):
+    entries, missing = [], []
     table_id = (
         actor.inventory_id
         if actor is not None
         else next((s.table_id for s in card.sections if s.purpose == "inventory"), None)
     )
     if table_id is None:
-        return dict(sources=(), inventory_weight=0, incomplete="")
+        return dict(sources=(), inventory_weight=0, incomplete="", equipment=resolve_equipment(()))
     try:
         target = collection.get(table_id)
         if target.kind != "table" or target.parent_id != card.id:
             raise ValueError("Inventory link is unavailable")
         payload = collection.payload(table_id)
     except ValueError:
-        return dict(sources=(), inventory_weight=None, incomplete="Связанная таблица недоступна")
+        return dict(
+            sources=(),
+            inventory_weight=None,
+            incomplete="Связанная таблица недоступна",
+            equipment=resolve_equipment((), missing=(table_id,)),
+        )
+    try:
+        validate_inventory_columns(collection, table_id)
+    except ValueError as error:
+        return dict(
+            sources=(),
+            inventory_weight=None,
+            incomplete=str(error),
+            equipment=resolve_equipment((), missing=(table_id,)),
+        )
     columns = {column.key: column for column in payload.columns if column.key}
     item_column, quantity = columns.get("item"), columns.get("quantity")
     if item_column is None or quantity is None:
-        return dict(sources=(), inventory_weight=None, incomplete="Нужны столбцы item/quantity")
+        return dict(
+            sources=(),
+            inventory_weight=None,
+            incomplete="Нужны столбцы item/quantity",
+            equipment=resolve_equipment((), missing=(table_id,)),
+        )
     active, sources, weight, complete, diagnostic = columns.get("active"), [], 0, True, ""
     for row in payload.rows:
         target = row.value(item_column.id)
@@ -40,6 +61,7 @@ def inventory_inputs(collection, card, actor):
             complete = False
             if enabled:
                 diagnostic = "Активный предмет недоступен: " + str(target)
+                missing.append(str(target))
             continue
         values = dict(item.values)
         unit_weight = values.get("weight", field_definition("weight").default)
@@ -48,6 +70,17 @@ def inventory_inputs(collection, card, actor):
         else:
             weight += unit_weight * count
         if enabled:
+            entries.append(
+                EquipmentEntry(
+                    row.id,
+                    entity.id,
+                    entity.title,
+                    values.get("equipment_kind", "item"),
+                    values.get("armor_category"),
+                    values.get("armor_ac"),
+                    values.get("shield_bonus"),
+                )
+            )
             for modifier in values.get("modifiers", ()):
                 identity = (actor.id if actor else card.id, table_id, row.id, modifier.id)
                 if len(sources) >= 4096:
@@ -55,10 +88,14 @@ def inventory_inputs(collection, card, actor):
                         sources=tuple(sources),
                         inventory_weight=None,
                         incomplete="Превышен лимит 4096 активных модификаторов",
+                        equipment=resolve_equipment(entries, missing=missing),
                     )
                 sources.append(ModifierSource(identity, modifier, entity.title))
     return dict(
-        sources=tuple(sources), inventory_weight=weight if complete else None, incomplete=diagnostic
+        sources=tuple(sources),
+        inventory_weight=weight if complete else None,
+        incomplete=diagnostic,
+        equipment=resolve_equipment(entries, missing=missing),
     )
 
 
@@ -87,6 +124,8 @@ def module_payload(document):
             document.objects,
             document.layers_initialized,
             document.fog,
+            document.shapes,
+            document.portals,
         )
     if isinstance(document, TableDocument):
         return TablePayload(document.columns, document.rows)
@@ -110,10 +149,40 @@ def _module_document(entity, payload):
             payload.objects,
             payload.layers_initialized,
             payload.fog,
+            payload.shapes,
+            payload.portals,
         )
     if entity.kind == "table":
         return TableDocument(entity.title, key, payload.columns, payload.rows)
     raise ValueError("Unsupported module document")
+
+
+def validate_inventory_columns(collection, table_id):
+    columns = {c.key: c for c in collection.payload(table_id).columns if c.key}
+    if not {"item", "quantity", "active", "description", "cost"} <= columns.keys():
+        raise ValueError("Индивидуальный инвентарь требует item/quantity/active/projections")
+    item, count, active = (columns[k] for k in ("item", "quantity", "active"))
+    if (
+        item.data_type != "entity_ref"
+        or item.ref_kind != "card"
+        or item.ref_card_type != "item"
+        or count.data_type != "number"
+        or not count.required
+        or not count.integer
+        or count.minimum is None
+        or count.minimum < 1
+        or active.data_type != "bool"
+        or not active.required
+    ):
+        raise ValueError("Нарушены ограничения индивидуального инвентаря")
+    for key, field_id in (("description", "description_preview"), ("cost", "cost")):
+        column = columns[key]
+        if (
+            column.data_type != "projection"
+            or column.source_column_id != item.id
+            or column.field_key != field_id
+        ):
+            raise ValueError("Инвентарь требует живых проекций описания/стоимости")
 
 
 def validate_project(collection, previous=None):
@@ -130,7 +199,9 @@ def validate_project(collection, previous=None):
         payload = collection.payload(entity.id)
         if entity.kind != "card":
             continue
-        card = card_projection(collection, entity.id) if payload.actors else None
+        card = card_projection(collection, entity.id)
+        if inventory_inputs(collection, card, None)["equipment"].conflicts:
+            raise ValueError("В базовом инвентаре надето несколько доспехов или щитов")
         for actor in payload.actors:
             if (
                 actor.id in entity_ids
@@ -146,36 +217,10 @@ def validate_project(collection, previous=None):
                 if actor.inventory_id in owned_tables:
                     raise ValueError("Inventory cannot belong to two Actors")
                 owned_tables.add(actor.inventory_id)
-                columns = {
-                    c.key: c for c in collection.payload(actor.inventory_id).columns if c.key
-                }
-                if not {"item", "quantity", "active", "description", "cost"} <= columns.keys():
-                    raise ValueError(
-                        "Индивидуальный инвентарь требует item/quantity/active/projections"
-                    )
-                item, count, active = (columns[k] for k in ("item", "quantity", "active"))
-                if (
-                    item.data_type != "entity_ref"
-                    or item.ref_kind != "card"
-                    or item.ref_card_type != "item"
-                    or count.data_type != "number"
-                    or not count.required
-                    or not count.integer
-                    or count.minimum is None
-                    or count.minimum < 1
-                    or active.data_type != "bool"
-                    or not active.required
-                ):
-                    raise ValueError("Нарушены ограничения индивидуального инвентаря")
-                for key, field_id in (("description", "description_preview"), ("cost", "cost")):
-                    column = columns[key]
-                    if (
-                        column.data_type != "projection"
-                        or column.source_column_id != item.id
-                        or column.field_key != field_id
-                    ):
-                        raise ValueError("Инвентарь требует живых проекций описания/стоимости")
+                validate_inventory_columns(collection, actor.inventory_id)
             inputs = inventory_inputs(collection, card, actor)
+            if inputs["equipment"].conflicts:
+                raise ValueError("Надето несколько доспехов или щитов у участника")
             signature = (
                 card.title,
                 card.card_type,
@@ -198,7 +243,17 @@ def validate_project(collection, previous=None):
     for entity in collection.summaries():
         if entity.kind != "map":
             continue
-        for token in collection.payload(entity.id).tokens:
+        payload = collection.payload(entity.id)
+        for value in (*payload.shapes, *payload.portals):
+            if value.id in tokens or value.id in actors or value.id in entity_ids:
+                raise ValueError("Duplicate vector UUID across maps")
+            tokens.add(value.id)
+        for portal in payload.portals:
+            if portal.target_id == entity.id:
+                raise ValueError("Портал не может ссылаться на текущую карту")
+            if portal.target_id in entity_ids and collection.get(portal.target_id).kind != "map":
+                raise ValueError("Цель портала должна быть картой")
+        for token in payload.tokens:
             if token.id in tokens or token.id in actors or token.id in entity_ids:
                 raise ValueError("Duplicate Token UUID across maps")
             tokens.add(token.id)

@@ -5,7 +5,14 @@ from dataclasses import dataclass
 from functools import lru_cache
 
 from lodandsy.domain.actor_state import VariableValue
-from lodandsy.domain.card_schema import ABILITIES, FIELD_DEFINITIONS, SKILLS, permitted_fields
+from lodandsy.domain.card_schema import (
+    ABILITIES,
+    ACTOR_TYPES,
+    FIELD_DEFINITIONS,
+    SKILLS,
+    permitted_fields,
+)
+from lodandsy.domain.equipment import EquipmentFacts
 from lodandsy.domain.formula import (
     CalculationError,
     dependency_order,
@@ -57,7 +64,15 @@ def _numeric_function(function):
     return call
 
 
+def armor_dexterity(category, dexterity):
+    dexterity = number(dexterity)
+    if category not in {"none", "light", "medium", "heavy"}:
+        raise CalculationError("Неизвестная категория надетого доспеха")
+    return 0 if category == "heavy" else min(dexterity, 2) if category == "medium" else dexterity
+
+
 FUNCTIONS = {
+    "armor_dexterity": armor_dexterity,
     "floor": _numeric_function(math.floor),
     "ceil": _numeric_function(math.ceil),
     "min": _numeric_function(lambda *values: min(values)),
@@ -68,6 +83,7 @@ FUNCTIONS = {
     "unsupported_hp": _unsupported_hp,
 }
 for _key, _types in {
+    "armor_dexterity": ("text", "number"),
     "floor": ("number",),
     "ceil": ("number",),
     "proficiency_for_level": ("number",),
@@ -84,10 +100,7 @@ DEFAULT_FORMULAS = {
     "hp_max": "class_hp(level, hit_die, hp_gains, constitution_mod) "
     "if is_character and is_single_class else "
     "unsupported_hp(level) if is_character else base_hp_max",
-    "ac": "(10 + dexterity_mod if armor_type == armor_none else "
-    "armor_base + dexterity_mod if armor_type == armor_light else "
-    "armor_base + min(dexterity_mod, 2) if armor_type == armor_medium else "
-    "armor_base)",
+    "ac": "armor_base + armor_dexterity(armor_type, dexterity_mod)",
     "speed": "speed_base",
     "initiative": "dexterity_mod",
     **{
@@ -114,6 +127,12 @@ INPUT_NAMES = frozenset(
         "is_character",
         "is_single_class",
         "inventory_weight",
+        "armor_type",
+        "armor_base",
+        "shield",
+        "base_armor_type",
+        "base_armor_base",
+        "base_shield",
         "armor_none",
         "armor_light",
         "armor_medium",
@@ -124,12 +143,12 @@ INPUT_NAMES = frozenset(
 @dataclass(frozen=True, slots=True)
 class ProjectRules:
     ruleset: str = "dnd_5e_2014"
-    version: int = 1
+    version: int = 2
     revision: int = 0
     overrides: tuple = ()
 
     def __post_init__(self):
-        if self.ruleset != "dnd_5e_2014" or type(self.version) is not int or self.version != 1:
+        if self.ruleset != "dnd_5e_2014" or type(self.version) is not int or self.version != 2:
             raise ValueError("Unsupported ruleset/version")
         if type(self.revision) is not int or self.revision < 0:
             raise ValueError("Invalid rules revision")
@@ -168,6 +187,12 @@ def compile_rules(overrides):
         is_character="bool",
         is_single_class="bool",
         inventory_weight="number",
+        armor_type="text",
+        armor_base="number",
+        shield="bool",
+        base_armor_type="text",
+        base_armor_base="number",
+        base_shield="bool",
         armor_none="text",
         armor_light="text",
         armor_medium="text",
@@ -192,6 +217,8 @@ def compile_rules(overrides):
 class EffectiveValues:
     values: dict
     automatic: dict
+    equipment: EquipmentFacts | None = None
+    sources: tuple = ()
 
     def get(self, key):
         return self.values.get(
@@ -199,14 +226,43 @@ class EffectiveValues:
         )
 
 
-def calculate(card, actor=None, rules=None, *, sources=(), inventory_weight=None, incomplete=""):
+def calculate(
+    card,
+    actor=None,
+    rules=None,
+    *,
+    sources=(),
+    inventory_weight=None,
+    incomplete="",
+    equipment=None,
+):
+    if card.card_type not in ACTOR_TYPES:
+        return EffectiveValues(
+            {
+                key: VariableValue(
+                    card.value(key),
+                    source="card",
+                    status="unknown" if card.value(key) is None else "ok",
+                )
+                for key in permitted_fields(card.card_type)
+            },
+            {},
+        )
     rules = rules or ProjectRules()
     expressions, order = compile_rules(rules.overrides)
-    if card.value("shield"):
+    equipment = equipment if equipment is not None else EquipmentFacts()
+    if equipment.shield:
         shield = Modifier(
-            "ac", operand=2, group="shield", policy="max", id="e71b9ac2-e58a-4984-8d42-7a6766e71b10"
+            "ac", operand=equipment.shield_bonus, id="e71b9ac2-e58a-4984-8d42-7a6766e71b10"
         )
-        sources = (*sources, ModifierSource(("profile", "shield"), shield, "Щит"))
+        sources = (
+            *sources,
+            ModifierSource(
+                ("equipment", equipment.shield_item.row_id, equipment.shield_item.item_id),
+                shield,
+                equipment.shield_item.label,
+            ),
+        )
     source_map = {}
     for source in sources:
         source_map.setdefault(source.modifier.target, []).append(source)
@@ -215,6 +271,9 @@ def calculate(card, actor=None, rules=None, *, sources=(), inventory_weight=None
         for key, definition in FIELD_DEFINITIONS.items()
         if definition.scope == "card"
     }
+    inputs.update(
+        armor_type=equipment.armor_type, armor_base=equipment.armor_base, shield=equipment.shield
+    )
     inputs.update({"base_" + key: value for key, value in tuple(inputs.items())})
     inputs.update(
         is_character=card.card_type == "character",
@@ -242,8 +301,16 @@ def calculate(card, actor=None, rules=None, *, sources=(), inventory_weight=None
                 dependencies.update(result[dependency].dependencies)
         selected_sources = source_map.get(key, ())
         dependencies.update(source.identity for source in selected_sources)
+        if key == "ac":
+            dependencies.update(
+                ("equipment", item.row_id, item.item_id)
+                for item in (equipment.armor, equipment.shield_item)
+                if item
+            )
         dependencies = frozenset(dependencies)
         try:
+            if key == "ac" and equipment.diagnostic:
+                raise CalculationError(equipment.diagnostic, "incomplete")
             value = evaluate(expression, read, FUNCTIONS)
             if incomplete:
                 raise CalculationError(incomplete, "incomplete")
@@ -255,6 +322,8 @@ def calculate(card, actor=None, rules=None, *, sources=(), inventory_weight=None
             if key in {"ac", "speed"} and value < 0:
                 raise CalculationError("Отрицательное значение: " + key)
             labels = sorted({source.label for source in selected_sources if source.label})
+            if key == "ac" and equipment.armor:
+                labels = sorted(set(labels) | {equipment.armor.label})
             origin = "formula" + (" · " + ", ".join(labels) if labels else "")
             item = VariableValue(value, "derived", origin, dependencies=dependencies)
         except CalculationError as error:
@@ -290,4 +359,4 @@ def calculate(card, actor=None, rules=None, *, sources=(), inventory_weight=None
                 for key, value in actor.values
             }
         )
-    return EffectiveValues(result, automatic)
+    return EffectiveValues(result, automatic, equipment, tuple(sources))

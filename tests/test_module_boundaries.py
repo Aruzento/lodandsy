@@ -20,7 +20,8 @@ def modules(layer, names):
 # Every runtime file has an explicit owner; a new helper cannot silently escape the gate.
 FEATURES = {
     "cards": modules(
-        "domain", "card card_collection card_schema actor_state formula modifiers rules_5e14"
+        "domain",
+        "card card_collection card_schema actor_state formula modifiers rules_5e14 equipment",
     )
     | modules(
         "application",
@@ -32,13 +33,13 @@ FEATURES = {
         "card_editor card_document_state card_fields card_creation_dialog card_search_dialog "
         "portrait_panel portrait_crop_dialog rich_document rich_toolbar "
         "player_dialog modifier_editor rules_editor card_relations "
-        "game_labels game_sheet hit_history item_page",
+        "game_labels game_sheet hit_history item_page ability_block character_header armor_details",
         # Forms, item sources and project rules stay Cards-owned.
     ),
     "tables": modules("domain", "table_document")
     | modules("application", "tables_controller tables_service table_column_codec")
     | modules("ui", "table_widget table_headers table_model"),
-    "maps": modules("domain", "map_document map_fog")
+    "maps": modules("domain", "map_document map_fog map_measurements")
     | modules(
         "application",
         "maps_controller maps_service map_pyramid map_pyramid_worker map_tiles fog_geometry",
@@ -46,7 +47,7 @@ FEATURES = {
     | modules(
         "ui",
         "map_widget map_editor map_annotations map_settings_dialogs map_library "
-        "map_presentation fog_tools",
+        "map_presentation fog_tools map_vectors map_portrait",
     ),
     "dice": modules("domain", "dice")
     | modules("application", "dice_controller")

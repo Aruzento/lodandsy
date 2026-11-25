@@ -149,7 +149,7 @@ shared tileLRU64MiB; rebuild/cancel/checksum/version/atomic publish сохран
 
 ## Хранение, проверка и поставка
 
-Один канон EntityCollection и SQLite15/Card6/Map7/Actor1/Rules1/Table3 через sqlite3, assets отдельно
+Один канон EntityCollection и SQLite16/Card7/Map8/Actor1/Rules1(profile2)/Table3 через sqlite3, assets отдельно
 с относительными путями; UI state4 отдельно. FK на каждом connection, составные
 операции транзакционны. Autosave/Ctrl+S — SaveCoordinator с упорядоченными ревизиями
 и ACK после commit; pending/dirty/saving/error/draft видимы. Safe close/switch,
@@ -205,7 +205,7 @@ preview/ошибки/ожидаемые HP clamps, явные apply/reset. Бе�
 ограниченные грамматика/типы/DAG/бюджеты ADR-033. Manual HP/AC/speed — итоговый override,
 auto остаётся видимым. Shipped defaults неизменны, overrides/revision — один канон.
 
-Составные изменения валидируются до post-commit; SQLite15 нормализует Actors/tokens/
+Составные изменения валидируются до post-commit; SQLite16 нормализует Actors/tokens/
 default/rules, один snapshot writer и durable ACK. Schema14 и старые payload безопасно
 отклоняются без автоперезаписи. Backup/restore сохраняют UUID/rules/manual/activity.
 Undo/Redo размещения/копии/движения адресован, preflight до смены индекса; последующие
@@ -218,7 +218,26 @@ Scalar/deletion Undo, перенос NPC между картами и други
 
 Исправление UI-приёмки A–F: ADR-034; виртуальные `system:attributes`/`system:modifiers`
 без Section/миграции. Ресурсы сверху, плитки модификатор (итог), база и источники,
-адаптивные 6/3/2 колонки. Русские UI labels/choices/errors без перевода канонических ID.
+адаптивные 3/2/1 блоки (ADR-035). Русские UI labels/choices/errors без перевода канонических ID.
 История хитов по уровням, закрытый каталог целей модификаторов, typed rule examples,
 табличный preview до/после и clamp; закрытие несохранённых правил подтверждается.
 Ручная приёмка U01–U18 относится к новому ZIP; прошлый пакет её не заменяет.
+
+
+Дополнение 22.11.2026 — лист персонажа v2 / ADR-035: inline ability scores, 3/2/1
+блоки с 18skills/6saves, homebrew race/class/subclass/level. Item equipment facts
+определяются только active inventory rows, один armor/shield с atomic replace/cancel.
+Card armor_type/armor_base/shield удалены; это только resolved formula inputs.
+SQLite16/Card7, профиль5e14 version2; legacy/миграции отсутствуют по новому прямому
+решению владельца «все миры тестовые». SQLite15 отклоняется без записи/удаления.
+Ручной итоговый AC побеждает, оборудование и источники видны в native AC dialog.
+Отчёт: docs/validation/2026-11-22-character-sheet-v2.md. Новые Git-публикации не разрешены.
+
+## Maps M5 — согласовано25.11.2026
+
+ARU-87–90 / ADR-036: расстояние при drag (сетка5e14 и геометрия), постоянные
+публичные фигуры поверх fog, GM-only порталы с retarget существующего Player и
+временный синхронный показ original token asset. Фигуры не раскрывают карту/токены;
+стрелки публикуются только при полностью открытом пути. Нет боя/LOS/Actor transfer.
+SQLite16/Card7, Map8 с безопасным чтением Map7 без записи на open. Критерии D/S/P/V/G,
+проверки и физические ограничения: docs/validation/2026-11-25-map-m5.md.

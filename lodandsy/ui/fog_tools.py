@@ -19,6 +19,8 @@ class FogTools(QWidget):
         self.points = []
         self.selected = None
         self.panning = False
+        self.snap_radius = 10.0
+        view.viewport().setMouseTracking(True)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         bar = QToolBar()
@@ -68,13 +70,30 @@ class FogTools(QWidget):
     def set_mode(self, mode):
         self.cancel()
         self.mode = mode
+        self._cursor()
 
     def setVisible(self, visible):
         self.cancel()
         super().setVisible(visible)
+        self._cursor()
+
+    def _cursor(self):
+        if self.isVisible() and self.mode == "polygon" and not self.panning:
+            self.view.viewport().setCursor(Qt.CursorShape.CrossCursor)
+        else:
+            self.view.viewport().unsetCursor()
+
+    def _snaps(self, point):
+        if len(self.points) < 3:
+            return False
+        first = self.view.viewportTransform().map(QPointF(*self.points[0]))
+        delta = self.view.viewportTransform().map(point) - first
+        return delta.x() ** 2 + delta.y() ** 2 <= self.snap_radius**2
 
     def cancel(self):
         self.points.clear()
+        self.view._fog_vertices = ()
+        self.view._fog_snap = False
         self.selected = None
         self.view._fog_preview = QPainterPath()
         self.view._fog_selection = QPainterPath()
@@ -88,8 +107,11 @@ class FogTools(QWidget):
                     path.moveTo(QPointF(*self.points[0]))
                     for point in self.points[1:]:
                         path.lineTo(QPointF(*point))
-                    if cursor:
-                        path.lineTo(cursor)
+                    snapped = cursor is not None and self._snaps(cursor)
+                    self.view._fog_snap = snapped
+                    self.view._fog_vertices = tuple(self.points)
+                    if cursor is not None:
+                        path.lineTo(QPointF(*self.points[0]) if snapped else cursor)
             else:
                 path = stroke_path(self.points, self.size.value())
             self.view._fog_preview = path
@@ -123,7 +145,7 @@ class FogTools(QWidget):
         self.cancel()
 
     def eventFilter(self, watched, event):
-        if not self.isVisible():
+        if not self.isVisible() or self.view.role == "player":
             return False
         kind = event.type()
         if kind == QEvent.Type.KeyPress:
@@ -140,9 +162,11 @@ class FogTools(QWidget):
             if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
                 self.cancel()
                 self.panning = True
+                self._cursor()
                 return False
         if kind == QEvent.Type.KeyRelease and event.key() == Qt.Key.Key_Space:
             self.panning = False
+            self._cursor()
             return False
         if self.panning or watched is not self.view.viewport() or self.view._background is None:
             return False
@@ -183,11 +207,7 @@ class FogTools(QWidget):
                 self.view._fog_selection = region_path(region) if region else QPainterPath()
                 self.view.viewport().update()
             elif self.mode == "polygon":
-                first = self.view.mapFromScene(QPointF(*self.points[0])) if self.points else None
-                if (
-                    len(self.points) >= 3
-                    and (event.position().toPoint() - first).manhattanLength() <= 8
-                ):
+                if self._snaps(point):
                     self.finish()
                 elif self._append(point):
                     self._preview()

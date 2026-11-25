@@ -81,7 +81,17 @@ class CardEditorBinding:
                 )
                 for key, conflict in edits.conflicts.items()
                 if key[0] == self.card_id
-                and key[1] in {"rarity", "weight", "cost", "modifiers"}
+                and key[1]
+                in {
+                    "rarity",
+                    "weight",
+                    "cost",
+                    "modifiers",
+                    "equipment_kind",
+                    "armor_category",
+                    "armor_ac",
+                    "shield_bonus",
+                }
                 and getattr(key, "actor_id", None) is None
             ]
         )

@@ -100,6 +100,7 @@ class CardInspectorBinding:
         return self.current_card_id, field
 
     def show_actor(self, reference, *, feet_per_cell=None):
+        self.inspector.clear_feature_page()
         self.finish_edits()
         self.session.get_actor(reference)
         self._actor_ref = reference
@@ -126,6 +127,7 @@ class CardInspectorBinding:
                 self.open_inventory(key)
 
     def _reset_context(self):
+        self.inspector.clear_feature_page()
         self._actor_ref = None
         self._field_owners.clear()
         self._title_owner = None
@@ -139,6 +141,8 @@ class CardInspectorBinding:
             self._metadata()
 
     def refresh(self) -> None:
+        if self.inspector.feature_page_active:
+            return
         card = self.current_entity
 
         if card is None:
@@ -344,6 +348,7 @@ class CardInspectorBinding:
         self,
         _card_id: object,
     ) -> None:
+        self.inspector.clear_feature_page()
         self.finish_edits()
         self._actor_ref = None
         self.refresh()

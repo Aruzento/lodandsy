@@ -69,7 +69,15 @@ def main():
                 or path.is_relative_to(ROOT / "build_support/licenses")
                 or (
                     path.suffix == ".png"
-                    and path.is_relative_to(ROOT / "docs/validation/2026-11-21-ui-acceptance")
+                    and any(
+                        path.is_relative_to(ROOT / folder)
+                        for folder in (
+                            "docs/validation/2026-11-21-ui-acceptance",
+                            "docs/validation/2026-11-22-character-sheet-v2",
+                            "docs/validation/2026-11-25-polish",
+                            "docs/validation/2026-11-25-map-m5",
+                        )
+                    )
                 )
             ):
                 target = source / path.relative_to(ROOT)

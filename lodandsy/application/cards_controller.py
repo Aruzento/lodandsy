@@ -341,6 +341,9 @@ class CardsController(QObject):
                 editor.game_sheet,
                 card_id,
                 lambda key: self.open_entity("table", key),
+                open_base_inventory=lambda: editor.select_section(
+                    next(s.id for s in self.cards.get(card_id).sections if s.purpose == "inventory")
+                ),
             )
         self._index_links(card_id)
         self.refresh_relations(card_id)

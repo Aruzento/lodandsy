@@ -1,0 +1,18 @@
+{
+  "method": "QWidget production viewport render; same process, 1000 tokens; image-free world 21600x10800; 5 warmup+80 samples; cumulative Windows process peak; not disk/decode or physical input latency",
+  "platform": "windows",
+  "baseline_overlay_disabled": {
+    "mean_ms": 28.18579250088078,
+    "p95_ms": 30.673299974296242,
+    "samples": 80,
+    "working_set_bytes": 78594048,
+    "process_peak_bytes": 78598144
+  },
+  "m5_1000_shapes_and_arrow": {
+    "mean_ms": 132.81489125074586,
+    "p95_ms": 134.74390000919811,
+    "samples": 80,
+    "working_set_bytes": 84504576,
+    "process_peak_bytes": 84508672
+  }
+}

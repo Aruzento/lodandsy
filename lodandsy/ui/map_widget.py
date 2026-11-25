@@ -1,6 +1,6 @@
 import math
 
-from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSettings, Qt, Signal
 from PySide6.QtGui import QAction, QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QGraphicsItem,
@@ -82,6 +82,7 @@ class MapView(QGraphicsView):
     object_action = Signal(str, str)
     card_dropped = Signal(str, float, float)
     token_moved = Signal(str, float, float)
+    measurement_changed = Signal(object)
     token_action = Signal(str, str)
     token_selected = Signal(str)
     token_add_requested = Signal(float, float)
@@ -99,11 +100,21 @@ class MapView(QGraphicsView):
         self._fog_state = FogState()
         self._fog_path = QPainterPath()
         self._fog_preview = QPainterPath()
+        self._fog_vertices = ()
+        self._fog_snap = False
+        self.vector_shapes = ()
+        self.vector_portals = ()
+        self.measurement = None
+        self.measurement_mode = QSettings().value("maps/measurement", "grid")
+        if self.measurement_mode not in {"grid", "geometry"}:
+            self.measurement_mode = "grid"
         self._fog_selection = QPainterPath()
         self.fog_opacity = 0.5
         self.tool = "select"
         self._previous_tool = None
         self.setScene(QGraphicsScene(self))
+        if role == "player":
+            self.scene().setBackgroundBrush(Qt.GlobalColor.black)
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
         self.map_width, self.map_height = 1000, 700
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
@@ -136,6 +147,7 @@ class MapView(QGraphicsView):
         super().drawForeground(painter, rect)
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        self._paint_measurement(painter)
         color = QColor("#000000")
         color.setAlphaF(1 if self.role == "player" else self.fog_opacity)
         painter.setBrush(color)
@@ -149,13 +161,91 @@ class MapView(QGraphicsView):
             painter.drawPath(self._fog_preview)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(self._fog_selection)
+            # Overlay geometry is in logical viewport pixels, independent of map zoom/DPR.
+            transform = painter.worldTransform()
+            painter.resetTransform()
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            for index, vertex in enumerate(self._fog_vertices):
+                center = transform.map(QPointF(*vertex))
+                snap = index == 0 and self._fog_snap
+                painter.setPen(QPen(QColor("#ffffff"), 1.5))
+                painter.setBrush(QColor("#73d6b2" if snap else "#303030"))
+                radius = 7 if snap else 4
+                painter.drawEllipse(center, radius, radius)
         painter.restore()
+        from lodandsy.ui.map_vectors import paint_vectors
+
+        paint_vectors(self, painter)
         if self.role == "player":
             outside = QPainterPath()
             outside.addRect(rect)
             visible = QPainterPath()
             visible.addRect(self._source_rect)
             painter.fillPath(outside.subtracted(visible), Qt.GlobalColor.black)
+
+    def public_motion_visible(self, item, origin, target):
+        from PySide6.QtGui import QPainterPathStroker
+
+        segment = QPainterPath(QPointF(*origin))
+        segment.lineTo(QPointF(*target))
+        stroke = QPainterPathStroker()
+        stroke.setWidth(max(item.boundingRect().width(), item.boundingRect().height()))
+        corridor = stroke.createStroke(segment)
+        for point in (origin, target):
+            corridor.addRect(item.boundingRect().translated(QPointF(*point)))
+        return not self._fog_path.intersects(corridor)
+
+    def _paint_measurement(self, painter):
+        if self.measurement is None:
+            return
+        from lodandsy.domain.map_measurements import distance
+
+        key, origin, target = self.measurement
+        item = next((i for i in self._tokens if i.token.id == key), None)
+        if item is None or not item.isVisible():
+            return
+        segment = QPainterPath(QPointF(*origin))
+        segment.lineTo(QPointF(*target))
+        if self.role == "player" and not self.public_motion_visible(item, origin, target):
+            return
+        value = distance(self.grid, origin, target, self.measurement_mode)
+        text = (
+            "Масштаб не задан" if value is None else f"{value:.1f}".rstrip("0").rstrip(".") + " фт."
+        )
+        text += " · сетка" if self.measurement_mode == "grid" else " · геометрия"
+        transform = painter.worldTransform()
+        start, end = transform.map(QPointF(*origin)), transform.map(QPointF(*target))
+        painter.save()
+        painter.resetTransform()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor("#eeeeee"), 2))
+        painter.drawLine(start, end)
+        painter.drawEllipse(start, 4, 4)
+        delta = end - start
+        angle = math.atan2(delta.y(), delta.x())
+        for offset in (-0.45, 0.45):
+            painter.drawLine(
+                end, end - QPointF(math.cos(angle + offset) * 10, math.sin(angle + offset) * 10)
+            )
+        label = painter.fontMetrics().boundingRect(text).adjusted(-6, -4, 6, 4)
+        footprint = transform.mapRect(item.boundingRect())
+        radius = max(footprint.width(), footprint.height()) / 2
+        length = math.hypot(delta.x(), delta.y())
+        normal = QPointF(delta.y() / length, -delta.x() / length) if length > 0 else QPointF(0, -1)
+        if normal.y() > 0:
+            normal = -normal
+        spacing = (
+            radius + abs(normal.x()) * label.width() / 2 + abs(normal.y()) * label.height() / 2 + 12
+        )
+        label.moveCenter(((start + end) / 2 + normal * spacing).toPoint())
+        bounds = self.viewport().rect().adjusted(2, 2, -2, -2)
+        if not bounds.contains(label):
+            label.moveCenter(((start + end) / 2 - normal * spacing).toPoint())
+        label.moveLeft(max(bounds.left(), min(label.left(), bounds.right() - label.width())))
+        label.moveTop(max(bounds.top(), min(label.top(), bounds.bottom() - label.height())))
+        painter.fillRect(label, QColor("#202020"))
+        painter.drawText(label, Qt.AlignmentFlag.AlignCenter, text)
+        painter.restore()
 
     def viewportEvent(self, event):
         if self.role == "player" and event.type() == QEvent.Type.ToolTip:
@@ -225,6 +315,8 @@ class MapView(QGraphicsView):
         if self._fog_state != document.fog or fog_path is not None:
             self._fog_path = fog_path if fog_path is not None else state_path(document.fog)
             self._fog_state = document.fog
+        self.vector_shapes = document.shapes
+        self.vector_portals = document.portals if self.role != "player" else ()
         self.grid = document.grid
         previous = {item.token.id: item for item in self._tokens}
         current_ids = {token.id for token in document.tokens}
@@ -428,6 +520,7 @@ class MapView(QGraphicsView):
             event.accept()
             return
         if self.role == "viewer" and event.key() == Qt.Key.Key_Escape:
+            self.measurement_changed.emit(None)
             for item in self._tokens:
                 if getattr(item, "_dragging", False):
                     item._cancelled = True
@@ -457,6 +550,7 @@ class MapView(QGraphicsView):
         super().keyReleaseEvent(event)
 
     def focusOutEvent(self, event):
+        self.measurement_changed.emit(None)
         if self._previous_tool is not None:
             tool, self._previous_tool = self._previous_tool, None
             self.set_tool(tool)
@@ -565,6 +659,18 @@ class MapWidget(QWidget):
         from lodandsy.ui.fog_tools import FogTools
 
         self.fog_tools = FogTools(self.view, self)
+        metric = QAction("Дистанция: геометрия", self)
+        metric.setCheckable(True)
+        metric.setChecked(self.view.measurement_mode == "geometry")
+        metric.setToolTip("Без snap используется непрерывная метрика; сетка — диагональ за клетку")
+
+        def set_metric(checked):
+            self.view.measurement_mode = "geometry" if checked else "grid"
+            QSettings().setValue("maps/measurement", self.view.measurement_mode)
+            self.view.viewport().update()
+
+        metric.toggled.connect(set_metric)
+        buttons.addAction(metric)
         fog = QAction(icon("fog"), "Туман войны", self)
         fog.setCheckable(True)
         fog.toggled.connect(self.fog_tools.setVisible)
@@ -572,6 +678,19 @@ class MapWidget(QWidget):
         fog_button.setDefaultAction(fog)
         fog_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
         buttons.addWidget(fog_button)
+        from lodandsy.ui.map_vectors import VectorTools
+
+        self.vector_tools = VectorTools(self.view, self)
+        self.vector_tools.hide()
+        vectors = QAction(icon("vector"), "Фигуры и порталы", self)
+        vectors.setCheckable(True)
+        vectors.toggled.connect(self.vector_tools.setVisible)
+        vectors.toggled.connect(
+            lambda checked: self.fog_tools.hide() if checked else self.vector_tools.cancel()
+        )
+        fog.toggled.connect(lambda checked: self.vector_tools.hide() if checked else None)
+        buttons.addAction(vectors)
+        layout.addWidget(self.vector_tools)
         layout.addWidget(self.fog_tools)
         layout.addWidget(self.view, 1)
         self.pending_camera = None

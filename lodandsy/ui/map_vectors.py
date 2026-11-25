@@ -1,0 +1,598 @@
+"""Maps-owned vector gestures and public foreground painter."""
+
+import math
+from dataclasses import replace
+
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
+from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap, QTransform
+from PySide6.QtWidgets import (
+    QColorDialog,
+    QComboBox,
+    QDoubleSpinBox,
+    QFormLayout,
+    QLabel,
+    QLineEdit,
+    QMenu,
+    QPushButton,
+    QToolBar,
+    QVBoxLayout,
+    QWidget,
+)
+
+from lodandsy.domain.map_document import MapShape
+from lodandsy.domain.map_measurements import distance
+from lodandsy.ui.icons import icon
+
+
+def mode_is_portal(gesture):
+    return gesture[0] == "portal"
+
+
+def local_path(value):
+    path = QPainterPath()
+    if value.kind == "circle":
+        radius = value.points[0][0]
+        path.addEllipse(QPointF(), radius, radius)
+    else:
+        points = value.points
+        if value.kind == "cone":
+            length = value.points[0][0]
+            points = ((0, 0), (length, -length / 2), (length, length / 2))
+        path.moveTo(QPointF(*points[0]))
+        for point in points[1:]:
+            path.lineTo(QPointF(*point))
+        path.closeSubpath()
+    return path
+
+
+def transform(value):
+    result = QTransform()
+    result.translate(value.x, value.y)
+    result.rotate(value.rotation)
+    result.scale(value.scale, value.scale)
+    return result
+
+
+def dimensions(value, grid):
+    factor = distance(grid, (0, 0), (value.scale, 0), "geometry")
+    if factor is None:
+        return "Масштаб не задан"
+
+    def number(n):
+        return f"{n:.1f}".rstrip("0").rstrip(".")
+
+    if value.kind in {"circle", "cone"}:
+        return (
+            ("Радиус " if value.kind == "circle" else "Длина ")
+            + number(value.points[0][0] * factor)
+            + " фт."
+        )
+    rect = local_path(value).boundingRect()
+    text = number(rect.width() * factor) + " × " + number(rect.height() * factor) + " фт."
+    if value.kind != "rectangle":
+        points = value.points
+        perimeter = sum(
+            math.hypot(a[0] - b[0], a[1] - b[1]) for a, b in zip(points, (*points[1:], points[0]))
+        )
+        text += " · периметр " + number(perimeter * factor) + " фт."
+    return text
+
+
+def paint_vectors(view, painter):
+    painter.save()
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    tools = getattr(view, "vector_tools", None) if view.role != "player" else None
+    if tools and not tools.isVisible():
+        tools = None
+    shapes = view.vector_shapes
+    if tools and tools.preview:
+        shapes = tuple(v for v in shapes if v.id != tools.preview.id) + (
+            (tools.preview,) if isinstance(tools.preview, MapShape) else ()
+        )
+    exposed = view.mapToScene(view.viewport().rect()).boundingRect()
+    cache = getattr(view, "_vector_render_cache", None)
+    if cache is None:
+        cache = view._vector_render_cache = {}
+    font_key = painter.font().toString()
+    for value in shapes:
+        prepared = cache.get(value.id)
+        if (
+            prepared is None
+            or prepared[0] is not value
+            or prepared[1] != view.grid
+            or prepared[2] != font_key
+        ):
+            path = local_path(value)
+            matrix = transform(value)
+            bounds = matrix.mapRect(path.boundingRect())
+            anchor = matrix.map(path.boundingRect().topLeft())
+            text = (value.name + " · " if value.name else "") + dimensions(value, view.grid)
+            label = painter.fontMetrics().boundingRect(text).adjusted(-5, -3, 5, 3)
+            pen = QPen(QColor(value.color), 2)
+            pen.setCosmetic(True)
+            fill = QColor(value.color)
+            fill.setAlphaF(value.opacity)
+            prepared = (
+                value,
+                view.grid,
+                font_key,
+                path,
+                matrix,
+                bounds,
+                anchor,
+                text,
+                label,
+                pen,
+                fill,
+            )
+            cache[value.id] = prepared
+        _, _, _, path, matrix, bounds, anchor, text, label, pen, fill = prepared
+        if not bounds.intersects(exposed):
+            continue
+        painter.save()
+        painter.setWorldTransform(matrix, True)
+        painter.setPen(pen)
+        painter.setBrush(fill)
+        painter.drawPath(path)
+        painter.restore()
+        point = view.viewportTransform().map(anchor)
+        painter.save()
+        painter.resetTransform()
+        rect = label.translated(point.toPoint() - label.bottomLeft())
+        painter.fillRect(rect, QColor("#202020"))
+        painter.setPen(QColor("#eeeeee"))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, text)
+        painter.restore()
+    if len(cache) > len(view.vector_shapes) + 2:
+        keep = {v.id for v in shapes}
+        view._vector_render_cache = {key: v for key, v in cache.items() if key in keep}
+    if view.role != "player":
+        for portal in view.vector_portals:
+            if tools and tools.preview and mode_is_portal(tools.gesture):
+                if tools.preview.id == portal.id:
+                    portal = tools.preview
+            painter.save()
+            center = painter.worldTransform().map(QPointF(portal.x, portal.y))
+            painter.resetTransform()
+            painter.setPen(QPen(QColor("#b6a4ff"), 2))
+            painter.setBrush(QColor("#202020"))
+            painter.drawEllipse(center, 12, 12)
+            painter.drawText(
+                QRectF(center.x() - 8, center.y() - 10, 16, 20), Qt.AlignmentFlag.AlignCenter, "↗"
+            )
+            painter.drawText(
+                center + QPointF(17, 4),
+                getattr(view, "portal_labels", {}).get(portal.id, portal.label or "Портал"),
+            )
+            painter.restore()
+    if tools:
+        tools.paint_handles(painter)
+    painter.restore()
+
+
+class VectorTools(QWidget):
+    committed = Signal(object)
+    removed = Signal(str)
+    portal_requested = Signal(float, float)
+    portal_opened = Signal(str)
+    portal_edited = Signal(str)
+    inspector_requested = Signal(object)
+
+    def __init__(self, view, parent=None):
+        super().__init__(parent)
+        self.view = view
+        view.vector_tools = self
+        self.mode = "select"
+        self.points = []
+        self.selected = None
+        self.preview = None
+        self.gesture = None
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        bar = QToolBar()
+        layout.addWidget(bar)
+        self.choice = QComboBox()
+        for name, key in (
+            ("Выбор фигур", "select"),
+            ("Круг", "circle"),
+            ("Треугольник", "triangle"),
+            ("Прямоугольник", "rectangle"),
+            ("Четырёхугольник", "quadrilateral"),
+            ("Конус", "cone"),
+            ("Многоугольник", "polygon"),
+            ("Портал", "portal"),
+            ("Вершины", "vertices"),
+        ):
+            self.choice.addItem(
+                icon(
+                    "portal"
+                    if key == "portal"
+                    else "shape_" + key
+                    if key
+                    in {"circle", "triangle", "rectangle", "quadrilateral", "cone", "polygon"}
+                    else "vector"
+                ),
+                name,
+                key,
+            )
+        self.choice.currentIndexChanged.connect(self.change_mode)
+        bar.addWidget(self.choice)
+        self.notice = QLabel("Фигуры видны игрокам поверх тумана. Escape — отмена")
+        self.notice.setWordWrap(True)
+        layout.addWidget(self.notice)
+        self.inspector = QWidget()
+        self.destroyed.connect(self.inspector.deleteLater)
+        form = QFormLayout(self.inspector)
+        self.name = QLineEdit()
+        self.color = QPushButton("#73d6b2")
+        self.color.clicked.connect(self.choose_color)
+        self.color.setToolTip("Выбрать цвет фигуры")
+        self.opacity = QDoubleSpinBox()
+        self.opacity.setRange(0, 100)
+        self.opacity.setSuffix("%")
+        self.opacity.setSingleStep(5)
+        self.rotation = QDoubleSpinBox()
+        self.rotation.setRange(-360, 360)
+        for label, control in (
+            ("Название", self.name),
+            ("Цвет", self.color),
+            ("Непрозрачность", self.opacity),
+            ("Поворот", self.rotation),
+        ):
+            form.addRow(label, control)
+        apply = QPushButton("Применить свойства")
+        apply.clicked.connect(self.apply_properties)
+        form.addRow(apply)
+        delete = QPushButton("Удалить фигуру")
+        delete.clicked.connect(self.delete)
+        form.addRow(delete)
+        view.viewport().installEventFilter(self)
+        view.installEventFilter(self)
+        view.viewport().setMouseTracking(True)
+
+    def choose_color(self):
+        value = QColorDialog.getColor(QColor(self.color.text()), self.inspector, "Цвет фигуры")
+        if value.isValid():
+            self.color.setText(value.name())
+            pixmap = QPixmap(16, 16)
+            pixmap.fill(value)
+            self.color.setIcon(QIcon(pixmap))
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.change_mode()
+
+    def hideEvent(self, event):
+        self.cancel()
+        self.view.viewport().unsetCursor()
+        super().hideEvent(event)
+
+    def change_mode(self):
+        self.cancel()
+        self.mode = self.choice.currentData()
+        self.view.viewport().setCursor(
+            Qt.CursorShape.ArrowCursor
+            if self.mode in {"select", "vertices"}
+            else Qt.CursorShape.CrossCursor
+        )
+
+    def cancel(self):
+        self.points.clear()
+        self.preview = None
+        self.gesture = None
+        self.view.viewport().update()
+
+    def value(self):
+        return next((v for v in self.view.vector_shapes if v.id == self.selected), None)
+
+    def select(self, value):
+        self.selected = value.id if value else None
+        self.inspected = value
+        if value:
+            self.name.setText(value.name)
+            self.color.setText(value.color)
+            self.opacity.setValue(value.opacity * 100)
+            self.rotation.setValue(value.rotation)
+            self.inspector_requested.emit(self.inspector)
+        self.view.viewport().update()
+
+    def apply_properties(self):
+        value = self.value()
+        if value is None:
+            return
+        if value != self.inspected:
+            self.notice.setText("Фигура изменена другим представлением. Выберите её заново.")
+            return
+        try:
+            candidate = replace(
+                value,
+                name=self.name.text(),
+                color=self.color.text(),
+                opacity=self.opacity.value() / 100,
+                rotation=self.rotation.value(),
+            )
+            self.committed.emit(candidate)
+            if self.value() == candidate:
+                self.inspected = candidate
+        except ValueError as error:
+            self.notice.setText(str(error))
+
+    def delete(self):
+        if self.selected:
+            self.removed.emit(self.selected)
+            self.selected = None
+            self.cancel()
+
+    def finish(self):
+        try:
+            x = sum(p[0] for p in self.points) / len(self.points)
+            y = sum(p[1] for p in self.points) / len(self.points)
+            value = MapShape(self.mode, tuple((a - x, b - y) for a, b in self.points), x=x, y=y)
+            self.committed.emit(value)
+            self.cancel()
+            self.select(value)
+        except ValueError as error:
+            self.notice.setText(str(error))
+
+    def handles(self, value):
+        rect = local_path(value).boundingRect()
+        mapping = transform(value)
+        points = (
+            list(value.points)
+            if self.mode == "vertices" and value.kind not in {"circle", "cone", "rectangle"}
+            else [(rect.right(), rect.bottom())]
+        )
+        mapped = [mapping.map(QPointF(*p)) for p in points]
+        top = mapping.map(QPointF(rect.center().x(), rect.top()))
+        screen = self.view.viewportTransform().map(top) + QPointF(0, -25)
+        inverse = self.view.viewportTransform().inverted()[0]
+        return mapped + [inverse.map(screen)]
+
+    def near(self, a, b, radius=10):
+        delta = self.view.viewportTransform().map(a) - self.view.viewportTransform().map(b)
+        return delta.x() ** 2 + delta.y() ** 2 <= radius**2
+
+    def paint_handles(self, painter):
+        value = self.preview or self.value()
+        if isinstance(value, MapShape) and self.selected == value.id:
+            for point in self.handles(value):
+                painter.save()
+                point = painter.worldTransform().map(point)
+                painter.resetTransform()
+                painter.setPen(QPen(QColor("#ffffff"), 1))
+                painter.setBrush(QColor("#303030"))
+                painter.drawEllipse(point, 5, 5)
+                painter.restore()
+        if self.points:
+            path = QPainterPath(QPointF(*self.points[0]))
+            for p in self.points[1:]:
+                path.lineTo(QPointF(*p))
+            if hasattr(self, "cursor"):
+                cursor = self.cursor
+                snapped = len(self.points) >= 3 and self.near(cursor, QPointF(*self.points[0]))
+                path.lineTo(QPointF(*self.points[0]) if snapped else cursor)
+            painter.setPen(QPen(QColor("#eeeeee"), 0))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(path)
+            for i, p in enumerate(self.points):
+                painter.save()
+                point = painter.worldTransform().map(QPointF(*p))
+                painter.resetTransform()
+                painter.setBrush(
+                    QColor(
+                        "#73d6b2"
+                        if i == 0 and len(self.points) >= 3 and self.near(self.cursor, QPointF(*p))
+                        else "#303030"
+                    )
+                )
+                painter.drawEllipse(point, 5, 5)
+                painter.restore()
+
+    def eventFilter(self, watched, event):
+        if self.view.role != "viewer" or not self.isVisible():
+            return False
+        kind = event.type()
+        if kind == QEvent.Type.KeyPress:
+            if event.key() == Qt.Key.Key_Escape:
+                self.cancel()
+                return True
+            if event.key() in {Qt.Key.Key_Return, Qt.Key.Key_Enter} and self.points:
+                self.finish()
+                return True
+            if event.key() == Qt.Key.Key_Delete and self.selected:
+                self.delete()
+                return True
+        if watched is not self.view.viewport():
+            return False
+        if kind not in {
+            QEvent.Type.MouseMove,
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseButtonRelease,
+            QEvent.Type.MouseButtonDblClick,
+        }:
+            return False
+        point = self.view.mapToScene(event.position().toPoint())
+        self.cursor = point
+        if kind == QEvent.Type.MouseMove:
+            if self.gesture:
+                self.update_gesture(point, event.modifiers())
+            if not self.gesture and self.mode in {"select", "vertices"}:
+                value = self.value()
+                hover = value and any(self.near(point, p) for p in self.handles(value))
+                self.view.viewport().setCursor(
+                    Qt.CursorShape.CrossCursor if hover else Qt.CursorShape.ArrowCursor
+                )
+            self.view.viewport().update()
+            return bool(self.gesture or self.points or self.mode not in {"select", "vertices"})
+        if event.button() == Qt.MouseButton.RightButton and kind == QEvent.Type.MouseButtonPress:
+            portal = next(
+                (p for p in self.view.vector_portals if self.near(point, QPointF(p.x, p.y), 16)),
+                None,
+            )
+            if portal:
+                menu = QMenu(self)
+                edit = menu.addAction("Перепривязать / изменить подпись")
+                delete = menu.addAction("Удалить портал")
+                chosen = menu.exec(event.globalPosition().toPoint())
+                if chosen == edit:
+                    self.portal_edited.emit(portal.id)
+                elif chosen == delete:
+                    self.removed.emit(portal.id)
+                return True
+        if event.button() != Qt.MouseButton.LeftButton:
+            return False
+        if kind == QEvent.Type.MouseButtonRelease and self.gesture:
+            value = self.preview
+            previous = self.gesture[1]
+            current = (
+                next((v for v in self.view.vector_portals if v.id == previous.id), None)
+                if previous and mode_is_portal(self.gesture)
+                else self.value()
+            )
+            if previous and current != previous:
+                self.notice.setText("Фигура изменена другим представлением. Повторите жест.")
+                self.cancel()
+                return True
+            self.cancel()
+            if value:
+                self.committed.emit(value)
+                self.select(value)
+            return True
+        if kind not in {QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick}:
+            return False
+        if self.mode == "portal":
+            self.portal_requested.emit(point.x(), point.y())
+            return True
+        if self.mode in {"select", "vertices"}:
+            for portal in reversed(self.view.vector_portals):
+                if self.near(point, QPointF(portal.x, portal.y), 16):
+                    self.selected = portal.id
+                    if kind == QEvent.Type.MouseButtonDblClick:
+                        self.portal_opened.emit(portal.id)
+                    else:
+                        self.gesture = ("portal", portal, point, 0)
+                    return True
+            value = self.value()
+            if value:
+                handles = self.handles(value)
+                for index, handle in enumerate(handles):
+                    if self.near(point, handle):
+                        self.gesture = (
+                            "rotate"
+                            if index == len(handles) - 1
+                            else "vertex"
+                            if self.mode == "vertices"
+                            and value.kind not in {"circle", "cone", "rectangle"}
+                            else "resize",
+                            value,
+                            point,
+                            index,
+                        )
+                        return True
+            for value in reversed(self.view.vector_shapes):
+                if transform(value).map(local_path(value)).contains(point):
+                    self.select(value)
+                    self.gesture = ("move", value, point, 0)
+                    return True
+            self.select(None)
+            return False
+        if self.mode in {"circle", "cone", "rectangle"}:
+            self.gesture = ("create", None, point, 0)
+            return True
+        if (
+            self.mode == "polygon"
+            and len(self.points) >= 3
+            and self.near(point, QPointF(*self.points[0]))
+        ):
+            self.finish()
+            return True
+        if len(self.points) >= 512:
+            self.notice.setText("Не более512 вершин. Отмените жест или замкните контур.")
+            return True
+        self.points.append((point.x(), point.y()))
+        expected = {"triangle": 3, "quadrilateral": 4}.get(self.mode)
+        if expected and len(self.points) == expected:
+            self.finish()
+        self.view.viewport().update()
+        return True
+
+    def update_gesture(self, point, modifiers):
+        mode, value, start, index = self.gesture
+        try:
+            if mode == "create":
+                dx, dy = point.x() - start.x(), point.y() - start.y()
+                length = math.hypot(dx, dy)
+                if self.mode == "rectangle":
+                    value = MapShape(
+                        "rectangle",
+                        (
+                            (-dx / 2, -dy / 2),
+                            (dx / 2, -dy / 2),
+                            (dx / 2, dy / 2),
+                            (-dx / 2, dy / 2),
+                        ),
+                        x=start.x() + dx / 2,
+                        y=start.y() + dy / 2,
+                    )
+                else:
+                    value = MapShape(
+                        self.mode,
+                        ((length, 0),),
+                        x=start.x(),
+                        y=start.y(),
+                        rotation=math.degrees(math.atan2(dy, dx)) if self.mode == "cone" else 0,
+                    )
+            elif mode in {"move", "portal"}:
+                delta = point - start
+                value = replace(value, x=value.x + delta.x(), y=value.y + delta.y())
+            elif mode == "rotate":
+                angle = value.rotation + math.degrees(
+                    math.atan2(point.y() - value.y, point.x() - value.x)
+                    - math.atan2(start.y() - value.y, start.x() - value.x)
+                )
+                angle = (angle + 180) % 360 - 180
+                if modifiers & Qt.KeyboardModifier.ShiftModifier:
+                    angle = round(angle / 15) * 15
+                value = replace(value, rotation=angle)
+            elif mode == "vertex":
+                local = transform(value).inverted()[0].map(point)
+                points = list(value.points)
+                points[index] = (local.x(), local.y())
+                value = replace(value, points=tuple(points))
+            else:
+                rect = local_path(value).boundingRect()
+                local = transform(value).inverted()[0].map(point)
+                center = (
+                    rect.center()
+                    if modifiers & Qt.KeyboardModifier.ShiftModifier
+                    else rect.topLeft()
+                )
+                sx = max(0.01, (local.x() - center.x()) / max(0.01, rect.right() - center.x()))
+                sy = max(0.01, (local.y() - center.y()) / max(0.01, rect.bottom() - center.y()))
+                if value.kind in {"circle", "cone"}:
+                    new_scale = max(0.0001, min(1e5, value.scale * max(sx, sy)))
+                    anchor_world = transform(value).map(center)
+                    rotated = (
+                        QTransform().rotate(value.rotation).scale(new_scale, new_scale).map(center)
+                    )
+                    value = replace(
+                        value,
+                        scale=new_scale,
+                        x=anchor_world.x() - rotated.x(),
+                        y=anchor_world.y() - rotated.y(),
+                    )
+                else:
+                    if modifiers & Qt.KeyboardModifier.AltModifier:
+                        sx = sy = max(sx, sy)
+                    value = replace(
+                        value,
+                        points=tuple(
+                            (center.x() + (x - center.x()) * sx, center.y() + (y - center.y()) * sy)
+                            for x, y in value.points
+                        ),
+                    )
+            self.preview = value
+            self.view.viewport().update()
+        except ValueError as error:
+            self.preview = None
+            self.notice.setText(str(error))

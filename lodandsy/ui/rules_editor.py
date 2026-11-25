@@ -329,6 +329,12 @@ class RulesEditor(QDialog):
                 + "Выход: "
                 + field_label(key)
                 + ". Входы задаются ниже; проверка примера не меняет мир."
+                + (
+                    " Формула КД задаёт основу и Ловкость; щит и модификаторы предметов "
+                    "добавляются после неё. Ручной итог включает всё."
+                    if key == "ac"
+                    else ""
+                )
             )
             self.tokens.clear()
             self.tokens.addItem("Вставить…", "")
@@ -379,6 +385,10 @@ class RulesEditor(QDialog):
                 if definition
                 else True
                 if name in {"is_character", "is_single_class"}
+                else "none"
+                if key == "armor_type"
+                else 10
+                if key == "armor_base"
                 else 0,
             )
             if name == "hp_gains":
@@ -389,12 +399,19 @@ class RulesEditor(QDialog):
                 kind = "sequence"
             elif (
                 name in {"is_character", "is_single_class"}
+                or key == "shield"
                 or definition
                 and definition.data_type == "bool"
             ):
                 control = QCheckBox()
                 control.setChecked(bool(default))
                 kind = "bool"
+            elif key == "armor_type":
+                control = QComboBox()
+                for value in ("none", "light", "medium", "heavy"):
+                    control.addItem(choice_label(key, value), value)
+                control.setCurrentIndex(control.findData(default))
+                kind = "choice"
             elif definition and definition.choices:
                 control = QComboBox()
                 if definition.nullable:

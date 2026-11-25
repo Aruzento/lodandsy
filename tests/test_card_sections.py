@@ -30,7 +30,9 @@ def test_uuid_sections_rename_undo_and_inventory_shared_views(project, tmp_path,
     table = app.actions.section_table(card.id, inventory.id)
     assert app.actions.section_table(card.id, inventory.id).id == table.id
     assert app.cards_service.entities.get(table.id).parent_id == card.id
-    assert [c.name for c in table.columns] == ["Предмет", "Количество", "Описание", "Стоимость"]
+    assert [c.name for c in table.columns] == [
+        "Предмет", "Количество", "Описание", "Стоимость", "Активен / надет"
+    ]
     editor.select_section(inventory.id)
     embedded = editor._embedded_tables[inventory.id]
     separate = app.tables.open_table(table.id).widget()

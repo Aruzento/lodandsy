@@ -3,7 +3,7 @@
 from html import escape
 
 from PySide6.QtGui import QAction, QKeySequence
-from PySide6.QtWidgets import QInputDialog
+from PySide6.QtWidgets import QInputDialog, QMessageBox
 
 from lodandsy.application.card_inspector_binding import CardInspectorBinding
 from lodandsy.application.cards_controller import CardsController
@@ -49,6 +49,9 @@ class AppController:
         self.actions = ProjectActions(
             self.core, self.cards_service, self.tables_service, self.maps_service
         )
+        self.tables_service.cell_edit_command = self._table_cell_command
+        self.tables_service.cell_caption = self.actions.inventory_activity_caption
+        self.tables_service.reference_caption_fields = frozenset({"equipment_kind"})
         self.tables = TablesController(
             window, self.window_manager, self.tables_service, self.open_entity
         )
@@ -89,6 +92,12 @@ class AppController:
         self.card_views.placements_query = self.actions.actor_placements
         self.card_views.locate_placement = self.maps.focus_token
         self.card_views.delete_actor = self.actions.delete_actor
+
+        def show_map_panel(widget):
+            self.inspector_binding.finish_edits()
+            window.inspector_panel.show_feature_page(widget)
+
+        self.maps.show_vector_inspector = show_map_panel
         self.maps.show_actor = lambda card, actor, scale=None: self.inspector_binding.show_actor(
             ActorRef(card, actor), feet_per_cell=scale
         )
@@ -160,6 +169,33 @@ class AppController:
     @staticmethod
     def card_editor_window_key(key):
         return f"card-editor:{key}"
+
+    def _table_cell_command(self, key, row_id, column_id, value, *, expected, parsed):
+        table = self.tables_service.get_table(key)
+        column = next(c for c in table.columns if c.id == column_id)
+        if not parsed or column.key != "active" or self.actions.inventory_owner(key) is None:
+            return NotImplemented
+        row = next(r for r in table.rows if r.id == row_id)
+        if row.value(column_id) != expected and row.value(column_id) != value:
+            return self.tables_service.set_cell(
+                key, row_id, column_id, value, expected=expected, parsed=True
+            )
+        guard = self.core.generation, self.core.serial
+        conflicts = self.actions.equipment_conflicts(key, row_id) if value is True else ()
+        if conflicts:
+            names = ", ".join(name for _, name in conflicts)
+            answer = QMessageBox.question(
+                self.window,
+                "Заменить экипировку?",
+                f"Уже надето: {names}. Снять и надеть выбранный предмет?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return self.tables_service.get_table(key)
+        return self.actions.set_inventory_activity(
+            key, row_id, value, replace_existing=bool(conflicts), expected=guard
+        )
 
     def ensure_project(self):
         return self.resources.store is not None or (

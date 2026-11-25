@@ -80,7 +80,7 @@ Qt дизайн нейтральный graphite #191919/#202020. Private мак�
 item UUID, positive integer count, live description/cost без stored derived cells.
 Object Cards library, original alpha/aspect long-edge128; front layer сверху.
 Full snapshot writer/synchronous backup4GiB и libvips tiles сохраняются.
-Схема по факту: SQLite15/Card6/Map7/Actor1/Rules1/Table3, UI state4; legacy/migration adapters нет.
+Схема по факту: SQLite16/Card7/Map8/Actor1/Rules1(profile2)/Table3, UI state4; legacy/migration adapters нет.
 Targeted batches после блоков, общий gate/build после стабилизации; report/draw.io/checklist.
 Git-действия только в конце после проверки по последним указаниям владельца.
 
@@ -117,7 +117,7 @@ scalar/delete Undo и межкартовый перенос отложены. Т
 
 Дополнение UI-приёмки A–F / ADR-034: прежнее «характеристики только Inspector» отменено
 владельцем. Cards-owned виртуальные страницы Характеристики/Модификаторы используют
-те же FieldEdits/ValueAddress, без Section и изменения SQLite15/Card6/UIstate4. Явный
+те же FieldEdits/ValueAddress, без Section и изменения тогдашних SQLite15/Card6/UIstate4. Явный
 контекст база/Actor, просмотр не создаёт участника. Технический Card Inspector и
 оперативный Actor/Map Inspector разделены. Русский UI catalog не меняет domain IDs;
 qtbase_ru входит в сборку. Typed Item dialog/история по уровням/примеры формул вместо
@@ -125,3 +125,21 @@ qtbase_ru входит в сборку. Typed Item dialog/история по у
 preview/apply. Отчёт/матрица: docs/validation/2026-11-21-ui-acceptance-fix.md и
 2026-11-21-ui-fields.md. До ручной приёмки ARU-65/80/83 остаются В работе. Commit/push/
 merge/release этим пакетом не разрешены. Частные вложения не включать в source ZIP.
+
+
+Дополнение 22.11.2026 — лист персонажа v2 / ADR-035: inline ability scores, 3/2/1
+блоки с 18skills/6saves, homebrew race/class/subclass/level. Item equipment facts
+определяются только active inventory rows, один armor/shield с atomic replace/cancel.
+Card armor_type/armor_base/shield удалены; это только resolved formula inputs.
+SQLite16/Card7, профиль5e14 version2; legacy/миграции отсутствуют по новому прямому
+решению владельца «все миры тестовые». SQLite15 отклоняется без записи/удаления.
+Ручной итоговый AC побеждает, оборудование и источники видны в native AC dialog.
+Отчёт: docs/validation/2026-11-22-character-sheet-v2.md. Новые Git-публикации не разрешены.
+
+Maps M5 /25.11.2026 /ADR-036: Maps owns immutable shapes/portals in Map8, читает
+Map7 с пустыми новыми коллекциями без записи на open. SQLite16/Card7 неизменны.
+Фигуры+подписи публичны ПОСЛЕ fog; handles/previews/portals GM-only. Стрелки и
+original-image overlays transient, hidden movement data не передаётся Player.
+Inspector feature-page API нейтрален, composition root координирует владельцев.
+Commit/push текущего M5 разрешены владельцем после проверок; merge/release отдельно.
+Матрица и поставка: docs/validation/2026-11-25-map-m5.md.

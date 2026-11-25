@@ -21,18 +21,18 @@ Player при новых размещениях использует выбра�
 Формулы проекта открываются из шестерёнки справа («Игровая система и правила…»), проверяются и применяются явно; shipped
 формулы остаются доступны. Только 5e 2014: не заявляются полный бой, multiclass HP,
 слоты заклинаний/остатки Hit Dice, условия эффектов или конструктор новых переменных.
-Старый SQLite14 безопасно отклоняется без миграции и перезаписи.
+Старые SQLite14/15 безопасно отклоняется без миграции и перезаписи.
 
 Исправление непройденной UI-приёмки: [ADR-034](docs/adr/034-native-game-sheets-and-russian-ui.md),
 [отчёт A–F / U01–U18](docs/validation/2026-11-21-ui-acceptance-fix.md),
 [матрица доступности полей](docs/validation/2026-11-21-ui-fields.md).
 Inspector карточки оставляет технические свойства; оперативный Inspector карты — состояние
 участника. Item имеет компактную вкладку «Модификаторы» с типизированной формой.
-Системные страницы не добавляют Section и не меняют формат SQLite15/Card6/UIstate4.
+Системные страницы не добавляют Section и не меняют формат SQLite16/Card7/UIstate4.
 
 Cards/Tables/Maps/Dice сохраняют отдельных владельцев ADR-027. Composition root
 связывает публичные контракты, Core/Resources/Media/Navigation и атомарные ProjectActions.
-Один канон EntityCollection/SQLite15/Card6/Map7/Actor1/Rules1/Table3, assets отдельно, UI state4.
+Один канон EntityCollection/SQLite16/Card7/Map8/Actor1/Rules1(profile2)/Table3, assets отдельно, UI state4.
 Legacy не адаптируется: несовместимый мир отклоняется без записи; пользовательские
 проекты автоматически не удаляются. MOW importer/source fields удалены.
 
@@ -93,9 +93,25 @@ python -m ruff check .
 python -m pip check
 git diff --check
 powershell -File build_support/build_windows.ps1 -Python .venv/Scripts/python.exe -SkipPackage
-python -m build_support.package_windows --archive LODANDSY-UI-Acceptance-Fix-2026-11-21.zip
+python -m build_support.package_windows --archive LODANDSY-Character-Sheet-v2-2026-11-22.zip
 ```
 
 Build использует requirements-build.lock, лицензии/источники входят в portable ZIP.
 Private references, пользовательские миры и .prototype-deps в source bundle не входят.
 Git — только в конце после финальной проверки по последним указаниям владельца.
+
+
+Дополнение 22.11.2026 — лист персонажа v2 / ADR-035: inline ability scores, 3/2/1
+блоки с 18skills/6saves, homebrew race/class/subclass/level. Item equipment facts
+определяются только active inventory rows, один armor/shield с atomic replace/cancel.
+Card armor_type/armor_base/shield удалены; это только resolved formula inputs.
+SQLite16/Card7, профиль5e14 version2; legacy/миграции отсутствуют по новому прямому
+решению владельца «все миры тестовые». SQLite15 отклоняется без записи/удаления.
+Ручной итоговый AC побеждает, оборудование и источники видны в native AC dialog.
+Отчёт: docs/validation/2026-11-22-character-sheet-v2.md. Новые Git-публикации не разрешены.
+
+Полировка 25.11.2026: docs/validation/2026-11-25-polish.md; новый кандидат
+LODANDSY-Polish-2026-11-25.zip. SQLite16/Card7 и принятые игровые контракты сохранены.
+
+Maps M5: docs/validation/2026-11-25-map-m5.md; ADR-036. Фигуры поверх fog,
+порталы, расстояния и original-image presentation. Новый кандидат LODANDSY-Map-M5-2026-11-25.zip.

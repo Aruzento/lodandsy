@@ -118,7 +118,7 @@ def test_schema14_and_corrupt_actor_are_not_rewritten(project, tmp_path):
         controller.store.load()
     assert hashlib.sha256(path.read_bytes()).hexdigest() == before
     with sqlite3.connect(path) as connection:
-        connection.execute("PRAGMA user_version=15")
+        connection.execute("PRAGMA user_version=16")
         connection.execute("UPDATE map_token SET actor_id=?", (card.id,))
     before = path.read_bytes()
     with pytest.raises(ProjectError):

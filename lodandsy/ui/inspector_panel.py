@@ -330,6 +330,20 @@ class InspectorPanel(QDockWidget):
         del title_blocker
         del parent_blocker
 
+    @property
+    def feature_page_active(self):
+        return self.pages.currentIndex() > 1
+
+    def clear_feature_page(self):
+        if self.feature_page_active:
+            self.pages.setCurrentIndex(1)
+
+    def show_feature_page(self, widget):
+        """Display a feature-owned native panel without transferring data ownership."""
+        if self.pages.indexOf(widget) < 0:
+            self.pages.addWidget(widget)
+        self.pages.setCurrentWidget(widget)
+
     def show_entity_summary(self, entity_id, title):
         self.clear_card()
         self.id_edit.setText(entity_id)

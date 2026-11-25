@@ -21,7 +21,23 @@ class ItemPage(QWidget):
         layout.addWidget(self.conflicts)
 
     def set_card(self, card, drafts, active):
-        self.properties.set_card(card, ("rarity", "weight", "cost"), drafts)
+        self.properties.set_card(
+            card,
+            (
+                "equipment_kind",
+                "armor_category",
+                "armor_ac",
+                "shield_bonus",
+                "rarity",
+                "weight",
+                "cost",
+            ),
+            drafts,
+        )
+        kind = card.value("equipment_kind")
+        for key in ("armor_category", "armor_ac"):
+            self.properties.set_field_visible(key, kind == "armor")
+        self.properties.set_field_visible("shield_bonus", kind == "shield")
         self.modifiers.set_value(
             card.value("modifiers"),
             raw=drafts.get((card.id, "modifiers")),

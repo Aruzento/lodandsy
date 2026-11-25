@@ -116,3 +116,14 @@ AST gate. Системные страницы UI используют прежн
 получает callback перехода к Card+ActorRef из composition root, не импортирует
 private Card widgets. Общие FieldEdits/ConflictBar/Qt theme остаются shared.
 Фактический граф: 101 модуль / 250 связей / 0 циклов (imports-ui-acceptance.json).
+
+
+## Дополнение 22.11.2026 — ADR-035
+
+Лист v2 и equipment facts заменяют сохранённую броню/щит Card и прежние proficiency
+формы. Новый SQLite16/Card7/profile2 по прямому разрешению владельца «все миры тестовые»;
+миграций/legacy нет, старые файлы отклоняются без записи. Actor/Token ownership,
+FieldEdits, native document lifecycle и функциональные границы сохранены.
+Generic Tables cell hooks собирает composition root; pure EquipmentFacts и профиль —
+Cards. AST105modules/264edges/0cycles, gate не ослаблен. Подробности и критерии1–7:
+docs/validation/2026-11-22-character-sheet-v2.md.

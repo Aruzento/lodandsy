@@ -31,7 +31,7 @@ SKILL_NAMES = dict(
             "Скрытность",
             "Магия",
             "История",
-            "Расследование",
+            "Анализ",
             "Природа",
             "Религия",
             "Уход за животными",
@@ -91,6 +91,9 @@ LABELS.update({a + "_save": "Спасбросок · " + n for a, n in ABILITY_N
 LABELS.update({a + "_save_proficient": n for a, n in ABILITY_NAMES.items()})
 LABELS.update({s + "_proficiency": n for s, n in SKILL_NAMES.items()})
 CHOICES = {
+    "item": "Обычный предмет",
+    "armor": "Доспех",
+    "shield": "Щит",
     "auto": "Автоматически",
     "manual": "Вручную — итоговое",
     "single_class": "Один класс",
@@ -159,7 +162,10 @@ def signed(value):
 def value_text(value, *, sign=False):
     if value.status != "ok":
         return STATUSES.get(value.status, "Нет результата")
-    return signed(value.value) if sign else str(value.value)
+    number = value.value
+    if sign:
+        return signed(number)
+    return str(int(number)) if type(number) is float and number.is_integer() else str(number)
 
 
 def source_text(source):

@@ -52,8 +52,8 @@ def test_base_no_actor_tiles_and_all_fields_have_a_surface(project):
     assert [
         sheet.tiles[key].result.text()
         for key in ("strength", "dexterity", "constitution", "charisma")
-    ] == ["−1 (8)", "+0 (10)", "+1 (12)", "+3 (16)"]
-    assert "Максимум" in sheet.results["hp_max"].text()
+    ] == ["−1", "+0", "+1", "+3"]
+    assert sheet.results["hp_max"].text() == "Не задано"
     assert "hp_current" not in sheet.controls
     assert app.cards.get(card.id).actors == ()
     base_keys = {key for key in sheet.controls if FIELD_DEFINITIONS[key].scope == "card"}
@@ -87,8 +87,8 @@ def test_sheet_item_source_recalculates_hp_without_healing_and_clamps(project):
     )
     ref = app.cards_service.create_actor(card.id)
     sheet = app.card_views.open_game_sheet(card.id, ref.actor_id).widget().game_sheet
-    assert sheet.tiles["constitution"].result.text() == "+2 (14)"
-    assert sheet.results["hp_max"].text() == "44 / 44"
+    assert sheet.tiles["constitution"].result.text() == "+2"
+    assert sheet.results["hp_max"].text() == "/ 44"
     item = app.create_card("Амулет", card_type="item")
     app.cards_service.update_card_fields(
         item.id,
@@ -102,19 +102,19 @@ def test_sheet_item_source_recalculates_hp_without_healing_and_clamps(project):
     columns = {c.key: c.id for c in table.columns}
     app.tables_service.set_cell(table.id, row.id, columns["item"], item.id)
     app.tables_service.set_cell(table.id, row.id, columns["active"], True, parsed=True)
-    assert sheet.tiles["constitution"].result.text() == "+3 (16)"
-    assert sheet.results["hp_max"].text() == "44 / 49"
+    assert sheet.tiles["constitution"].result.text() == "+3"
+    assert sheet.results["hp_max"].text() == "/ 49"
     assert "Амулет" in sheet.sources.text()
     app.cards_service.update_actor(ref, {"hp_current": 49})
     app.tables_service.set_cell(table.id, row.id, columns["active"], False, parsed=True)
-    assert sheet.results["hp_max"].text() == "44 / 44"
+    assert sheet.results["hp_max"].text() == "/ 44"
     binding = app.card_views.game_bindings[card.id]
     binding.select_actor(None)
     binding.commit("hp_max_mode", "manual")
     binding.commit("hp_max", "0")
     binding.select_actor(ref.actor_id)
     assert sheet.hp_progress.value() == 0
-    assert sheet.results["hp_max"].text() == "0 / 0"
+    assert sheet.results["hp_max"].text() == "/ 0"
 
 
 def test_native_history_explicit_accept_cancel_and_bad_ui_preference(qtbot):
@@ -202,7 +202,7 @@ def test_real_sheet_width_reflows_after_layout_and_preserves_focus(project, qtbo
     app.window.show()
     floating = dock.dock.floatingDockContainer()
     sheet = dock.widget().game_sheet
-    for width, columns in ((1040, 6), (660, 3), (400, 2)):
+    for width, columns in ((1040, 3), (660, 2), (400, 1)):
         floating.resize(width, 950)
         floating.show()
         qtbot.waitUntil(lambda: sheet._columns == columns)

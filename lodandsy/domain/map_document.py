@@ -197,6 +197,122 @@ def validate_map_contents(tokens, grid, layers, objects):
 
 
 @dataclass(frozen=True, slots=True)
+class MapShape:
+    kind: str
+    points: tuple
+    x: float = 0
+    y: float = 0
+    rotation: float = 0
+    scale: float = 1
+    color: str = "#73d6b2"
+    opacity: float = 0.3
+    name: str = ""
+    id: str = field(default_factory=lambda: str(uuid4()))
+
+    def __post_init__(self):
+        validate_id(self.id)
+        if self.kind not in {"circle", "triangle", "rectangle", "quadrilateral", "cone", "polygon"}:
+            raise ValueError("Неизвестная фигура")
+        for value in (self.x, self.y):
+            _number(value, -1e9, 1e9, "координата фигуры")
+        _number(self.rotation, -360, 360, "поворот")
+        _number(self.scale, 0.0001, 1e5, "масштаб")
+        _number(self.opacity, 0, 1, "прозрачность фигуры")
+        if not isinstance(self.name, str) or len(self.name) > 200:
+            raise ValueError("Некорректное название фигуры")
+        MapGrid(color=self.color)
+        if not isinstance(self.points, tuple) or not 1 <= len(self.points) <= 512:
+            raise ValueError("Некорректные вершины")
+        for point in self.points:
+            if not isinstance(point, tuple) or len(point) != 2:
+                raise ValueError("Некорректная вершина")
+            for value in point:
+                _number(value, -1e7, 1e7, "вершина")
+        extent = max(abs(v) for point in self.points for v in point)
+        if max(abs(self.x), abs(self.y)) + 2 * extent * self.scale > 1e9:
+            raise ValueError("Фигура выходит за числовые границы")
+        if self.kind in {"circle", "cone"}:
+            if len(self.points) != 1 or self.points[0][1] != 0:
+                raise ValueError("Ожидается один размер")
+            _number(self.points[0][0], 0.01, 1e7, "размер фигуры")
+        else:
+            validate_polygon(self.points)
+            if self.kind == "rectangle":
+                xs = {point[0] for point in self.points}
+                ys = {point[1] for point in self.points}
+                if (
+                    len(xs) != 2
+                    or len(ys) != 2
+                    or any(
+                        a[0] != b[0] and a[1] != b[1]
+                        for a, b in zip(self.points, (*self.points[1:], self.points[0]))
+                    )
+                ):
+                    raise ValueError("Прямоугольник должен сохранять прямые углы")
+            expected = {"triangle": 3, "rectangle": 4, "quadrilateral": 4}.get(self.kind)
+            if expected and len(self.points) != expected:
+                raise ValueError("Некорректное количество вершин")
+
+
+def validate_polygon(points):
+    if len(points) < 3 or len(set(points)) != len(points):
+        raise ValueError("Нужны разные вершины")
+    edges = list(zip(points, (*points[1:], points[0])))
+    area = sum(a[0] * b[1] - b[0] * a[1] for a, b in edges)
+    if abs(area) < 1e-6:
+        raise ValueError("Нулевая площадь")
+
+    def orient(a, b, c):
+        return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+    def on(a, b, c):
+        return min(a[0], b[0]) <= c[0] <= max(a[0], b[0]) and min(a[1], b[1]) <= c[1] <= max(
+            a[1], b[1]
+        )
+
+    for i, (a, b) in enumerate(edges):
+        for j, (c, d) in enumerate(edges):
+            if j <= i or j == i + 1 or (i == 0 and j == len(edges) - 1):
+                continue
+            u, v, w, t = orient(a, b, c), orient(a, b, d), orient(c, d, a), orient(c, d, b)
+            if (u * v < 0 and w * t < 0) or any(
+                (o == 0 and on(e, f, g))
+                for o, e, f, g in ((u, a, b, c), (v, a, b, d), (w, c, d, a), (t, c, d, b))
+            ):
+                raise ValueError("Самопересечение фигуры")
+
+
+@dataclass(frozen=True, slots=True)
+class MapPortal:
+    target_id: str
+    x: float
+    y: float
+    label: str = ""
+    id: str = field(default_factory=lambda: str(uuid4()))
+
+    def __post_init__(self):
+        validate_id(self.id)
+        validate_id(self.target_id)
+        for value in (self.x, self.y):
+            _number(value, 0, 1e9, "координата портала")
+        if not isinstance(self.label, str) or len(self.label) > 200:
+            raise ValueError("Некорректная подпись портала")
+
+
+def validate_vectors(shapes, portals):
+    for values, kind in ((shapes, MapShape), (portals, MapPortal)):
+        if (
+            not isinstance(values, tuple)
+            or len(values) > 10000
+            or not all(isinstance(v, kind) for v in values)
+        ):
+            raise ValueError("Некорректные инструменты карты")
+    ids = [v.id for v in (*shapes, *portals)]
+    if len(set(ids)) != len(ids):
+        raise ValueError("Повторяющийся UUID фигуры/портала")
+
+
+@dataclass(frozen=True, slots=True)
 class MapDocument:
     title: str
     asset_id: str
@@ -207,6 +323,8 @@ class MapDocument:
     objects: tuple[PlacedAssetObject, ...] = ()
     layers_initialized: bool = True
     fog: FogState = field(default_factory=FogState)
+    shapes: tuple = ()
+    portals: tuple = ()
 
     def __post_init__(self):
         validate_id(self.id)
@@ -217,6 +335,12 @@ class MapDocument:
         if type(self.layers_initialized) is not bool:
             raise ValueError("Invalid layer initialization state")
         validate_map_contents(self.tokens, self.grid, self.layers, self.objects)
+        validate_vectors(self.shapes, self.portals)
+        identifiers = [
+            v.id for v in (*self.tokens, *self.layers, *self.objects, *self.shapes, *self.portals)
+        ]
+        if len(set(identifiers)) != len(identifiers):
+            raise ValueError("Повторяющийся UUID объекта карты")
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,7 +352,9 @@ class MapPayload:
     objects: tuple = ()
     layers_initialized: bool = True
     fog: FogState = field(default_factory=FogState)
-    version: int = field(default=7, init=False)
+    shapes: tuple = ()
+    portals: tuple = ()
+    version: int = field(default=8, init=False)
 
     def __post_init__(self):
         validate_id(self.asset_id)
@@ -237,3 +363,9 @@ class MapPayload:
         if type(self.layers_initialized) is not bool:
             raise ValueError("Invalid layer initialization state")
         validate_map_contents(self.tokens, self.grid, self.layers, self.objects)
+        validate_vectors(self.shapes, self.portals)
+        identifiers = [
+            v.id for v in (*self.tokens, *self.layers, *self.objects, *self.shapes, *self.portals)
+        ]
+        if len(set(identifiers)) != len(identifiers):
+            raise ValueError("Повторяющийся UUID объекта карты")

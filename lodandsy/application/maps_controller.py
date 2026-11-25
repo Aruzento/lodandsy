@@ -1,16 +1,21 @@
 """Map viewer/editor lifecycle and native resources; dependencies are explicit public contracts."""
 
+from dataclasses import replace
 from pathlib import Path
 from threading import Event
+from types import SimpleNamespace
 
-from PySide6.QtCore import QEventLoop, QObject, Qt, Signal
+from PySide6.QtCore import QEventLoop, QObject, QRectF, Qt, Signal
 from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox, QProgressDialog
 
 from lodandsy.application.background_tasks import BackgroundTasks
 from lodandsy.application.fog_geometry import state_path
 from lodandsy.application.map_pyramid import MAX_SOURCE_BYTES, ensure_pyramid
 from lodandsy.application.map_tiles import MapTiles
+from lodandsy.domain.map_document import MapPortal, resolve_token
+from lodandsy.ui.entity_picker import EntityPicker
 from lodandsy.ui.map_editor import MapEditorWidget
+from lodandsy.ui.map_portrait import MapPortrait
 from lodandsy.ui.map_presentation import MapPresentation
 from lodandsy.ui.map_settings_dialogs import MapGridDialog
 from lodandsy.ui.map_widget import MapWidget
@@ -47,16 +52,21 @@ class MapsController(QObject):
         self._cancel = Event()
         self._decode_cancels = set()
         self.presentations = {}
+        self._portrait = None
+        self._portrait_views = []
         self._compiled_fog = {}
         self._map_ui = {}
         self._map_editor_ui = {}
         self._card_maps = {}
         self._actor_maps = {}
+        self.show_vector_inspector = lambda widget: None
         self.show_actor = lambda card_id, actor_id, scale=None: None
         self.update_actor_scale = lambda card_id, actor_id, scale: None
         self.progress = None
         self.importing = False
         service.map_changed.connect(self._refresh_map)
+        service.map_changed.connect(self._portal_dependents)
+        service.map_deleted.connect(self._portal_dependents)
         service.history_blocked.connect(window.show_notice)
         service.map_deleted.connect(self.close_presentation)
         service.map_deleted.connect(lambda key: self.windows.close_window(f"map:{key}"))
@@ -67,6 +77,7 @@ class MapsController(QObject):
         cards.actor_changed.connect(self._actor_changed)
 
     def reset(self):
+        self._close_portrait()
         for key in tuple(self.presentations):
             self.close_presentation(key)
         self._cancel.set()
@@ -90,6 +101,7 @@ class MapsController(QObject):
             self.import_finished.emit()
 
     def shutdown(self):
+        self._close_portrait()
         for key in tuple(self.presentations):
             self.close_presentation(key)
         self.wait_import()
@@ -214,6 +226,8 @@ class MapsController(QObject):
         QMessageBox.warning(self.window, "Карты и инструменты", str(error))
 
     def open_map(self, map_id):
+        if self._portrait and self._portrait[0] != map_id:
+            self._close_portrait()
         return self._open_map_view(map_id, False)
 
     def open_map_editor(self, map_id):
@@ -268,6 +282,22 @@ class MapsController(QObject):
                     lambda key, action: self._editor_object_action(map_id, key, action)
                 )
             else:
+                widget.vector_tools.portal_requested.connect(
+                    lambda x, y: self._portal_choose(map_id, x, y)
+                )
+                widget.vector_tools.portal_opened.connect(
+                    lambda key: self._portal_open(map_id, key)
+                )
+                widget.vector_tools.portal_edited.connect(
+                    lambda key: self._portal_edit(map_id, key)
+                )
+                widget.vector_tools.committed.connect(lambda value: self._put_vector(map_id, value))
+                widget.vector_tools.removed.connect(
+                    lambda key: self.service.delete_vector(map_id, key)
+                )
+                widget.vector_tools.inspector_requested.connect(
+                    lambda panel: self.show_vector_inspector(panel)
+                )
                 widget.fog_tools.edited.connect(
                     lambda path, erase: self._fog_edit(map_id, path, erase, widget)
                 )
@@ -280,6 +310,9 @@ class MapsController(QObject):
                 widget.grid_requested.connect(lambda: self._grid_settings(map_id))
                 widget.view.token_moved.connect(
                     lambda token, x, y: self._move_token(map_id, token, x, y, widget.view)
+                )
+                widget.view.measurement_changed.connect(
+                    lambda value: self._measurement(map_id, value, widget.view.measurement_mode)
                 )
                 widget.view.token_action.connect(
                     lambda token, action: self._token_action(map_id, token, action)
@@ -366,23 +399,32 @@ class MapsController(QObject):
             existing.raise_()
             existing.activateWindow()
             return existing
+        if self.presentations:
+            self.open_map(map_id)
+            self._retarget_presentation(map_id)
+            return self.presentations[map_id]
         viewer = self.windows.find_window("map:" + map_id)
         if viewer is None:
             viewer = self.open_map(map_id)
         document = self.service.get_map(map_id)
         presentation = MapPresentation(document.title)
         self.presentations[map_id] = presentation
-        presentation.closed.connect(lambda: self.presentations.pop(map_id, None))
+        presentation.map_id = map_id
+        presentation.closed.connect(self._close_portrait)
+        presentation.closed.connect(lambda: self.presentations.pop(presentation.map_id, None))
         self.media.ready.connect(presentation.image_ready)
         self._refresh_map(map_id)
         background = viewer.widget().view._background
         if background is not None:
             presentation.view.set_pyramid(background.pyramid, self.tiles)
+            self._refresh_map(map_id)
             viewer.widget().view._publish_camera()
         presentation.show()
         return presentation
 
     def close_presentation(self, map_id):
+        if self._portrait and self._portrait[0] == map_id:
+            self._close_portrait()
         presentation = self.presentations.get(map_id)
         if presentation:
             presentation.close()
@@ -391,6 +433,208 @@ class MapsController(QObject):
         presentation = self.presentations.get(map_id)
         if presentation:
             presentation.follow_camera(rect)
+
+    def _close_portrait(self):
+        self._portrait = None
+        views, self._portrait_views = self._portrait_views, []
+        for overlay in views:
+            overlay.close()
+
+    def _show_portrait(self, map_id, token):
+        window = self.windows.find_window("map:" + map_id)
+        if not window:
+            return
+        resolved = resolve_token(token, self.cards.get_card(token.card_id))
+        asset = self.resources.assets.get(resolved.asset_id)
+        if not asset:
+            self._error("Исходное изображение токена отсутствует")
+            return
+        view = window.widget().view
+        item = next((i for i in view._tokens if i.token.id == token.id), None)
+        hidden = (
+            item is None
+            or not item.isVisible()
+            or view._fog_path.intersects(item.sceneBoundingRect())
+        )
+        generation = self.service.core.generation
+        if (
+            hidden
+            and QMessageBox.question(
+                self.window,
+                "Показ скрытого изображения",
+                "Показать игрокам только изображение скрытого токена?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        if generation != self.service.core.generation:
+            return
+        current = next((v for v in self.service.get_map(map_id).tokens if v.id == token.id), None)
+        if (
+            current != token
+            or resolve_token(current, self.cards.get_card(token.card_id)).asset_id
+            != resolved.asset_id
+            or resolved.asset_id not in self.resources.assets
+        ):
+            self._error("Источник изображения изменён. Повторите показ.")
+            return
+        self._close_portrait()
+        self._portrait = (map_id, token.id, resolved.asset_id)
+        targets = [view]
+        if map_id in self.presentations:
+            targets.append(self.presentations[map_id].view)
+        for target in targets:
+            overlay = MapPortrait(
+                target, self.resources.root, asset.path, self.media.cached_preview
+            )
+            overlay.dismissed.connect(self._close_portrait)
+            self.media.ready.connect(overlay.image_ready)
+            self._portrait_views.append(overlay)
+        self._portrait_views[0].setFocus()
+
+    def _validate_portrait(self, map_id):
+        if not self._portrait or self._portrait[0] != map_id:
+            return
+        _, token_id, asset_id = self._portrait
+        document = self.service.maps.get(map_id)
+        token = next((t for t in document.tokens if t.id == token_id), None) if document else None
+        try:
+            valid = (
+                token is not None
+                and resolve_token(token, self.cards.get_card(token.card_id)).asset_id == asset_id
+                and asset_id in self.resources.assets
+            )
+        except ValueError:
+            valid = False
+        if not valid:
+            self._close_portrait()
+
+    def _portal_dependents(self, target_id):
+        for key in self.windows.window_keys():
+            if not key.startswith("map:"):
+                continue
+            map_id = key[4:]
+            document = self.service.maps.get(map_id)
+            if (
+                document
+                and map_id != target_id
+                and any(p.target_id == target_id for p in document.portals)
+            ):
+                self._refresh_map(map_id)
+
+    def _portal_choose(self, map_id, x, y, previous=None):
+        generation = self.service.core.generation
+        dialog = EntityPicker(
+            self.queries,
+            SimpleNamespace(ref_kind="map", ref_card_type=None),
+            self.window,
+            current=previous.target_id if previous else None,
+        )
+        dialog.setWindowTitle("Карта назначения портала")
+        accepted = dialog.exec()
+        target = dialog.chosen_id
+        dialog.deleteLater()
+        if not accepted or generation != self.service.core.generation:
+            return
+        if target == map_id:
+            self._error("Выберите другую карту")
+            return
+        label, ok = QInputDialog.getText(
+            self.window,
+            "Портал",
+            "Подпись (пусто — название цели)",
+            text=previous.label if previous else "",
+        )
+        if not ok or generation != self.service.core.generation:
+            return
+        try:
+            self.service.get_map(target)
+            if previous:
+                current = next(
+                    (p for p in self.service.get_map(map_id).portals if p.id == previous.id), None
+                )
+                if current != previous:
+                    raise ValueError("Портал изменён другим представлением")
+                value = replace(previous, target_id=target, label=label)
+            else:
+                value = MapPortal(target, x, y, label)
+            self.service.put_vector(map_id, value)
+        except ValueError as error:
+            self._error(str(error))
+
+    def _portal_edit(self, map_id, key):
+        value = next((p for p in self.service.get_map(map_id).portals if p.id == key), None)
+        if value:
+            self._portal_choose(map_id, value.x, value.y, value)
+
+    def _portal_open(self, map_id, key):
+        portal = next((p for p in self.service.get_map(map_id).portals if p.id == key), None)
+        if not portal:
+            return
+        try:
+            self.service.get_map(portal.target_id)
+        except ValueError:
+            self._error("Карта назначения удалена или недоступна. ПКМ портала — перепривязать.")
+            return
+        self.open_map(portal.target_id)
+        if self.presentations:
+            self._retarget_presentation(portal.target_id)
+
+    def _retarget_presentation(self, map_id):
+        self._close_portrait()
+        presentation = next(iter(self.presentations.values()))
+        for other in tuple(self.presentations.values()):
+            if other is not presentation:
+                other.close()
+        presentation.view._display_ready = False
+        presentation.view._model_ready = False
+        presentation.view._source_rect = QRectF()
+        if presentation.view._background is not None:
+            presentation.view.scene().removeItem(presentation.view._background)
+            presentation.view._background = None
+        presentation.view.viewport().repaint()
+        self.presentations.clear()
+        self.presentations[map_id] = presentation
+        presentation.map_id = map_id
+        presentation.view.measurement = None
+        self._refresh_map(map_id)
+        viewer = self.windows.find_window("map:" + map_id)
+        background = viewer.widget().view._background if viewer else None
+        if background:
+            presentation.view.set_pyramid(background.pyramid, self.tiles)
+            self._refresh_map(map_id)
+            viewer.widget().view._publish_camera()
+
+    def _put_vector(self, map_id, value):
+        try:
+            self.service.put_vector(map_id, value)
+        except ValueError as error:
+            self._error(str(error))
+
+    def _measurement(self, map_id, value, mode):
+        windows = [self.windows.find_window(prefix + map_id) for prefix in ("map:", "map-editor:")]
+        views = [w.widget().view for w in windows if w]
+        if map_id in self.presentations:
+            views.append(self.presentations[map_id].view)
+        document = self.service.maps.get(map_id)
+        layers = {v.id: v.visible for v in document.layers} if document else {}
+        canonical = {v.id: v for v in document.tokens} if document else {}
+        for view in views:
+            view.measurement_mode = mode
+            view.measurement = value if view.role != "player" else None
+            if view.role == "player":
+                for item in view._tokens:
+                    visible = item.token.layer_id is None or layers.get(item.token.layer_id, False)
+                    if value and item.token.id == value[0]:
+                        visible = visible and view.public_motion_visible(item, value[1], value[2])
+                        if visible:
+                            view.measurement = value
+                    item.setVisible(visible)
+                    if value is None and item.token.id in canonical:
+                        token = canonical[item.token.id]
+                        item.setPos(token.x, token.y)
+            view.viewport().update()
 
     def _transient(self, map_id, kind, key, x, y, source):
         views = [
@@ -409,6 +653,12 @@ class MapsController(QObject):
                 else view._objects.get(key)
             )
             if item:
+                if view.role == "player" and kind == "token":
+                    if view.measurement is None or not item.isVisible():
+                        continue
+                    _, origin, target = view.measurement
+                    if not view.public_motion_visible(item, origin, target):
+                        continue
                 item.setPos(x, y)
 
     def _remember_map_camera(self, map_id, widget, editor=False):
@@ -420,6 +670,7 @@ class MapsController(QObject):
             self._compiled_fog.pop(map_id, None)
 
     def _refresh_map(self, key):
+        self._validate_portrait(key)
         windows = [self.windows.find_window(prefix + key) for prefix in ("map:", "map-editor:")]
         if not any(windows):
             return
@@ -452,6 +703,15 @@ class MapsController(QObject):
             if not window:
                 continue
             widget = window.widget()
+            widget.view.portal_labels = {
+                portal.id: portal.label
+                or (
+                    self.service.entities.get(portal.target_id).title
+                    if portal.target_id in self.service.maps
+                    else "Карта назначения недоступна"
+                )
+                for portal in document.portals
+            }
             editor = isinstance(widget, MapEditorWidget)
             window.setWindowTitle(("Редактор карты · " if editor else "") + document.title)
             widget.view.set_annotations(
@@ -472,6 +732,11 @@ class MapsController(QObject):
                     self.update_actor_scale(
                         token.card_id, token.actor_id, document.grid.feet_per_cell
                     )
+
+        viewer = self.windows.find_window("map:" + key)
+        if viewer and viewer.widget().view.measurement is not None:
+            view = viewer.widget().view
+            self._measurement(key, view.measurement, view.measurement_mode)
 
     def _select_participant(self, map_id, token_id):
         token = next((t for t in self.service.get_map(map_id).tokens if t.id == token_id), None)
@@ -689,6 +954,8 @@ class MapsController(QObject):
             return
         if action == "delete":
             self.service.delete_token(map_id, token_id)
+        elif action == "portrait":
+            self._show_portrait(map_id, token)
         elif action == "copy":
             try:
                 self.actions.copy_token(map_id, token_id)

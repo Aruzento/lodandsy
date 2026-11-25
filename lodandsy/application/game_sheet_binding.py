@@ -6,9 +6,11 @@ from lodandsy.ui.game_labels import error_text, field_label
 
 
 class GameSheetBinding:
-    def __init__(self, service, sheet, card_id, open_inventory):
+    def __init__(self, service, sheet, card_id, open_inventory, *, open_base_inventory=None):
         self.service, self.sheet, self.card_id = service, sheet, card_id
         self.open_inventory = open_inventory
+        self.open_base_inventory = open_base_inventory
+        self.armor_dialog = None
         self.actor_id = None
         self.owners = {}
         self.disposed = False
@@ -16,6 +18,7 @@ class GameSheetBinding:
         sheet.edit_active = lambda key: service.field_edits.has(self.owners.get(key))
         sheet.context_requested.connect(self.select_actor)
         sheet.inventory_requested.connect(self.inventory)
+        sheet.armor_requested.connect(self.open_armor)
         sheet.edit_started.connect(self.begin)
         sheet.buffer_changed.connect(self.buffer)
         sheet.commit_requested.connect(self.commit)
@@ -26,6 +29,7 @@ class GameSheetBinding:
         service.actor_changed.connect(self._actor_changed)
         service.field_edits.changed.connect(self._edit_changed)
         service.rules_changed.connect(self.refresh)
+        service.base_effective_changed.connect(self._base_effective_changed)
         self.refresh()
 
     def reference(self):
@@ -68,16 +72,37 @@ class GameSheetBinding:
 
     def select_actor(self, actor_id):
         self.finish()
+        if self.armor_dialog:
+            self.armor_dialog.close()
         if actor_id:
             self.service.get_actor(ActorRef(self.card_id, actor_id))
         self.actor_id = actor_id
         self.refresh()
+
+    def open_armor(self):
+        from lodandsy.ui.armor_details import ArmorDetails
+
+        if self.armor_dialog is None:
+            self.armor_dialog = ArmorDetails(self.sheet.resource_settings["ac"], self.sheet)
+            self.armor_dialog.inventory_requested.connect(self.inventory)
+            self.armor_dialog.finished.connect(self.finish_armor)
+        self.refresh()
+        self.armor_dialog.show()
+        self.armor_dialog.raise_()
+
+    def finish_armor(self):
+        for key in ("ac", "ac_mode", "ac_override"):
+            owner = self.owners.pop(key, None)
+            if owner:
+                self.service.field_edits.commit(owner, finish=True)
 
     def inventory(self):
         if self.actor_id:
             key = self.service.get_actor(self.reference()).inventory_id
             if key:
                 self.open_inventory(key)
+        elif self.open_base_inventory:
+            self.open_base_inventory()
 
     def change(self, changes):
         from PySide6.QtWidgets import QDialog
@@ -120,6 +145,13 @@ class GameSheetBinding:
             if key[0] == card.id and getattr(key, "actor_id", None) in {None, self.actor_id}
         }
         self.sheet.set_values(card, actor, self.service.effective(self.reference()), drafts)
+        if self.armor_dialog:
+            self.armor_dialog.render(
+                card,
+                actor,
+                self.service.effective(self.reference()),
+                self.service.calculation_inputs(card, actor),
+            )
         edits = self.service.field_edits
 
         def relevant(key):
@@ -145,6 +177,10 @@ class GameSheetBinding:
         if key == self.card_id:
             self.refresh()
 
+    def _base_effective_changed(self, key):
+        if key == self.card_id and self.actor_id is None:
+            self.refresh()
+
     def _actor_changed(self, card_id, actor_id, fields):
         if card_id == self.card_id:
             self.refresh()
@@ -155,6 +191,8 @@ class GameSheetBinding:
 
     def dispose(self):
         if not self.disposed:
+            if self.armor_dialog:
+                self.armor_dialog.close()
             self.finish()
             self.disposed = True
             for signal, callback in (
@@ -162,5 +200,6 @@ class GameSheetBinding:
                 (self.service.actor_changed, self._actor_changed),
                 (self.service.field_edits.changed, self._edit_changed),
                 (self.service.rules_changed, self.refresh),
+                (self.service.base_effective_changed, self._base_effective_changed),
             ):
                 signal.disconnect(callback)

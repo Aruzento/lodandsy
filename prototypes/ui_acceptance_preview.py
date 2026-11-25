@@ -4,6 +4,7 @@ import argparse
 import json
 import tempfile
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from PySide6.QtCore import QSettings
@@ -68,11 +69,10 @@ def main():
                     "hp_gains": (10, 6, 6, 6, 6),
                     "hp_max_mode": "auto",
                     "ac_mode": "auto",
-                    "armor_type": "medium",
-                    "armor_base": 14,
-                    "shield": True,
                     "speed_mode": "auto",
                     "class_or_role": "Воин",
+                    "subclass": "Чемпион",
+                    "race": "Человек",
                     "athletics_proficiency": 1,
                     "constitution_save_proficient": True,
                 },
@@ -90,8 +90,34 @@ def main():
             controller.tables_service.set_cell(inv.id, inv.rows[0].id, inv.columns[0].id, item.id)
             active = next(c for c in inv.columns if c.key == "active")
             controller.tables_service.set_cell(inv.id, inv.rows[0].id, active.id, True, parsed=True)
+            equipment_cards = []
+            for equipment_kind, category, armor_ac, title in (
+                ("armor", "medium", 14, "Кираса"),
+                ("shield", None, None, "Щит"),
+            ):
+                equipment = controller.create_card(title, card_type="item")
+                equipment_cards.append(equipment)
+                service.update_card_fields(
+                    equipment.id,
+                    {
+                        "equipment_kind": equipment_kind,
+                        "armor_category": category,
+                        "armor_ac": armor_ac,
+                        "weight": 0,
+                    },
+                )
+                inventory = controller.tables_service.get_table(inv.id)
+                row = inventory.new_row()
+                controller.tables_service.edit_table(inv.id, rows=(*inventory.rows, row))
+                item_column = next(c for c in inventory.columns if c.key == "item")
+                controller.tables_service.set_cell(inv.id, row.id, item_column.id, equipment.id)
+                controller.actions.set_inventory_activity(inv.id, row.id, True)
             controller.card_views.open_game_sheet(card.id, ref.actor_id)
             capture(window, "01-character-workspace")
+            binding = controller.card_views.game_bindings[card.id]
+            binding.open_armor()
+            capture(binding.armor_dialog, "12-ac-details")
+            binding.armor_dialog.close()
             dock = controller.card_views.open_game_sheet(card.id, ref.actor_id)
             dock.dock.setFloating()
             floating = dock.dock.floatingDockContainer()
@@ -106,7 +132,9 @@ def main():
             controller.card_views.game_bindings[card.id].select_actor(None)
             capture(dock.widget(), "05-base-card")
             chest = controller.create_card("Сундук экспедиции", card_type="object")
-            service.update_card_fields(chest.id, {"hp_max": 25, "ac": 12, "speed": 0})
+            service.update_card_fields(
+                chest.id, {"hp_max": 25, "ac": 12, "ac_mode": "manual", "speed": 0}
+            )
             obj = controller.card_views.open_game_sheet(chest.id)
             obj.dock.setFloating()
             obj.dock.floatingDockContainer().resize(680, 800)
@@ -115,6 +143,15 @@ def main():
             item_dock.dock.setFloating()
             item_dock.dock.floatingDockContainer().resize(700, 800)
             capture(item_dock.widget(), "07-item-list")
+            for index, equipment_card in enumerate(equipment_cards, 13):
+                equipment_dock = controller.card_views.open_game_sheet(equipment_card.id)
+                equipment_dock.dock.setFloating()
+                equipment_dock.dock.floatingDockContainer().resize(700, 800)
+                capture(equipment_dock.widget(), f"{index}-equipment-item")
+            inventory_dock = controller.tables.open_table(inv.id)
+            inventory_dock.dock.setFloating()
+            inventory_dock.dock.floatingDockContainer().resize(920, 620)
+            capture(inventory_dock.widget(), "15-equipped-inventory")
             dialog = ModifierDialog(
                 {
                     "id": modifier.id,
@@ -159,6 +196,87 @@ def main():
             settle(1)
             controller.maps.focus_token(document.id, token.id)
             capture(window, "11-map-inspector")
+            from PySide6.QtCore import QPointF
+
+            viewer = controller.maps.open_map(document.id).widget()
+            viewer.fog_tools.show()
+            viewer.fog_tools.set_mode("polygon")
+            viewer.fog_tools.points = [(120, 120), (450, 140), (400, 350)]
+            viewer.fog_tools._preview(QPointF(121, 121))
+            capture(viewer, "16-polygon-snap")
+            viewer.fog_tools.cancel()
+            viewer.fog_tools.hide()
+            from PySide6.QtCore import QRectF
+            from PySide6.QtGui import QPainterPath
+
+            from lodandsy.domain.map_document import MapPortal, MapShape
+
+            controller.maps_service.edit_map(
+                document.id,
+                grid=replace(controller.maps_service.get_map(document.id).grid, feet_per_cell=5),
+            )
+            for value in (
+                MapShape("circle", ((70, 0),), x=200, y=170, name="Радиус", color="#73d6b2"),
+                MapShape(
+                    "cone", ((180, 0),), x=400, y=320, rotation=-30, name="Конус", color="#f5b764"
+                ),
+                MapShape(
+                    "rectangle",
+                    ((0, 0), (150, 0), (150, 90), (0, 90)),
+                    x=100,
+                    y=360,
+                    name="Граница",
+                    color="#b6a4ff",
+                ),
+            ):
+                controller.maps_service.put_vector(document.id, value)
+            target = controller.maps_service.create_map("Нижний уровень", asset.id)
+            controller.maps_service.put_vector(document.id, MapPortal(target.id, 620, 420))
+            fog = QPainterPath()
+            fog.addRect(QRectF(0, 0, 800, 600))
+            controller.maps_service.edit_fog(document.id, fog)
+            viewer.vector_tools.show()
+            viewer.vector_tools.select(controller.maps_service.get_map(document.id).shapes[0])
+            capture(window, "17-m5-gm-shapes")
+            player = controller.maps.open_presentation(document.id)
+            settle(1)
+            capture(player, "18-m5-player-shapes-over-fog")
+            controller.maps._measurement(
+                document.id, (token.id, (250, 200), (450, 320)), viewer.view.measurement_mode
+            )
+            capture(viewer, "19-m5-gm-distance")
+            capture(player, "20-m5-player-hidden-distance")
+            controller.maps._measurement(document.id, None, "grid")
+            map_window = controller.maps.open_map(document.id)
+            map_window.dock.setFloating()
+            map_window.dock.floatingDockContainer().resize(650, 650)
+            capture(viewer, "23-m5-map-narrow")
+            portrait = QImage(1024, 400, QImage.Format.Format_RGB32)
+            portrait.fill(0xFF416E8C)
+            portrait_source = root / "portrait.png"
+            assert portrait.save(str(portrait_source))
+            portrait_asset = project.store.import_asset(portrait_source)
+            project.assets[portrait_asset.id] = portrait_asset
+            controller.maps_service.edit_token(
+                document.id, token.id, image_override=portrait_asset.id
+            )
+            # Explicitly approve disclosure only in this disposable synthetic world.
+            from PySide6.QtCore import QTimer
+            from PySide6.QtWidgets import QMessageBox
+
+            def approve():
+                for dialog in app.topLevelWidgets():
+                    if isinstance(dialog, QMessageBox):
+                        dialog.button(QMessageBox.StandardButton.Yes).click()
+
+            QTimer.singleShot(50, approve)
+            controller.maps._token_action(document.id, token.id, "portrait")
+            settle(1)
+            assert len(controller.maps._portrait_views) == 2
+            capture(viewer, "21-m5-gm-original-image")
+            capture(player, "22-m5-player-original-image")
+            controller.maps._close_portrait()
+            player.close()
             assert project.save_current()
             (args.output / "evidence.json").write_text(
                 json.dumps(

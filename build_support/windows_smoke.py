@@ -19,7 +19,7 @@ from lodandsy.application.project_controller import ProjectController
 from lodandsy.application.project_history import ProjectHistory
 from lodandsy.application.sqlite_project_store import SQLiteProjectStore
 from lodandsy.application.workspace_state import capture_workspace
-from lodandsy.domain.map_document import MapGrid
+from lodandsy.domain.map_document import MapGrid, MapPortal, MapShape
 from lodandsy.domain.table_document import ColumnDefinition, RowRecord
 from lodandsy.ui.app_shell import AppShell
 from lodandsy.ui.game_labels import ATTRIBUTES_PAGE, MODIFIERS_PAGE
@@ -33,6 +33,8 @@ def wait(app, predicate, timeout=15):
         if time.monotonic() > deadline:
             raise RuntimeError("Smoke workflow timed out")
         app.processEvents()
+        if getattr(app, "smoke_errors", []):
+            raise AssertionError("; ".join(app.smoke_errors))
         time.sleep(0.005)
 
 
@@ -48,6 +50,8 @@ def main():
     assert translated_buttons.buttons()[0].text() == "Отмена"
     window = AppShell()
     controller = AppController(window)
+    app.smoke_errors = []
+    controller.maps._error = lambda error: app.smoke_errors.append(str(error))
     catalogue = tempfile.TemporaryDirectory(prefix="lodandsy-smoke-user-")
     project = ProjectController(
         controller,
@@ -107,7 +111,7 @@ def main():
             assert embedded_inventory.model.data(embedded_inventory.model.index(0, 3)) == "0"
             controller.cards_service.update_card_fields(item_card.id, {"cost": 9})
             assert embedded_inventory.model.data(embedded_inventory.model.index(0, 3)) == "9"
-            assert len(controller.tables_service.get_table(inventory_table.id).rows[0].cells) == 2
+            assert len(controller.tables_service.get_table(inventory_table.id).rows[0].cells) == 3
             controller.window_manager.close_window(f"table:{inventory_table.id}")
             progress = []
             controller.maps.import_progress.connect(progress.append)
@@ -175,6 +179,38 @@ def main():
             assert not modifier_dialog.target.isEditable()
             modifier_dialog.reject()
             controller.window_manager.close_window(controller.card_editor_window_key(item_card.id))
+            controller.cards_service.update_card_fields(b.id, {"ac_mode": "auto", "dexterity": 16})
+            assert controller.cards_service.effective(player_ref).get("ac").value == 13
+            for kind, category, base, expected_ac in (
+                ("armor", "heavy", 18, 18),
+                ("shield", None, None, 20),
+            ):
+                equipment = controller.create_card("Тестовая экипировка", card_type="item")
+                controller.cards_service.update_card_fields(
+                    equipment.id,
+                    {
+                        "equipment_kind": kind,
+                        "armor_category": category,
+                        "armor_ac": base,
+                    },
+                )
+                inventory = controller.tables_service.get_table(own_table.id)
+                record = inventory.new_row()
+                controller.tables_service.edit_table(inventory.id, rows=(*inventory.rows, record))
+                item_column = next(c for c in inventory.columns if c.key == "item")
+                controller.tables_service.set_cell(
+                    inventory.id, record.id, item_column.id, equipment.id
+                )
+                controller.actions.set_inventory_activity(inventory.id, record.id, True)
+                assert controller.cards_service.effective(player_ref).get("ac").value == expected_ac
+            controller.cards_service.update_actor(player_ref, {"ac_override": 21})
+            controller.actions.set_inventory_activity(inventory.id, record.id, False)
+            assert controller.cards_service.effective(player_ref).get("ac").value == 21
+            controller.cards_service.update_actor(player_ref, {"ac_override": None})
+            assert controller.cards_service.effective(player_ref).get("ac").value == 18
+            controller.card_views.game_bindings[b.id].open_armor()
+            assert controller.card_views.game_bindings[b.id].armor_dialog.isVisible()
+            controller.card_views.game_bindings[b.id].armor_dialog.close()
             npc = controller.create_card("Goblin", card_type="creature")
             controller.cards_service.update_card_fields(npc.id, {"hp_max": 20})
             npc_token = controller.maps_service.add_token(other_map.id, npc.id, 200, 200)
@@ -297,6 +333,33 @@ def main():
             dice.throw()
             assert " = " in dice.result.toPlainText()
             assert "d100:" in dice.result.toPlainText()
+            shape = MapShape("circle", ((64, 0),), x=300, y=300, name="Публичная область")
+            portal = MapPortal(other_map.id, 400, 400)
+            controller.maps_service.put_vector(document.id, shape)
+            controller.maps_service.put_vector(document.id, portal)
+            presentation = controller.maps.open_presentation(document.id)
+            wait(app, lambda: presentation.view._display_ready)
+            assert presentation.view.vector_shapes == (shape,)
+            assert not presentation.view.vector_portals
+            controller.maps._portal_open(document.id, portal.id)
+            assert controller.maps.presentations[other_map.id] is presentation
+            wait(app, lambda: presentation.view._display_ready)
+            controller.maps._token_action(other_map.id, shared.id, "portrait")
+            assert len(controller.maps._portrait_views) == 2
+            overlay = controller.maps._portrait_views[0]
+            wait(
+                app,
+                lambda: (
+                    (image := overlay.provider(overlay.root, overlay.path)) is not None
+                    and not image.isNull()
+                ),
+            )
+            original = overlay.provider(overlay.root, overlay.path)
+            assert 1.49 < original.width() / original.height() < 1.51
+            controller.maps._portrait_views[1].dismissed.emit()
+            assert controller.maps._portrait is None
+            controller.maps.close_presentation(other_map.id)
+            controller.window_manager.close_window("map:" + other_map.id)
             assert len(controller.window_manager.window_keys()) == 6
             second.dock.setFloating()
             app.processEvents()
@@ -306,14 +369,18 @@ def main():
             print("Smoke: snapshot saved", flush=True)
             project._save_ui_state()
             assert capture_workspace(controller)["documents"]
+            print("Smoke: backup begin", flush=True)
             backup = root / "backup.lodbackup"
             project.store.backup(backup)
+            print("Smoke: restore archive begin", flush=True)
             restored = SQLiteProjectStore.restore(backup, root / "Восстановлено")
             assert restored.load() == expected
             restored.close()
+            print("Smoke: open restored project", flush=True)
             project.open_project(root / "Восстановлено")
             restored_map = controller.maps.open_map(document.id).widget()
             wait(app, lambda: restored_map.view._background is not None, timeout=120)
+            print("Smoke: reopen source project", flush=True)
             project.open_project(root / "Мир с кириллицей")
             reopened_map = controller.maps.open_map(document.id).widget()
             wait(app, lambda: reopened_map.view._background is not None, timeout=120)
@@ -342,6 +409,8 @@ def main():
                 "virtual_game_pages_and_explicit_actor_context": True,
                 "typed_russian_modifier_catalog_and_rules_example": True,
                 "native_qt_russian_translation": True,
+                "typed_inventory_equipment_ac_and_manual_final": True,
+                "map_m5_shapes_portal_original_image": True,
                 "unicode_paths": True,
                 "uuid_sections_child_inventory_crop": True,
                 "reference_inventory_projections_no_copies": True,

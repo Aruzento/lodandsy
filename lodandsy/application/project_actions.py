@@ -8,7 +8,7 @@ from lodandsy.application.maps_service import map_payload
 from lodandsy.domain.actor_state import ActorRef
 from lodandsy.domain.card import Card, Portrait
 from lodandsy.domain.card_schema import ACTOR_TYPES
-from lodandsy.domain.document_payloads import inventory_inputs
+from lodandsy.domain.document_payloads import inventory_inputs, validate_inventory_columns
 from lodandsy.domain.entity import EntityCollection
 from lodandsy.domain.map_document import TokenInstance
 
@@ -128,6 +128,7 @@ class PlacementEdit(QUndoCommand):
 class ProjectActions:
     def __init__(self, core, cards, tables, maps):
         self.core, self.cards, self.tables, self.maps = core, cards, tables, maps
+        self._inventory_owner_cache = (None, {})
         cards.create_inventory = self.create_actor_inventory
         cards.calculation_inputs = lambda card, actor: inventory_inputs(core.entities, card, actor)
         maps.place_card = self.place_card
@@ -144,6 +145,81 @@ class ProjectActions:
         )
         core.replaced.connect(self.title_edits.discard)
         core.entities_deleted.connect(self.title_edits.remove_entities)
+
+    def inventory_owner(self, table_id):
+        signature = self.core.generation, self.core.serial
+        if self._inventory_owner_cache[0] != signature:
+            owners = {}
+            for card in self.cards.cards.all():
+                for section in card.sections:
+                    if section.purpose == "inventory" and section.table_id:
+                        owners[section.table_id] = card.id
+                for actor in card.actors:
+                    if actor.inventory_id:
+                        owners[actor.inventory_id] = ActorRef(card.id, actor.id)
+            self._inventory_owner_cache = signature, owners
+        return self._inventory_owner_cache[1].get(table_id)
+
+    def inventory_activity_caption(self, document, row, column):
+        if column.key != "active" or self.inventory_owner(document.id) is None:
+            return None
+        item_column = next((c for c in document.columns if c.key == "item"), None)
+        if item_column is None:
+            return None
+        try:
+            item = self.cards.get_card(row.value(item_column.id))
+        except ValueError:
+            return None
+        if item.value("equipment_kind") in {"armor", "shield"}:
+            return "Надет" if row.value(column.id) else "Снят"
+        return "Активен" if row.value(column.id) else "Неактивен"
+
+    def equipment_conflicts(self, table_id, row_id):
+        if self.inventory_owner(table_id) is None:
+            return ()
+        table = self.tables.get_table(table_id)
+        columns = {c.key: c for c in table.columns}
+        if not {"item", "active"} <= columns.keys():
+            return ()
+        row = next(row for row in table.rows if row.id == row_id)
+        try:
+            item = self.cards.get_card(row.value(columns["item"].id))
+        except ValueError:
+            return ()
+        kind = item.value("equipment_kind")
+        if kind not in {"armor", "shield"}:
+            return ()
+        conflicts = []
+        for other in table.rows:
+            if other.id == row_id or other.value(columns["active"].id) is not True:
+                continue
+            try:
+                selected = self.cards.get_card(other.value(columns["item"].id))
+            except ValueError:
+                continue
+            if selected.value("equipment_kind") == kind:
+                conflicts.append((other.id, selected.title))
+        return tuple(conflicts)
+
+    def set_inventory_activity(
+        self, table_id, row_id, active, *, replace_existing=False, expected=None
+    ):
+        if expected is not None and expected != (self.core.generation, self.core.serial):
+            raise ValueError("Экипировка или проект изменились. Повторите выбор.")
+        if self.inventory_owner(table_id) is None or type(active) is not bool:
+            raise ValueError("Нужен действующий инвентарь и логическая активность")
+        table = self.tables.get_table(table_id)
+        validate_inventory_columns(self.core.entities, table_id)
+        column = next(c for c in table.columns if c.key == "active")
+        conflicts = self.equipment_conflicts(table_id, row_id) if active else ()
+        if conflicts and not replace_existing:
+            raise ValueError("Подтвердите замену надетого доспеха или щита")
+        candidate = table
+        for other_id, _ in conflicts:
+            candidate = candidate.with_cell(other_id, column.id, False)
+        candidate = candidate.with_cell(row_id, column.id, active)
+        with self.core.transaction():
+            return self.tables.update_table(candidate, expected=table)
 
     def validate_map_candidate(self, document):
         records = [
