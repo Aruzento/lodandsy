@@ -1,0 +1,11 @@
+{
+  "exe_sha256": "71b379579475079ea2f8b535fdef8e649f73935a53193a558477c32567416426",
+  "report_sha256": "46ca93a6d39d24b2701513c04ba3cd293b4ec85eaa7b0312e085de6f63631a86",
+  "windows_only_path": true,
+  "cleared_environment": [
+    "PYTHONHOME",
+    "PYTHONPATH",
+    "QT_PLUGIN_PATH",
+    "QML2_IMPORT_PATH"
+  ]
+}

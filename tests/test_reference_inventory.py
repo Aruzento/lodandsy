@@ -24,13 +24,19 @@ def test_item_projections_are_live_addressed_and_never_stored(project, tmp_path,
     app, project = project
     project.create_project(tmp_path / "Мир")
     owner, section, table = inventory(app)
-    assert [c.name for c in table.columns] == ["Предмет", "Количество", "Описание", "Стоимость"]
-    assert [c.key for c in table.columns] == ["item", "quantity", "description", "cost"]
+    assert [c.name for c in table.columns] == [
+        "Предмет",
+        "Количество",
+        "Описание",
+        "Стоимость",
+        "Активен / надет",
+    ]
+    assert [c.key for c in table.columns] == ["item", "quantity", "description", "cost", "active"]
     item = app.create_card("Меч", card_type="item")
     app.cards_service.update_card_fields(item.id, {"summary": "Острый", "cost": 0})
     editor = app.open_card_editor(owner.id).widget()
     editor.select_section(section.id)
-    embedded = editor.table_layout.itemAt(0).widget()
+    embedded = editor._embedded_tables[section.id]
     view = app.tables.open_table(table.id).widget()
     changes = []
     view.model.dataChanged.connect(lambda a, b, *roles: changes.append((a.row(), a.column())))
@@ -65,6 +71,7 @@ def test_item_projections_are_live_addressed_and_never_stored(project, tmp_path,
     assert {key for key, value in project.store.load().tables[0].rows[0].cells} == {
         table.columns[0].id,
         table.columns[1].id,
+        table.columns[4].id,
     }
     backup = tmp_path / "refs.lodbackup"
     project.store.backup(backup)

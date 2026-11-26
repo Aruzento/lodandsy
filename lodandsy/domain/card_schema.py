@@ -119,10 +119,25 @@ _FIELDS = (
     FieldDefinition("featured", "Важная карточка", "bool"),
     FieldDefinition("race", "Раса", "text", "character"),
     FieldDefinition("class_or_role", "Класс / роль", "text", "character"),
+    FieldDefinition("subclass", "Архетип", "text", "character"),
     *(
         FieldDefinition(key, label, "number", "character", minimum=0)
         for key, label in [("ac", "AC"), ("speed", "Скорость")]
     ),
+    FieldDefinition(
+        "equipment_kind",
+        "Категория экипировки",
+        "text",
+        "item",
+        default="item",
+        nullable=False,
+        choices=("item", "armor", "shield"),
+    ),
+    FieldDefinition(
+        "armor_category", "Категория доспеха", "text", "item", choices=("light", "medium", "heavy")
+    ),
+    FieldDefinition("armor_ac", "Базовый КД доспеха", "number", "item", minimum=0),
+    FieldDefinition("shield_bonus", "Бонус щита (пусто: +2)", "number", "item", minimum=0),
     FieldDefinition("rarity", "Редкость", "text", "item"),
     FieldDefinition("weight", "Вес", "number", "item", minimum=0),
     FieldDefinition("cost", "Стоимость", "number", "item", minimum=0),
@@ -207,7 +222,7 @@ _FIELDS = (
             label + " — режим",
             "text",
             "calculation",
-            default="manual",
+            default="auto" if k == "ac" else "manual",
             nullable=False,
             choices=("auto", "manual"),
         )
@@ -242,17 +257,6 @@ _FIELDS = (
         nullable=False,
         choices=("single_class", "multiclass"),
     ),
-    FieldDefinition(
-        "armor_type",
-        "Основа AC",
-        "text",
-        "defence",
-        default="none",
-        nullable=False,
-        choices=("none", "light", "medium", "heavy"),
-    ),
-    FieldDefinition("armor_base", "AC брони", "number", "defence", default=10, minimum=0),
-    FieldDefinition("shield", "Щит (+2)", "bool", "defence", default=False, nullable=False),
     FieldDefinition(
         "speed_base",
         "Базовая скорость (ft)",
@@ -337,7 +341,20 @@ CARD_TYPES = {
                 ("Заметки", "rich_text", None),
             ),
         ),
-        CardTypeDefinition("item", "Предмет", ("rarity", "weight", "cost", "modifiers")),
+        CardTypeDefinition(
+            "item",
+            "Предмет",
+            (
+                "rarity",
+                "weight",
+                "cost",
+                "modifiers",
+                "equipment_kind",
+                "armor_category",
+                "armor_ac",
+                "shield_bonus",
+            ),
+        ),
         CardTypeDefinition("location", "Локация", ("region", "climate", "danger_level")),
         CardTypeDefinition("folder", "Папка"),
         CardTypeDefinition(

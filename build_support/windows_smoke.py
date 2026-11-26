@@ -6,22 +6,25 @@ import sys
 import tempfile
 import time
 from contextlib import ExitStack
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import PySide6
 from PySide6.QtCore import QEvent, QSettings, Qt
 from PySide6.QtGui import QImage, QKeyEvent, QPainterPath
-from PySide6.QtWidgets import QApplication, QLineEdit
+from PySide6.QtWidgets import QApplication, QDialogButtonBox, QLineEdit
 
 from lodandsy.application.app_controller import AppController
+from lodandsy.application.clipboard import clipboard_writer
 from lodandsy.application.project_controller import ProjectController
 from lodandsy.application.project_history import ProjectHistory
 from lodandsy.application.sqlite_project_store import SQLiteProjectStore
 from lodandsy.application.workspace_state import capture_workspace
-from lodandsy.domain.map_document import MapGrid
+from lodandsy.domain.map_document import MapGrid, MapPortal, MapShape
 from lodandsy.domain.table_document import ColumnDefinition, RowRecord
 from lodandsy.ui.app_shell import AppShell
+from lodandsy.ui.game_labels import ATTRIBUTES_PAGE, MODIFIERS_PAGE
+from lodandsy.ui.modifier_editor import ModifierDialog
 from lodandsy.ui.theme import apply_theme
 
 
@@ -31,7 +34,23 @@ def wait(app, predicate, timeout=15):
         if time.monotonic() > deadline:
             raise RuntimeError("Smoke workflow timed out")
         app.processEvents()
+        if getattr(app, "smoke_errors", []):
+            raise AssertionError("; ".join(app.smoke_errors))
         time.sleep(0.005)
+
+
+def copy_and_wait(app, action, expected):
+    messages = []
+    receiver = messages.append
+    writer = clipboard_writer()
+    writer.message.connect(receiver)
+    try:
+        action()
+        wait(app, lambda: bool(messages))
+        assert messages[-1] == "Скопировано", messages[-1]
+        assert QApplication.clipboard().text() == expected
+    finally:
+        writer.message.disconnect(receiver)
 
 
 def main():
@@ -42,8 +61,12 @@ def main():
     args = parser.parse_args()
     app = QApplication([])
     apply_theme(app)
+    translated_buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
+    assert translated_buttons.buttons()[0].text() == "Отмена"
     window = AppShell()
     controller = AppController(window)
+    app.smoke_errors = []
+    controller.maps._error = lambda error: app.smoke_errors.append(str(error))
     catalogue = tempfile.TemporaryDirectory(prefix="lodandsy-smoke-user-")
     project = ProjectController(
         controller,
@@ -103,7 +126,7 @@ def main():
             assert embedded_inventory.model.data(embedded_inventory.model.index(0, 3)) == "0"
             controller.cards_service.update_card_fields(item_card.id, {"cost": 9})
             assert embedded_inventory.model.data(embedded_inventory.model.index(0, 3)) == "9"
-            assert len(controller.tables_service.get_table(inventory_table.id).rows[0].cells) == 2
+            assert len(controller.tables_service.get_table(inventory_table.id).rows[0].cells) == 3
             controller.window_manager.close_window(f"table:{inventory_table.id}")
             progress = []
             controller.maps.import_progress.connect(progress.append)
@@ -114,6 +137,19 @@ def main():
             controller.actions.update_entity(document.id, parent_id=b.id)
             map_widget = controller.maps.open_map(document.id).widget()
             wait(app, lambda: map_widget.view._background is not None, timeout=120)
+            map_widget.tools.shape_actions["cone"].trigger()
+            assert map_widget.tool_state.active == "cone"
+            for kind in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+                QApplication.sendEvent(
+                    map_widget.view,
+                    QKeyEvent(kind, Qt.Key.Key_Space, Qt.KeyboardModifier.NoModifier),
+                )
+                assert map_widget.tool_state.active == (
+                    "pan" if kind == QEvent.Type.KeyPress else "cone"
+                )
+            map_widget.tools.actions["fog_erase"].trigger()
+            assert map_widget.fog_tools.mode == "erase" and not map_widget.vector_tools.enabled
+            map_widget.tools.actions["select"].trigger()
             fog_path = QPainterPath()
             fog_path.addRect(50, 50, 200, 200)
             controller.maps_service.edit_fog(document.id, fog_path)
@@ -152,6 +188,57 @@ def main():
                 own_table.id, own_table.rows[0].id, activity.id, True, parsed=True
             )
             assert controller.cards_service.effective(player_ref).get("constitution").value == 12
+            actor_editor = controller.card_views.open_game_sheet(b.id, player_ref.actor_id).widget()
+            assert actor_editor.current_section == ATTRIBUTES_PAGE
+            assert actor_editor.game_sheet.context.currentData() == player_ref.actor_id
+            game_binding = controller.card_views.game_bindings[b.id]
+            game_binding.buffer("hp_current", "65")
+            game_binding.commit("hp_current", "65")
+            assert controller.cards_service.get_actor(player_ref).value("hp_current") == 65
+            controller.maps.focus_token(document.id, item_token.id)
+            assert window.inspector_panel.field_form.controls["hp_current"].text() == "65"
+            item_editor = controller.card_views.open_game_sheet(item_card.id).widget()
+            assert item_editor.current_section == MODIFIERS_PAGE
+            modifier_dialog = ModifierDialog(asdict(Modifier("constitution", operand=2)), window)
+            modifier_dialog.search.setText("телосложение")
+            assert modifier_dialog.target.findData("constitution") >= 0
+            modifier_dialog.target.setCurrentIndex(modifier_dialog.target.findData("constitution"))
+            assert modifier_dialog.target.currentData() == "constitution"
+            assert not modifier_dialog.target.isEditable()
+            modifier_dialog.reject()
+            controller.window_manager.close_window(controller.card_editor_window_key(item_card.id))
+            controller.cards_service.update_card_fields(b.id, {"ac_mode": "auto", "dexterity": 16})
+            assert controller.cards_service.effective(player_ref).get("ac").value == 13
+            for kind, category, base, expected_ac in (
+                ("armor", "heavy", 18, 18),
+                ("shield", None, None, 20),
+            ):
+                equipment = controller.create_card("Тестовая экипировка", card_type="item")
+                controller.cards_service.update_card_fields(
+                    equipment.id,
+                    {
+                        "equipment_kind": kind,
+                        "armor_category": category,
+                        "armor_ac": base,
+                    },
+                )
+                inventory = controller.tables_service.get_table(own_table.id)
+                record = inventory.new_row()
+                controller.tables_service.edit_table(inventory.id, rows=(*inventory.rows, record))
+                item_column = next(c for c in inventory.columns if c.key == "item")
+                controller.tables_service.set_cell(
+                    inventory.id, record.id, item_column.id, equipment.id
+                )
+                controller.actions.set_inventory_activity(inventory.id, record.id, True)
+                assert controller.cards_service.effective(player_ref).get("ac").value == expected_ac
+            controller.cards_service.update_actor(player_ref, {"ac_override": 21})
+            controller.actions.set_inventory_activity(inventory.id, record.id, False)
+            assert controller.cards_service.effective(player_ref).get("ac").value == 21
+            controller.cards_service.update_actor(player_ref, {"ac_override": None})
+            assert controller.cards_service.effective(player_ref).get("ac").value == 18
+            controller.card_views.game_bindings[b.id].open_armor()
+            assert controller.card_views.game_bindings[b.id].armor_dialog.isVisible()
+            controller.card_views.game_bindings[b.id].armor_dialog.close()
             npc = controller.create_card("Goblin", card_type="creature")
             controller.cards_service.update_card_fields(npc.id, {"hp_max": 20})
             npc_token = controller.maps_service.add_token(other_map.id, npc.id, 200, 200)
@@ -167,7 +254,12 @@ def main():
                 == 20
             )
             rule_editor = controller.open_rules()
-            rule_editor.target.setCurrentText("initiative")
+            assert controller.rules_action.isEnabled()
+            rule_editor.select_formula("constitution_mod")
+            rule_editor.example_controls["constitution"].setText("16")
+            rule_editor.test_example()
+            assert rule_editor.status.text() == "Результат: 3"
+            rule_editor.select_formula("initiative")
             rule_editor.expression.setPlainText("dexterity_mod + 1")
             rule_editor.check_project()
             assert rule_editor.preview is not None
@@ -249,8 +341,7 @@ def main():
             app.processEvents()
             assert table_widget.model.data(table_widget.model.index(0, 0)) == "Дракон"
             table_widget.table.selectRow(0)
-            table_widget.copy_selection()
-            assert QApplication.clipboard().text() == "Дракон\t0\tfalse"
+            copy_and_wait(app, table_widget.copy_selection, "Дракон\t0\tfalse")
             assert not table_widget.model.setData(table_widget.model.index(0, 1), "bad")
             assert project.draft_count == 1
             assert project.save_current()
@@ -269,6 +360,34 @@ def main():
             dice.throw()
             assert " = " in dice.result.toPlainText()
             assert "d100:" in dice.result.toPlainText()
+            copy_and_wait(app, dice.copy.click, dice.result.toPlainText())
+            shape = MapShape("circle", ((64, 0),), x=300, y=300, name="Публичная область")
+            portal = MapPortal(other_map.id, 400, 400, "Скрытое имя", hide_label=True)
+            controller.maps_service.put_vector(document.id, shape)
+            controller.maps_service.put_vector(document.id, portal)
+            presentation = controller.maps.open_presentation(document.id)
+            wait(app, lambda: presentation.view._display_ready)
+            assert presentation.view.vector_shapes == (shape,)
+            assert not presentation.view.vector_portals
+            controller.maps._portal_open(document.id, portal.id)
+            assert controller.maps.presentations[other_map.id] is presentation
+            wait(app, lambda: presentation.view._display_ready)
+            controller.maps._token_action(other_map.id, shared.id, "portrait")
+            assert len(controller.maps._portrait_views) == 2
+            overlay = controller.maps._portrait_views[0]
+            wait(
+                app,
+                lambda: (
+                    (image := overlay.provider(overlay.root, overlay.path)) is not None
+                    and not image.isNull()
+                ),
+            )
+            original = overlay.provider(overlay.root, overlay.path)
+            assert 1.49 < original.width() / original.height() < 1.51
+            controller.maps._portrait_views[1].dismissed.emit()
+            assert controller.maps._portrait is None
+            controller.maps.close_presentation(other_map.id)
+            controller.window_manager.close_window("map:" + other_map.id)
             assert len(controller.window_manager.window_keys()) == 6
             second.dock.setFloating()
             app.processEvents()
@@ -278,14 +397,18 @@ def main():
             print("Smoke: snapshot saved", flush=True)
             project._save_ui_state()
             assert capture_workspace(controller)["documents"]
+            print("Smoke: backup begin", flush=True)
             backup = root / "backup.lodbackup"
             project.store.backup(backup)
+            print("Smoke: restore archive begin", flush=True)
             restored = SQLiteProjectStore.restore(backup, root / "Восстановлено")
             assert restored.load() == expected
             restored.close()
+            print("Smoke: open restored project", flush=True)
             project.open_project(root / "Восстановлено")
             restored_map = controller.maps.open_map(document.id).widget()
             wait(app, lambda: restored_map.view._background is not None, timeout=120)
+            print("Smoke: reopen source project", flush=True)
             project.open_project(root / "Мир с кириллицей")
             reopened_map = controller.maps.open_map(document.id).widget()
             wait(app, lambda: reopened_map.view._background is not None, timeout=120)
@@ -311,6 +434,14 @@ def main():
                 "canonical_card_fields": True,
                 "actors_player_npc_copy_inventory": True,
                 "project_formula_editor_and_overrides": True,
+                "virtual_game_pages_and_explicit_actor_context": True,
+                "typed_russian_modifier_catalog_and_rules_example": True,
+                "native_qt_russian_translation": True,
+                "typed_inventory_equipment_ac_and_manual_final": True,
+                "map_m5_shapes_portal_original_image": True,
+                "map_m55_native_toolbar_and_space": True,
+                "map9_portal_hidden_label_backup_reopen": True,
+                "table_then_dice_native_clipboard": True,
                 "unicode_paths": True,
                 "uuid_sections_child_inventory_crop": True,
                 "reference_inventory_projections_no_copies": True,

@@ -1,13 +1,13 @@
-# Windows portable — Cards / Actors / 5e14,21.11.2026
+# Windows portable — лист персонажа v2 и экипировка,22.11.2026
 
-Стабилизированная сборка: `LODANDSY-Cards-Actors-5e14-2026-11-21.zip` и `.zip.sha256`
+Новая сборка: `LODANDSY-Character-Sheet-v2-2026-11-22.zip` и `.zip.sha256`
 в `.prototype-deps`. Владелец принял итерацию7 в целом; точечная доработка ARU-46/78/84
 и её проверки описаны в `docs/validation/2026-11-20-iteration-7-stabilization.md`.
 Распаковать целиком в новую папку и запустить `LODANDSY.exe`. Python для запуска
 не требуется по структуре frozen package; фактическая clean Windows приёмка этой
 версии ещё обязательна. Прежний W2 preflight её не заменяет.
 
-Текущий формат SQLite15/Card6/Map7/Actor1/Rules1/Table3, UI state4. Legacy/миграции отсутствуют;
+Текущий формат SQLite16/Card7/Map7/Actor1/Rules1(profile2)/Table3, UI state4. Legacy/миграции отсутствуют;
 старые проекты отклоняются без записи. Проверять на новом тестовом мире, исходные
 пользовательские миры не удалять и не перезаписывать. Миграция тестовых данных не нужна.
 
@@ -18,7 +18,7 @@ python -m pip install -r requirements-build.lock
 powershell -File build_support/build_windows.ps1 -Python .venv/Scripts/python.exe -SkipPackage
 .prototype-deps/mvp-dist/LODANDSY/LODANDSY.exe --self-test --report .prototype-deps/frozen-smoke.json
 python -m build_support.verify_frozen --report .prototype-deps/frozen-source.json
-python -m build_support.package_windows --archive LODANDSY-Cards-Actors-5e14-2026-11-21.zip
+python -m build_support.package_windows --archive LODANDSY-Character-Sheet-v2-2026-11-22.zip
 ```
 
 Locked stack: CPython3.14.8 x64/PySide6 6.11.2/Qt ADS5.1.1/pyvips3.2.0/
@@ -115,3 +115,39 @@ SRD5.1 attribution включена в LICENSES/SRD-5.1-NOTICE.txt и source/bui
 
 Старые schema14 worlds не открываются: использовать новый disposable тестовый мир,
 не удалять реальные проекты. Physical checks здесь не выполнены автоматически.
+
+## Повторная UI-приёмка A–F / U01–U18
+
+Предыдущий ZIP `LODANDSY-UI-Acceptance-Fix-2026-11-21.zip` заменял Cards-Actors ZIP.
+Его SHA256 — внешний `.zip.sha256`; отчёт `docs/validation/2026-11-21-ui-acceptance-fix.md`
+включает U01–U18 и снимки синтетического мира. «Характеристики» Card/Creature/Object,
+«Модификаторы» Item, технический Card Inspector, оперативный Actor Inspector и gear
+«Игровая система и правила…» проверяются совместно. Полный physical checklist выше
+остаётся обязательным. DPI100/125/150/200%, floating/maximize, второй монитор и чистая
+Windows без Python здесь автоматически не пройдены. Для того пакета сохранялся schema15;
+новый формат листа v2 и решение владельца описаны ниже. Старые файлы не изменяются.
+Текущие HP, база/effective, +2CON 44→49→44, typed examples, preview/cancel/conflict и
+неизменность UUID должны наблюдаться в новом мире. Не закрывать ARU-65/80/83 до результата.
+
+
+## Приёмка листа v2 и экипировки (ADR-035)
+
+Повторить критерии1–7 задания LODANDSY_character_sheet_v2.md на новом мире.
+Проверить ○/●/◆ владения, inlineDEX14→16, homebrew/unknown/subclass и независимость
+Actor. Один верхний AC открывает native breakdown; изменить экипировку в inventory:
+DEX16 unarmored13/leather14/breastplate16/chain16/plate18, один shield+2, qty не множит.
+DEX8 breastplate13/chain16. Попытка второго armor/shield — replace/cancel; manual21
+не изменяется от снятия, auto актуален. Live Item updates/shared Player, soft refs,
+сохранение/backup/restore, карта/туман/Undo сохраняются. Старый SQLite15 отклоняется
+без записи; все миры признаны владельцем тестовыми, перенос/legacy не реализуются.
+Полный отчёт: docs/validation/2026-11-22-character-sheet-v2.md. Physical checks выше
+остаются обязательными, не отмечать их Done по Qt render/offscreen/smoke.
+
+## Приёмка Maps M5 (ARU-87–90)
+
+Новый ZIP LODANDSY-Map-M5-2026-11-25.zip; ADR-036, матрица D/S/P/V/G и
+инструкция: docs/validation/2026-11-25-map-m5.md. Проверить расстояния обеих метрик,
+все шесть видов фигур и их трансформации, публичность поверх opaque fog без скрытых
+токенов, порталы/retarget того же fullscreen Player и original asset/синхронный close.
+Map7 читается без записи; Map8 сохраняет новые коллекции, SQLite16/Card7 неизменны.
+Проверка именно нового ZIP на двух мониторах и clean Windows без Python отдельно.

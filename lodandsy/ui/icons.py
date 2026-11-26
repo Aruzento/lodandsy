@@ -3,6 +3,26 @@ from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
 PATHS = {
+    "ruler": '<path d="m2 11 9-9 3 3-9 9zM5 8l2 2M8 5l2 2"/>',
+    "vertices": '<path d="m2 13 5-10 7 8z"/><rect x="1" y="12" width="2" height="2"/>'
+    '<rect x="6" y="2" width="2" height="2"/><rect x="13" y="10" width="2" height="2"/>',
+    "brush": '<path d="m7 9 6-7 2 2-7 6M7 9c-3-2-5 1-5 5 4 0 7-2 5-5z"/>',
+    "eraser": '<path d="m2 9 7-7 5 5-7 7H5zM6 5l5 5M7 14h8"/>',
+    "fog_polygon": '<path d="m2 5 6-3 6 5-3 7H4zM2 5l9 9"/>',
+    "fog_select": '<path d="M5 2H2v3M11 2h3v3M2 11v3h3M14 11v3h-3M6 6l6 3-3 1-1 3z"/>',
+    "shape_circle": '<circle cx="8" cy="8" r="6"/>',
+    "shape_triangle": '<path d="m8 2 6 12H2z"/>',
+    "shape_rectangle": '<rect x="2" y="4" width="12" height="8"/>',
+    "shape_quadrilateral": '<path d="m3 2 11 3-2 9-10-2z"/>',
+    "shape_cone": '<path d="m2 8 12-6v12z"/>',
+    "shape_polygon": '<path d="m2 7 4-5 8 4-3 8-6-2z"/>',
+    "portal": '<circle cx="8" cy="8" r="6"/><path d="M5 11l6-6M6 5h5v5"/>',
+    "vector": '<path d="m2 13 4-10 8 8z"/><circle cx="2" cy="13" r="1"/>'
+    '<circle cx="6" cy="3" r="1"/><circle cx="14" cy="11" r="1"/>',
+    "race": '<circle cx="8" cy="4" r="3"/><path d="M2 15v-2a6 6 0 0 1 12 0v2"/>',
+    "class": '<path d="m3 1 10 10-2 2L1 3zM9 13l4-4M11 15l4-4"/>',
+    "subclass": '<path d="m8 1 2 4 5 1-3 4 1 5-5-2-5 2 1-5-3-4 5-1z"/>',
+    "level": '<path d="M2 14h4v-4h4V6h4V2"/>',
     "fog": '<path d="M2 6a3 3 0 0 1 5-3 4 4 0 0 1 7 3M1 9h14M3 12h10M5 15h6"/>',
     "monitor": '<rect x="1" y="2" width="14" height="10" rx="1"/><path d="M8 12v3M4 15h8"/>',
     "settings": '<circle cx="8" cy="8" r="3"/>'
@@ -41,7 +61,7 @@ PATHS = {
 }
 
 
-def icon(name, size=16):
+def icon(name, size=16, *, stroke_width=1.5):
     result = QIcon()
     for mode, color in [
         (QIcon.Mode.Normal, "#e5e5e3"),
@@ -50,7 +70,7 @@ def icon(name, size=16):
     ]:
         svg = (
             f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" '
-            f'fill="none" stroke="{color}" stroke-width="1.5" stroke-linecap="round" '
+            f'fill="none" stroke="{color}" stroke-width="{stroke_width}" stroke-linecap="round" '
             f'stroke-linejoin="round">{PATHS[name]}</svg>'
         )
         renderer = QSvgRenderer(QByteArray(svg.encode()))

@@ -8,11 +8,13 @@ from PySide6.QtWidgets import QInputDialog
 
 from lodandsy.application.card_editor_binding import CardEditorBinding
 from lodandsy.application.card_media_controller import CardMediaController
+from lodandsy.application.game_sheet_binding import GameSheetBinding
 from lodandsy.application.rich_html import internal_entity_id
 from lodandsy.domain.actor_state import ActorRef
 from lodandsy.domain.card import EMPTY_DOCUMENT
 from lodandsy.ui.card_document_state import CardDocumentState
 from lodandsy.ui.card_editor import CardEditorWidget
+from lodandsy.ui.game_labels import ATTRIBUTES_PAGE, MODIFIERS_PAGE, system_pages
 from lodandsy.ui.window_manager import WorkspaceWindow
 from lodandsy.ui.workspace_placement import WorkspacePlacement
 
@@ -49,10 +51,10 @@ class CardsController(QObject):
         )
         self.editors = {}
         self.bindings = {}
+        self.game_bindings = {}
         self.documents = {}
         self.preferences = {}
         self._table_cards = {}
-        self.actor_context = lambda reference: None
         self.placements_query = lambda reference: ()
         self.locate_placement = lambda map_id, token_id: None
         self.delete_actor = lambda reference, **kwargs: None
@@ -220,7 +222,10 @@ class CardsController(QObject):
             state = self.documents.get(card_id)
             if state is not None:
                 card = self.cards.get(card_id)
-                state.prune(section.id for section in card.sections)
+                state.prune(
+                    {section.id for section in card.sections}
+                    | dict(system_pages(card.card_type)).keys()
+                )
                 for section in card.sections:
                     target = state.existing(section.id)
                     if target and (card_id, section.id) not in self.service.field_drafts:
@@ -240,7 +245,8 @@ class CardsController(QObject):
         existing = self.window_manager.find_window(key)
         if existing is not None:
             self.window_manager.focus_window(key)
-            self.editors[card_id].text_edit.setFocus()
+            if self.editors[card_id].body.currentIndex() == 0:
+                self.editors[card_id].text_edit.setFocus()
             return existing
         try:
             dock = self.window_manager.open_window(
@@ -254,8 +260,22 @@ class CardsController(QObject):
             raise
         dock.closed.connect(lambda closed: self._on_card_editor_closed(card_id, closed))
         self.documents[card_id].restore(self.editors[card_id])
-        self.editors[card_id].text_edit.setFocus()
+        if self.editors[card_id].body.currentIndex() == 0:
+            self.editors[card_id].text_edit.setFocus()
         return dock
+
+    def open_game_sheet(self, card_id, actor_id=None):
+        dock = self.open_card_editor(card_id)
+        editor = self.editors[card_id]
+        if card_id in self.game_bindings:
+            self.game_bindings[card_id].select_actor(actor_id)
+            editor.select_section(ATTRIBUTES_PAGE)
+        elif self.cards.get(card_id).card_type == "item":
+            editor.select_section(MODIFIERS_PAGE)
+        return dock
+
+    def show_actor_sheet(self, reference):
+        return self.open_game_sheet(reference.card_id, reference.actor_id)
 
     def _create_card_editor(self, card_id):
         state = self.documents.get(card_id)
@@ -269,7 +289,7 @@ class CardsController(QObject):
             self.documents[card_id] = state
         editor = CardEditorWidget()
         editor.relations.actor_requested.connect(
-            lambda actor_id: self.actor_context(ActorRef(card_id, actor_id))
+            lambda actor_id: self.show_actor_sheet(ActorRef(card_id, actor_id))
         )
         editor.relations.placement_requested.connect(
             lambda map_id, token_id: self.locate_placement(map_id, token_id)
@@ -315,6 +335,16 @@ class CardsController(QObject):
         state.active_section = active_section
         self.editors[card_id] = editor
         self.bindings[card_id] = binding
+        if self.cards.get(card_id).card_type in {"character", "creature", "object"}:
+            self.game_bindings[card_id] = GameSheetBinding(
+                self.service,
+                editor.game_sheet,
+                card_id,
+                lambda key: self.open_entity("table", key),
+                open_base_inventory=lambda: editor.select_section(
+                    next(s.id for s in self.cards.get(card_id).sections if s.purpose == "inventory")
+                ),
+            )
         self._index_links(card_id)
         self.refresh_relations(card_id)
         return editor
@@ -427,6 +457,9 @@ class CardsController(QObject):
             editor.show_link_error(str(error))
 
     def _dispose_card_editor(self, card_id: str) -> None:
+        game_binding = self.game_bindings.pop(card_id, None)
+        if game_binding:
+            game_binding.dispose()
         editor = self.editors.pop(card_id, None)
         if editor is not None:
             editor.flush_pending()

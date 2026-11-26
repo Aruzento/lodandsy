@@ -23,7 +23,10 @@ from lodandsy.domain.card import EMPTY_DOCUMENT
 from lodandsy.domain.card_schema import CARD_TYPES
 from lodandsy.ui.card_relations import CardRelations
 from lodandsy.ui.conflict_bar import ConflictBar
+from lodandsy.ui.game_labels import ATTRIBUTES_PAGE, SYSTEM_PAGES, system_pages
+from lodandsy.ui.game_sheet import GameSheet
 from lodandsy.ui.icons import icon
+from lodandsy.ui.item_page import ItemPage
 from lodandsy.ui.portrait_panel import PortraitPanel
 from lodandsy.ui.rich_document import RichDocument
 from lodandsy.ui.rich_toolbar import RichToolbar
@@ -193,6 +196,28 @@ class CardEditorWidget(QWidget):
         self.table_layout = QVBoxLayout(self.table_page)
         self.table_layout.setContentsMargins(16, 8, 16, 16)
         self.body.addWidget(self.table_page)
+        self.game_sheet = GameSheet()
+        self.body.addWidget(self.game_sheet)
+        self.item_page = ItemPage()
+        self.item_page.properties.edit_active = lambda key: self.field_active(key)
+        self.body.addWidget(self.item_page)
+        for source, target in (
+            (self.item_page.properties.edit_started, self.field_edit_started),
+            (self.item_page.properties.buffer_changed, self.field_buffer_changed),
+            (self.item_page.properties.commit_requested, self.field_commit_requested),
+            (self.item_page.properties.cancel_requested, self.field_cancel_requested),
+        ):
+            source.connect(target)
+        self.item_page.properties.edited.connect(self._item_choices)
+        self.item_page.modifiers.raw_changed.connect(
+            lambda raw: self.field_buffer_changed.emit("modifiers", raw)
+        )
+        self.item_page.modifiers.commit_requested.connect(
+            lambda raw: self.field_commit_requested.emit("modifiers", raw)
+        )
+        self.item_page.modifiers.cancel_requested.connect(
+            lambda: self.field_cancel_requested.emit("modifiers")
+        )
         self._embedded_tables = {}
         self.link_status = QLabel()
         self.link_status.setWordWrap(True)
@@ -218,7 +243,12 @@ class CardEditorWidget(QWidget):
     def set_canonical(self, card, drafts=None, fields=None):
         previous = self._model
         live = {section.id: section for section in card.sections}
-        if self.current_section is not None and self.current_section not in live:
+        pages = dict(system_pages(card.card_type))
+        if (
+            self.current_section is not None
+            and self.current_section not in live
+            and self.current_section not in pages
+        ):
             self.cancel_pending()
             blocker = QSignalBlocker(self.text_edit)
             self.text_edit.setDocument(RichDocument(EMPTY_DOCUMENT, self.text_edit))
@@ -237,9 +267,11 @@ class CardEditorWidget(QWidget):
                 widget.setParent(None)
                 widget.deleteLater()
         if self.document_state:
-            self.document_state.prune(live)
+            self.document_state.prune(set(live) | pages.keys())
         self._model, self._card_id = card, card.id
         drafts = drafts or {}
+        if card.card_type == "item":
+            self.item_page.set_card(card, drafts, self.field_active)
         metadata = fields is None or bool(fields & {"title", "summary", "card_type", "portrait"})
         for widget, key, value in [
             (self.title_edit, "title", card.title),
@@ -264,19 +296,22 @@ class CardEditorWidget(QWidget):
         ):
             # Metadata/draft notifications never hide and reinsert an embedded editor.
             return
-        keys = [s.id for s in card.sections]
+        tabs = [(s.id, s.title) for s in card.sections]
+        # System pages follow Description; ordinary section positions remain canonical.
+        tabs[1:1] = list(pages.items())
+        keys = [key for key, title in tabs]
         current = [self.section_bar.tabData(i) for i in range(self.section_bar.count())]
         blocker = QSignalBlocker(self.section_bar)
         if current != keys:
             while self.section_bar.count():
                 self.section_bar.removeTab(0)
-            for section in card.sections:
-                i = self.section_bar.addTab(section.title)
-                self.section_bar.setTabData(i, section.id)
+            for key, title in tabs:
+                i = self.section_bar.addTab(title)
+                self.section_bar.setTabData(i, key)
         else:
-            for i, section in enumerate(card.sections):
-                if self.section_bar.tabText(i) != section.title:
-                    self.section_bar.setTabText(i, section.title)
+            for i, (key, title) in enumerate(tabs):
+                if self.section_bar.tabText(i) != title:
+                    self.section_bar.setTabText(i, title)
         del blocker
         if self.document_state:
             blocker = QSignalBlocker(self.text_edit)
@@ -309,6 +344,23 @@ class CardEditorWidget(QWidget):
         if key != self.current_section:
             self.flush_pending()
         if not self._model:
+            return
+        if key in dict(system_pages(self._model.card_type)):
+            if capture and self.document_state and self.current_section:
+                previous = self.document_state.existing(self.current_section)
+                if previous and self.body.currentIndex() == 0:
+                    previous.capture_position(self)
+            self.current_section = key
+            if self.document_state:
+                self.document_state.active_section = key
+            self.body.setCurrentWidget(
+                self.game_sheet if key == ATTRIBUTES_PAGE else self.item_page
+            )
+            blocker = QSignalBlocker(self.section_bar)
+            for i in range(self.section_bar.count()):
+                if self.section_bar.tabData(i) == key:
+                    self.section_bar.setCurrentIndex(i)
+            del blocker
             return
         try:
             section = self._model.section(key)
@@ -350,6 +402,13 @@ class CardEditorWidget(QWidget):
                 item.widget().hide()
                 if item.widget() not in self._embedded_tables.values():
                     item.widget().deleteLater()
+        if section.purpose == "inventory":
+            context = QLabel(
+                "Базовый инвентарь карточки — шаблон новых участников. "
+                "Личный инвентарь открывается из игрового листа."
+            )
+            context.setWordWrap(True)
+            self.table_layout.addWidget(context)
         previous = self._embedded_tables.get(section.id)
         widget = self.table_factory(section, previous)
         if previous is not None and previous is not widget:
@@ -394,7 +453,11 @@ class CardEditorWidget(QWidget):
                     previous.hide()
                     previous.setParent(None)
                     previous.deleteLater()
-        current = self._model.section(self.current_section) if self.current_section else None
+        current = (
+            self._model.section(self.current_section)
+            if self.current_section and self.current_section not in SYSTEM_PAGES
+            else None
+        )
         if current and current.kind == "table_ref" and current.table_id in keys:
             self._show_table(current)
 
@@ -413,6 +476,8 @@ class CardEditorWidget(QWidget):
         if i < 0:
             return
         key = self.section_bar.tabData(i)
+        if key in SYSTEM_PAGES:
+            return
         menu = QMenu(self)
         for title, action in [
             ("Переименовать…", "rename"),
@@ -422,6 +487,11 @@ class CardEditorWidget(QWidget):
         ]:
             menu.addAction(title, lambda a=action: self.section_action_requested.emit(a, key, None))
         menu.exec(self.section_bar.mapToGlobal(point))
+
+    def _item_choices(self, changes):
+        for key, value in changes.items():
+            self.field_edit_started.emit(key)
+            self.field_commit_requested.emit(key, str(value) if value is not None else "")
 
     def resizeEvent(self, event):
         super().resizeEvent(event)

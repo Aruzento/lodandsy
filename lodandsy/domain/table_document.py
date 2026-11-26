@@ -277,4 +277,5 @@ def inventory_columns():
         ColumnDefinition(
             "Стоимость", "projection", 3, key="cost", source_column_id=item.id, field_key="cost"
         ),
+        ColumnDefinition("Активен / надет", "bool", 4, key="active", required=True, default=False),
     )

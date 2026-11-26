@@ -23,6 +23,8 @@ from lodandsy.domain.map_document import (
     MapDocument,
     MapGrid,
     MapLayer,
+    MapPortal,
+    MapShape,
     PlacedAssetObject,
     TokenInstance,
 )
@@ -30,7 +32,7 @@ from lodandsy.domain.rules_5e14 import ProjectRules
 from lodandsy.domain.table_document import RowRecord, TableDocument
 
 DATABASE_NAME = "project.sqlite3"
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 MAX_BACKUP_BYTES = 4 * 1024**3
 
 
@@ -222,7 +224,7 @@ class SQLiteProjectStore:
                       id INTEGER PRIMARY KEY CHECK(id=1), payload_version INTEGER NOT NULL,
                       ruleset TEXT NOT NULL, rules_version INTEGER NOT NULL,
                       revision INTEGER NOT NULL, overrides TEXT NOT NULL);
-                    INSERT INTO project_rules VALUES(1,1,'dnd_5e_2014',1,0,'[]');
+                    INSERT INTO project_rules VALUES(1,1,'dnd_5e_2014',2,0,'[]');
                     CREATE TABLE table_column(
                       id TEXT PRIMARY KEY, table_id TEXT NOT NULL REFERENCES table_document(id),
                       name TEXT NOT NULL, data_type TEXT NOT NULL, position INTEGER NOT NULL,
@@ -412,7 +414,17 @@ class SQLiteProjectStore:
                 "m.grid,m.layers,m.objects,m.layers_initialized,m.fog "
                 "FROM map_document m JOIN entity e ON e.id=m.id ORDER BY e.position,e.id"
             ):
-                SQLiteProjectStore._require_version(version, 7, "Map")
+                if version not in (7, 8, 9):
+                    raise ValueError("Unsupported Map version")
+                vector_data = json.loads(objects)
+                if version == 7:
+                    vector_data = {"objects": vector_data, "shapes": [], "portals": []}
+                if not isinstance(vector_data, dict) or set(vector_data) != {
+                    "objects",
+                    "shapes",
+                    "portals",
+                }:
+                    raise ValueError("Invalid map vectors")
                 grid = json.loads(grid)
                 if not isinstance(grid, dict):
                     raise ValueError("Invalid map payload")
@@ -424,9 +436,14 @@ class SQLiteProjectStore:
                         tuple(token_rows.get(key, ())),
                         MapGrid(**grid),
                         tuple(MapLayer(**layer) for layer in json.loads(layers)),
-                        tuple(PlacedAssetObject(**o) for o in json.loads(objects)),
+                        tuple(PlacedAssetObject(**o) for o in vector_data["objects"]),
                         bool(initialized),
                         decode_fog(fog),
+                        tuple(
+                            MapShape(**dict(v, points=tuple(tuple(p) for p in v["points"])))
+                            for v in vector_data["shapes"]
+                        ),
+                        tuple(MapPortal(**v) for v in vector_data["portals"]),
                     )
                 )
             columns, rows, cells = {}, {}, {}
@@ -529,10 +546,17 @@ class SQLiteProjectStore:
                     (
                         m.id,
                         m.asset_id,
-                        7,
+                        9,
                         json.dumps(asdict(m.grid)),
                         json.dumps([asdict(layer) for layer in m.layers], ensure_ascii=False),
-                        json.dumps([asdict(o) for o in m.objects], ensure_ascii=False),
+                        json.dumps(
+                            {
+                                "objects": [asdict(o) for o in m.objects],
+                                "shapes": [asdict(v) for v in m.shapes],
+                                "portals": [asdict(v) for v in m.portals],
+                            },
+                            ensure_ascii=False,
+                        ),
                         int(m.layers_initialized),
                         json.dumps([asdict(r) for r in m.fog.regions]),
                     )

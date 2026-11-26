@@ -80,7 +80,7 @@ Qt дизайн нейтральный graphite #191919/#202020. Private мак�
 item UUID, positive integer count, live description/cost без stored derived cells.
 Object Cards library, original alpha/aspect long-edge128; front layer сверху.
 Full snapshot writer/synchronous backup4GiB и libvips tiles сохраняются.
-Схема по факту: SQLite15/Card6/Map7/Actor1/Rules1/Table3, UI state4; legacy/migration adapters нет.
+Схема по факту: SQLite16/Card7/Map9/Actor1/Rules1(profile2)/Table3, UI state4; legacy/migration adapters нет.
 Targeted batches после блоков, общий gate/build после стабилизации; report/draw.io/checklist.
 Git-действия только в конце после проверки по последним указаниям владельца.
 
@@ -114,3 +114,53 @@ Manual HP/AC/speed final; снижение effective max атомарно clamp 
 Универсальный конструктор переменных, полный combat/effects/slots, multiclass HP,
 scalar/delete Undo и межкартовый перенос отложены. Только адресованная история map.
 Физическую приёмку нового ZIP и ARU-64 не объявлять пройденными по native Qt smoke.
+
+Дополнение UI-приёмки A–F / ADR-034: прежнее «характеристики только Inspector» отменено
+владельцем. Cards-owned виртуальные страницы Характеристики/Модификаторы используют
+те же FieldEdits/ValueAddress, без Section и изменения тогдашних SQLite15/Card6/UIstate4. Явный
+контекст база/Actor, просмотр не создаёт участника. Технический Card Inspector и
+оперативный Actor/Map Inspector разделены. Русский UI catalog не меняет domain IDs;
+qtbase_ru входит в сборку. Typed Item dialog/история по уровням/примеры формул вместо
+пользовательского JSON. Правила — один native dialog текущего проекта из gear, guarded
+preview/apply. Отчёт/матрица: docs/validation/2026-11-21-ui-acceptance-fix.md и
+2026-11-21-ui-fields.md. До ручной приёмки ARU-65/80/83 остаются В работе. Commit/push/
+merge/release этим пакетом не разрешены. Частные вложения не включать в source ZIP.
+
+
+Дополнение 22.11.2026 — лист персонажа v2 / ADR-035: inline ability scores, 3/2/1
+блоки с 18skills/6saves, homebrew race/class/subclass/level. Item equipment facts
+определяются только active inventory rows, один armor/shield с atomic replace/cancel.
+Card armor_type/armor_base/shield удалены; это только resolved formula inputs.
+SQLite16/Card7, профиль5e14 version2; legacy/миграции отсутствуют по новому прямому
+решению владельца «все миры тестовые». SQLite15 отклоняется без записи/удаления.
+Ручной итоговый AC побеждает, оборудование и источники видны в native AC dialog.
+Отчёт: docs/validation/2026-11-22-character-sheet-v2.md. Новые Git-публикации не разрешены.
+
+Maps M5 /25.11.2026 /ADR-036: Maps owns immutable shapes/portals in Map8, читает
+Map7 с пустыми новыми коллекциями без записи на open. SQLite16/Card7 неизменны.
+Фигуры+подписи публичны ПОСЛЕ fog; handles/previews/portals GM-only. Стрелки и
+original-image overlays transient, hidden movement data не передаётся Player.
+Inspector feature-page API нейтрален, composition root координирует владельцев.
+Commit/push текущего M5 разрешены владельцем после проверок; merge/release отдельно.
+Матрица и поставка: docs/validation/2026-11-25-map-m5.md.
+
+
+Maps M5.5 / ARU-91 (25.11.2026): ADR-037, единый MapToolState на игровой MapView,
+native vertical QAction toolbar / last-shape menu / context / overflow. V/H/B/E/M
+только на canvas, Space временно включает руку, Escape отменяет локальный жест.
+Успешное создание shape/portal возвращает выбор; brush/eraser сохраняют режим.
+Формат SQLite16/Card7/Map8 и канон/Undo/презентация M5 сохранены. M5 e40a25d принят
+владельцем82/82, включая чистую Windows. Новая панель ждёт отдельной ручной приёмки;
+ARU-91 не закрывать. Отчёт: docs/validation/2026-11-25-map-m55.md. Commit/push/merge
+этим заданием не разрешены. Кандидат: LODANDSY-Map-M5.5-2026-11-25.zip.
+
+
+Дополнение 26.11.2026 — финальная полировка M5.5 / ARU-91, ARU-89:
+иконки18px/stroke1.15 при кнопках36px, выбор/вершины одной группой, измерения только
+в настройках сетки; новый map получает5ft/cell, старые калибровки не меняются.
+Редактор карты — справа с текстом, native flyout gap10 logical px с screen bounds,
+тонкие разделители групп. ADR-038: Map9 добавляет strict boolean portal.hide_label;
+Map7/8 читаются без записи с hide_label=false. SQLite16/Card7/UIstate4 прежние.
+Подпись хранится при скрытии; навигация/иконка и Map Undo сохранены. Новая поставка:
+LODANDSY-Map-M5.5-Final-2026-11-26.zip; отчёт docs/validation/2026-11-26-map-m55-final.md.
+Обе задачи остаются In Progress до ручной приёмки; commit/push/merge не разрешены.

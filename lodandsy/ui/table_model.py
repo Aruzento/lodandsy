@@ -76,6 +76,9 @@ class TableModel(QAbstractTableModel):
                 return diagnostic
             if col.data_type == "entity_ref" and value is None:
                 return "Выбрать предмет…" if col.ref_card_type == "item" else "Выбрать документ…"
+            caption = self.service.cell_caption(self.document, row, col) if self.service else None
+            if caption is not None:
+                return caption
             return "—" if col.data_type == "projection" and value is None else display_value(value)
         if role == Qt.ItemDataRole.CheckStateRole and col.data_type == "bool":
             return (
@@ -152,7 +155,14 @@ class TableModel(QAbstractTableModel):
                 else parse_cell(value, column.data_type)
             )
             updated = (
-                self.service.set_cell(self.document.id, row, col, parsed, parsed=True)
+                self.service.request_cell_change(
+                    self.document.id,
+                    row,
+                    col,
+                    parsed,
+                    parsed=True,
+                    expected=self._rows[row].value(col),
+                )
                 if self.service
                 else self.document.with_cell(row, col, parsed)
             )

@@ -1,7 +1,7 @@
 import math
 from html import escape
 
-from PySide6.QtCore import QLineF, QRectF, Qt, QTimer
+from PySide6.QtCore import QEvent, QLineF, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QGraphicsItem, QMenu
 
@@ -103,7 +103,11 @@ class TokenItem(QGraphicsItem):
         self.setZValue(10000 + token.z)
         self.setFlag(
             QGraphicsItem.GraphicsItemFlag.ItemIsMovable,
-            self.view._background is not None and self.view.role == "viewer",
+            self.view._background is not None and self.view.token_interaction_enabled,
+        )
+        self.setFlag(
+            QGraphicsItem.GraphicsItemFlag.ItemIsSelectable,
+            self.view.role != "player",
         )
         self.update()
 
@@ -174,6 +178,9 @@ class TokenItem(QGraphicsItem):
     def mousePressEvent(self, event):
         self._drag_origin = self.pos()
         self._dragging = True
+        self.view.measurement_changed.emit(
+            (self.token.id, (self.x(), self.y()), (self.x(), self.y()))
+        )
         self._cancelled = False
         super().mousePressEvent(event)
 
@@ -181,11 +188,18 @@ class TokenItem(QGraphicsItem):
         if self._cancelled:
             return
         super().mouseMoveEvent(event)
+        self.setPos(
+            max(0, min(self.view.map_width, self.x())), max(0, min(self.view.map_height, self.y()))
+        )
+        self.view.measurement_changed.emit(
+            (self.token.id, (self._drag_origin.x(), self._drag_origin.y()), (self.x(), self.y()))
+        )
         self.view.transient_changed.emit("token", self.token.id, self.x(), self.y())
 
     def mouseReleaseEvent(self, event):
         super().mouseReleaseEvent(event)
         self._dragging = False
+        self.view.measurement_changed.emit(None)
         if self._cancelled:
             self.setPos(self._drag_origin)
             return
@@ -193,6 +207,15 @@ class TokenItem(QGraphicsItem):
             return
         view, key, x, y = self.view, self.token.id, self.pos().x(), self.pos().y()
         QTimer.singleShot(0, view, lambda: view.token_moved.emit(key, x, y))
+
+    def sceneEvent(self, event):
+        if event.type() == QEvent.Type.UngrabMouse and getattr(self, "_dragging", False):
+            self._dragging = False
+            self._cancelled = True
+            self.setPos(self._drag_origin)
+            self.view.measurement_changed.emit(None)
+            self.view.transient_changed.emit("token", self.token.id, self.x(), self.y())
+        return super().sceneEvent(event)
 
     def mouseDoubleClickEvent(self, event):
         if self.view.role != "viewer":
@@ -209,6 +232,7 @@ class TokenItem(QGraphicsItem):
         for label, name in [
             ("Открыть карточку", "open"),
             ("Копировать токен", "copy"),
+            ("Показать картинку", "portrait"),
             ("Удалить токен", "delete"),
         ]:
             action = menu.addAction(label)

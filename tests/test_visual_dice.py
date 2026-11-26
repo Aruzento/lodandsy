@@ -43,7 +43,7 @@ def test_mixed_rng_bounds_d100_zero():
         roll_dice(DiceConfig((0,) * 7))
 
 
-def test_roll_clean_runtime_bounded_reopen_and_backup(project, tmp_path):
+def test_roll_clean_runtime_bounded_reopen_and_backup(project, tmp_path, qtbot):
     app, project = project
     project.create_project(tmp_path / "world")
     widget = app.dice.open().widget()
@@ -56,7 +56,11 @@ def test_roll_clean_runtime_bounded_reopen_and_backup(project, tmp_path):
         widget.throw()
     assert project.saver.revision == revision and not project.saver.dirty
     assert len(widget.runtime["history"]) == 50
-    widget.copy.click()
+    from lodandsy.application.clipboard import clipboard_writer
+
+    with qtbot.waitSignal(clipboard_writer().message, timeout=5000) as copied:
+        widget.copy.click()
+    assert copied.args == ["Скопировано"]
     assert QApplication.clipboard().text() == widget.runtime["last"]
     app.window_manager.close_window("tool:dice")
     widget = app.dice.open().widget()

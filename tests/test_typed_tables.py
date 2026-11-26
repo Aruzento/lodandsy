@@ -65,7 +65,11 @@ def test_model_tsv_atomic_checkbox_and_copy(qtbot):
     )
     assert model.document.rows[0].value(table.columns[2].id) is False
     widget.table.selectRow(0)
-    widget.copy_selection()
+    from lodandsy.application.clipboard import clipboard_writer
+
+    with qtbot.waitSignal(clipboard_writer().message, timeout=5000) as copied:
+        widget.copy_selection()
+    assert copied.args == ["Скопировано"]
     assert QApplication.clipboard().text() == "Wolf\t2\tfalse"
 
 

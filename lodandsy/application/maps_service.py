@@ -11,6 +11,7 @@ from shiboken6 import isValid
 from lodandsy.application.entity_session import EntitySession
 from lodandsy.domain.map_document import (
     MapDocument,
+    MapGrid,
     MapLayer,
     MapPayload,
     PlacedAssetObject,
@@ -27,6 +28,8 @@ def map_payload(document):
         document.objects,
         document.layers_initialized,
         document.fog,
+        document.shapes,
+        document.portals,
     )
 
 
@@ -86,7 +89,16 @@ class MapEdit(QUndoCommand):
         self.generation = session.core.generation
         self.fields = tuple(
             key
-            for key in ("tokens", "grid", "layers", "objects", "layers_initialized", "fog")
+            for key in (
+                "tokens",
+                "grid",
+                "layers",
+                "objects",
+                "layers_initialized",
+                "fog",
+                "shapes",
+                "portals",
+            )
             if getattr(before, key) != getattr(after, key)
         )
 
@@ -102,7 +114,7 @@ class MapEdit(QUndoCommand):
                 getattr(target, field),
                 getattr(current, field),
             )
-            if field in {"tokens", "layers", "objects"}:
+            if field in {"tokens", "layers", "objects", "shapes", "portals"}:
                 old_ids, new_ids = {v.id: v for v in old}, {v.id: v for v in new}
                 values = {v.id: v for v in actual}
                 touched = {
@@ -197,6 +209,8 @@ class MapsService(QObject):
                 p.objects,
                 p.layers_initialized,
                 p.fog,
+                p.shapes,
+                p.portals,
             ),
         )
 
@@ -224,7 +238,11 @@ class MapsService(QObject):
 
     def create_map(self, title, asset_id, parent_id=None):
         document = MapDocument(
-            title, asset_id, layers=(MapLayer("Слой 1"),), layers_initialized=True
+            title,
+            asset_id,
+            grid=MapGrid(feet_per_cell=5),
+            layers=(MapLayer("Слой 1"),),
+            layers_initialized=True,
         )
         with self.core.transaction():
             self.entities.create(
@@ -283,7 +301,16 @@ class MapsService(QObject):
         self._put_map(replace(self.get_map(map_id), tokens=tuple(tokens)))
 
     def edit_map(self, map_id, *, command="Изменить карту", **changes):
-        if changes.keys() - {"tokens", "grid", "layers", "objects", "layers_initialized", "fog"}:
+        if changes.keys() - {
+            "tokens",
+            "grid",
+            "layers",
+            "objects",
+            "layers_initialized",
+            "fog",
+            "shapes",
+            "portals",
+        }:
             raise ValueError("Изменять ID или источник карты этой командой нельзя")
         before = self.get_map(map_id)
         if "layers" in changes:
@@ -293,6 +320,31 @@ class MapsService(QObject):
             operation = MapEdit(self, before, after, command)
             operation.check(True)
             self.undo_stack(map_id).push(operation)
+
+    def put_vector(self, map_id, value):
+        from lodandsy.domain.map_document import MapPortal, MapShape
+
+        if not isinstance(value, (MapShape, MapPortal)):
+            raise ValueError("Ожидается фигура или портал")
+        field = "shapes" if isinstance(value, MapShape) else "portals"
+        document = self.get_map(map_id)
+        values = getattr(document, field)
+        updated = tuple(value if v.id == value.id else v for v in values)
+        if not any(v.id == value.id for v in values):
+            updated += (value,)
+        self.edit_map(
+            map_id,
+            command="Изменить фигуру" if field == "shapes" else "Изменить портал",
+            **{field: updated},
+        )
+
+    def delete_vector(self, map_id, key):
+        document = self.get_map(map_id)
+        changes = {
+            field: tuple(v for v in getattr(document, field) if v.id != key)
+            for field in ("shapes", "portals")
+        }
+        self.edit_map(map_id, command="Удалить фигуру или портал", **changes)
 
     def edit_fog(self, map_id, path, *, erase=False):
         from lodandsy.application.fog_geometry import apply_fog

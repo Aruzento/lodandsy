@@ -45,7 +45,8 @@ Backup/restore находятся в gear правого rail у Inspector; ве
 
 Тип выбирается при создании и затем неизменяем в сервисе, collection и generic payload
 mutation. Поддерживаются текущие note/article/character/location/item/object/folder
-и их typed fields; прежних templates/tags нет. Характеристики редактируются в Inspector.
+и их typed fields; прежних templates/tags нет. Характеристики редактируются в системной
+вкладке карточки, технические свойства — в Inspector (переопределение ADR-034).
 
 Обязательная нативная Qt компоновка: крупный квадратный portrait слева132–220 logical px,
 справа read-only type badge, одно крупное title, inline summary. Отдельная строка
@@ -148,7 +149,7 @@ shared tileLRU64MiB; rebuild/cancel/checksum/version/atomic publish сохран
 
 ## Хранение, проверка и поставка
 
-Один канон EntityCollection и SQLite15/Card6/Map7/Actor1/Rules1/Table3 через sqlite3, assets отдельно
+Один канон EntityCollection и SQLite16/Card7/Map9/Actor1/Rules1(profile2)/Table3 через sqlite3, assets отдельно
 с относительными путями; UI state4 отдельно. FK на каждом connection, составные
 операции транзакционны. Autosave/Ctrl+S — SaveCoordinator с упорядоченными ревизиями
 и ACK после commit; pending/dirty/saving/error/draft видимы. Safe close/switch,
@@ -176,8 +177,9 @@ Toggle Player предупреждает и требует выбора existing
 Удаление последнего token/map/layer сохраняет Actor. Actor/Card удаляются явно с
 перечнем зависимостей. Во «Связях» видны и участники без размещений.
 
-Inspector: Tree/Card — база, Token/Actor — имя, current/temp HP и индивидуальные
-final overrides, отдельно read-only effective/auto/source/dependencies. Native Card
+«Характеристики»: явный выбор базы или участника, current/temp HP и индивидуальные
+final overrides, отдельно read-only effective/auto/source/dependencies. Inspector Card
+технический; Token/Actor Inspector сохраняет оперативные поля карты. Native Card
 Editor layout/QTextDocument/UUID/Undo/drafts сохраняются. Скорость хранится в ft,
 метры и клетки вычисляются по известному feet_per_cell карты. HP абсолютные целые≥0,
 процент производный. При росте max current не лечится, при снижении ограничивается
@@ -191,19 +193,19 @@ HP auto: только сохранённая single-class die history с кор�
 CR auto, class features, other movement, slots/remaining hit dice, attunement,
 полноценные conditions/combat/расход/отдых не реализованы и не выдаются за расчёт.
 
-Item modifiers редактируются Inspector: set/multiply/add/minimum/maximum, stable UUID,
+Item modifiers редактируются во вкладке «Модификаторы»: set/multiply/add/minimum/maximum, stable UUID,
 явная stacking group/policy/priority. Активность — ручное заявление GM. Индивидуальный
 inventory клонируется один раз с новыми row/column UUID и общими Item refs; Item cost/
 description проецируются live. Qty влияет на вес, не множит бонус; удалённый Item
 остаётся soft ref, неполные значения диагностируются. Новые источники расширяют тот же
 контракт, без effects engine. Нет глобального equipped на Item Card.
 
-Проектные формулы — отдельное native окно из Inspector: локальный draft, пример,
+Проектные формулы — отдельное native окно из шестерёнки правого rail: локальный draft, пример,
 preview/ошибки/ожидаемые HP clamps, явные apply/reset. Без eval/exec/исполнения AST;
 ограниченные грамматика/типы/DAG/бюджеты ADR-033. Manual HP/AC/speed — итоговый override,
 auto остаётся видимым. Shipped defaults неизменны, overrides/revision — один канон.
 
-Составные изменения валидируются до post-commit; SQLite15 нормализует Actors/tokens/
+Составные изменения валидируются до post-commit; SQLite16 нормализует Actors/tokens/
 default/rules, один snapshot writer и durable ACK. Schema14 и старые payload безопасно
 отклоняются без автоперезаписи. Backup/restore сохраняют UUID/rules/manual/activity.
 Undo/Redo размещения/копии/движения адресован, preflight до смены индекса; последующие
@@ -213,3 +215,50 @@ Scalar/deletion Undo, перенос NPC между картами и други
 Приёмка: T01–T29 и физический checklist в validation report/build_support/README.
 Только проверенный целостный кандидат; чистая Windows/два монитора/mixed DPI остаются
 отдельными физическими проверками, не заменяются pytest или программным smoke.
+
+Исправление UI-приёмки A–F: ADR-034; виртуальные `system:attributes`/`system:modifiers`
+без Section/миграции. Ресурсы сверху, плитки модификатор (итог), база и источники,
+адаптивные 3/2/1 блоки (ADR-035). Русские UI labels/choices/errors без перевода канонических ID.
+История хитов по уровням, закрытый каталог целей модификаторов, typed rule examples,
+табличный preview до/после и clamp; закрытие несохранённых правил подтверждается.
+Ручная приёмка U01–U18 относится к новому ZIP; прошлый пакет её не заменяет.
+
+
+Дополнение 22.11.2026 — лист персонажа v2 / ADR-035: inline ability scores, 3/2/1
+блоки с 18skills/6saves, homebrew race/class/subclass/level. Item equipment facts
+определяются только active inventory rows, один armor/shield с atomic replace/cancel.
+Card armor_type/armor_base/shield удалены; это только resolved formula inputs.
+SQLite16/Card7, профиль5e14 version2; legacy/миграции отсутствуют по новому прямому
+решению владельца «все миры тестовые». SQLite15 отклоняется без записи/удаления.
+Ручной итоговый AC побеждает, оборудование и источники видны в native AC dialog.
+Отчёт: docs/validation/2026-11-22-character-sheet-v2.md. Новые Git-публикации не разрешены.
+
+## Maps M5 — согласовано25.11.2026
+
+ARU-87–90 / ADR-036: расстояние при drag (сетка5e14 и геометрия), постоянные
+публичные фигуры поверх fog, GM-only порталы с retarget существующего Player и
+временный синхронный показ original token asset. Фигуры не раскрывают карту/токены;
+стрелки публикуются только при полностью открытом пути. Нет боя/LOS/Actor transfer.
+SQLite16/Card7, Map8 с безопасным чтением Map7 без записи на open. Критерии D/S/P/V/G,
+проверки и физические ограничения: docs/validation/2026-11-25-map-m5.md.
+
+
+Maps M5.5 / ARU-91 (25.11.2026): ADR-037, единый MapToolState на игровой MapView,
+native vertical QAction toolbar / last-shape menu / context / overflow. V/H/B/E/M
+только на canvas, Space временно включает руку, Escape отменяет локальный жест.
+Успешное создание shape/portal возвращает выбор; brush/eraser сохраняют режим.
+Формат SQLite16/Card7/Map8 и канон/Undo/презентация M5 сохранены. M5 e40a25d принят
+владельцем82/82, включая чистую Windows. Новая панель ждёт отдельной ручной приёмки;
+ARU-91 не закрывать. Отчёт: docs/validation/2026-11-25-map-m55.md. Commit/push/merge
+этим заданием не разрешены. Кандидат: LODANDSY-Map-M5.5-2026-11-25.zip.
+
+
+Дополнение 26.11.2026 — финальная полировка M5.5 / ARU-91, ARU-89:
+иконки18px/stroke1.15 при кнопках36px, выбор/вершины одной группой, измерения только
+в настройках сетки; новый map получает5ft/cell, старые калибровки не меняются.
+Редактор карты — справа с текстом, native flyout gap10 logical px с screen bounds,
+тонкие разделители групп. ADR-038: Map9 добавляет strict boolean portal.hide_label;
+Map7/8 читаются без записи с hide_label=false. SQLite16/Card7/UIstate4 прежние.
+Подпись хранится при скрытии; навигация/иконка и Map Undo сохранены. Новая поставка:
+LODANDSY-Map-M5.5-Final-2026-11-26.zip; отчёт docs/validation/2026-11-26-map-m55-final.md.
+Обе задачи остаются In Progress до ручной приёмки; commit/push/merge не разрешены.

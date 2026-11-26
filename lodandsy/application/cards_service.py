@@ -27,6 +27,7 @@ class CardsService(QObject):
     cards_replaced = Signal()
     actor_changed = Signal(str, str, object)
     rules_changed = Signal()
+    base_effective_changed = Signal(str)
 
     def __init__(self, cards=None, parent=None, *, core=None):
         super().__init__(parent)
@@ -160,15 +161,32 @@ class CardsService(QObject):
 
             self.core.after_commit(retire)
         for card in self.cards.all():
+            if card.card_type in ACTOR_TYPES:
+                base = self.effective(card.id)
+                signature = tuple(
+                    (key, v.value, v.source, v.status, v.diagnostic)
+                    for key, v in base.values.items()
+                    if key in base.automatic
+                )
+                signature = (signature, base.equipment, base.sources)
+                identity = card.id, None
+                if self._published_effective.get(identity) != signature:
+
+                    def publish_base(key=card.id, identity=identity, signature=signature):
+                        self._published_effective[identity] = signature
+                        self.base_effective_changed.emit(key)
+
+                    self.core.after_commit(publish_base)
             actors = []
             for actor in card.actors:
                 effective = self.effective(ActorRef(card.id, actor.id))
                 maximum = effective.get("hp_max")
                 signature = tuple(
-                    (key, value.value, value.status, value.diagnostic)
+                    (key, value.value, value.source, value.status, value.diagnostic)
                     for key, value in effective.values.items()
                     if key in effective.automatic
                 )
+                signature = (signature, effective.equipment, effective.sources)
                 identity = card.id, actor.id
                 if self._published_effective.get(identity) != signature:
 
@@ -211,14 +229,15 @@ class CardsService(QObject):
         effective = self.effective(reference)
         maximum, current = effective.get("hp_max"), actor.value("hp_current")
         max_text = str(maximum.value) if maximum.status == "ok" else "—"
-        summary = f"HP: {current if current is not None else '—'} / {max_text}"
+        summary = f"Хиты: {current if current is not None else '—'} / {max_text}"
         if actor.value("hp_temp"):
             summary += f" · временные {actor.value('hp_temp')}"
         if maximum.status == "ok" and maximum.value > 0 and current is not None:
             summary += f" · {100 * current / maximum.value:.1f}%"
         for key in ("ac", "speed"):
             value = effective.get(key)
-            summary += f" · {key.upper()}: {value.value if value.status == 'ok' else '—'}"
+            label = "КД" if key == "ac" else "Скорость, фт."
+            summary += f" · {label}: {value.value if value.status == 'ok' else '—'}"
         return actor.name, summary, actor.inventory_id
 
     def preview_rules(self, overrides, *, expected_revision=None):

@@ -1,5 +1,5 @@
 import pytest
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QPoint, QPointF, QRectF, Qt
 from PySide6.QtGui import QPainterPath
 
 from lodandsy.application.fog_geometry import (
@@ -120,7 +120,8 @@ def test_fog_overlay_pixels_undo_backup_reopen_and_transient(project, tmp_path, 
     assert player.view._fog_path is viewer.view._fog_path
     revision = project.saver.revision
     app.maps._transient(document.id, "token", token.id, 260, 210, viewer.view)
-    assert player.view._tokens[0].pos() == QPointF(260, 210)
+    # M5 withholds hidden transient coordinates; canonical token stays at its origin.
+    assert player.view._tokens[0].pos() == QPointF(250, 200)
     assert project.saver.revision == revision
     assert render(player.view).pixelColor(point).name() == "#000000"
     app.maps_service.edit_fog(document.id, rectangle(225, 175, 50, 50), erase=True)
@@ -218,7 +219,7 @@ def test_native_gesture_commit_escape_panel_and_selection(project, tmp_path, qtb
     app.window.show()
     document, viewer = open_map(app, project, tmp_path, qtbot)
     tools = viewer.fog_tools
-    tools.show()
+    tools.set_mode("hide")
     view = viewer.view
     point = view.mapFromScene(QPointF(250, 200))
     before = project.saver.revision
@@ -230,7 +231,7 @@ def test_native_gesture_commit_escape_panel_and_selection(project, tmp_path, qtb
     qtbot.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, pos=point)
     state = app.maps_service.get_map(document.id).fog
     assert len(state.regions) == 1 and project.saver.revision == before + 1
-    tools.hide()
+    viewer.tool_state.activate("select")
     assert app.maps_service.get_map(document.id).fog == state
     tools.show()
     tools.set_mode("select")
@@ -240,3 +241,33 @@ def test_native_gesture_commit_escape_panel_and_selection(project, tmp_path, qtb
     assert not app.maps_service.get_map(document.id).fog.regions
     app.maps_service.undo_stack(document.id).undo()
     assert app.maps_service.get_map(document.id).fog == state
+
+
+@pytest.mark.parametrize("zoom", [0.25, 1, 4])
+def test_polygon_screen_snap_nodes_commit_undo(project, tmp_path, qtbot, zoom):
+    app, session = project
+    app.window.show()
+    document, viewer = open_map(app, session, tmp_path, qtbot)
+    tools, view = viewer.fog_tools, viewer.view
+    tools.show()
+    tools.set_mode("polygon")
+    view.scale(zoom, zoom)
+    points = [(200, 150), (300, 150), (300, 250)]
+    tools.points = points.copy()
+    first = QPointF(*points[0])
+    near = view.mapToScene((view.mapFromScene(first) + QPoint(6, 0)))
+    assert tools._snaps(near)
+    tools._preview(near)
+    assert view._fog_snap and view._fog_vertices == tuple(points)
+    assert view._fog_preview.currentPosition() == first
+    revision = session.saver.revision
+    qtbot.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, pos=view.mapFromScene(near))
+    assert session.saver.revision == revision + 1
+    assert len(app.maps_service.get_map(document.id).fog.regions) == 1
+    assert not tools.points and not view._fog_vertices
+    app.maps_service.undo_stack(document.id).undo()
+    assert not app.maps_service.get_map(document.id).fog.regions
+    app.maps_service.undo_stack(document.id).redo()
+    assert app.maps_service.get_map(document.id).fog.regions
+    viewer.tool_state.activate("select")
+    assert view.viewport().cursor().shape() != Qt.CursorShape.CrossCursor

@@ -28,6 +28,7 @@ class ConflictBar(QWidget):
         layout.addWidget(self.details)
         self.fields.currentIndexChanged.connect(self._details)
         self._rows = {}
+        self.display_value = str
         self.hide()
 
     def resizeEvent(self, event):
@@ -59,5 +60,6 @@ class ConflictBar(QWidget):
     def _details(self):
         raw, saved = self._rows.get(self.fields.currentData(), ("", ""))
         self.details.setText(
-            f"Конфликт · сохранённое: {str(saved)[:240]}\nМой вариант: {str(raw)[:240]}"
+            f"Конфликт · сохранённое: {self.display_value(saved)[:240]}\n"
+            f"Мой вариант: {self.display_value(raw)[:240]}"
         )

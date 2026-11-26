@@ -1,5 +1,6 @@
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -19,7 +20,7 @@ def number(parent, value, minimum=0, maximum=1_000_000):
 
 
 class MapGridDialog(QDialog):
-    def __init__(self, grid, parent=None):
+    def __init__(self, grid, parent=None, *, measurement_mode="grid"):
         super().__init__(parent)
         self.setWindowTitle("Сетка карты")
         layout = QFormLayout(self)
@@ -33,6 +34,12 @@ class MapGridDialog(QDialog):
         self.scale_known = QCheckBox("Масштаб в футах известен")
         self.scale_known.setChecked(grid.feet_per_cell is not None)
         self.feet = number(self, grid.feet_per_cell or 5, 0.01, 1e9)
+        self.measurement_mode_combo = QComboBox(self)
+        self.measurement_mode_combo.addItem("D&D 5e 2014", "grid")
+        self.measurement_mode_combo.addItem("Геометрическое", "geometry")
+        self.measurement_mode_combo.setCurrentIndex(
+            max(0, self.measurement_mode_combo.findData(measurement_mode))
+        )
         for label, widget in [
             ("", self.enabled),
             ("Клетка (px карты):", self.cell),
@@ -42,6 +49,7 @@ class MapGridDialog(QDialog):
             ("Цвет (#RRGGBB):", self.color),
             ("", self.scale_known),
             ("Футов на клетку:", self.feet),
+            ("Измерение расстояний:", self.measurement_mode_combo),
         ]:
             layout.addRow(label, widget)
         self.buttons = dialog_buttons(self, layout)
@@ -65,6 +73,21 @@ class MapGridDialog(QDialog):
             self.color.text(),
             self.feet.value() if self.scale_known.isChecked() else None,
         )
+
+
+class MapPortalDialog(QDialog):
+    def __init__(self, portal=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Портал")
+        layout = QFormLayout(self)
+        self.label = QLineEdit(portal.label if portal else "", self)
+        self.label.setMaxLength(200)
+        self.label.setPlaceholderText("Пусто — название карты назначения")
+        self.hide_label = QCheckBox("Не показывать название на карте", self)
+        self.hide_label.setChecked(portal.hide_label if portal else False)
+        layout.addRow("Название:", self.label)
+        layout.addRow(self.hide_label)
+        dialog_buttons(self, layout)
 
 
 def dialog_buttons(parent, layout):

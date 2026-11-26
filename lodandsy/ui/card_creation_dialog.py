@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
 )
 
-from lodandsy.domain.card_schema import ACTOR_TYPES, CARD_TYPES
+from lodandsy.domain.card_schema import CARD_TYPES
 
 
 class CardCreationDialog(QDialog):
@@ -31,12 +31,14 @@ class CardCreationDialog(QDialog):
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         self.ok = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        self.ok.setText("Создать")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("Отмена")
         self.ok.setEnabled(False)
         self.title_edit.textChanged.connect(lambda text: self.ok.setEnabled(bool(text.strip())))
         layout.addRow(buttons)
 
     def _type_changed(self):
-        enabled = self.card_type.currentData() in ACTOR_TYPES
+        enabled = self.card_type.currentData() in {"character", "creature"}
         self.player.setEnabled(enabled)
         if not enabled:
             self.player.setChecked(False)

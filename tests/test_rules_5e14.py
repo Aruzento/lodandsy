@@ -3,6 +3,7 @@ import pytest
 from lodandsy.application.cards_service import CardsService
 from lodandsy.domain.actor_state import ActorRef
 from lodandsy.domain.card import Card
+from lodandsy.domain.equipment import EquipmentEntry, resolve_equipment
 from lodandsy.domain.formula import CalculationError, evaluate, parse_expression
 from lodandsy.domain.modifiers import Modifier, ModifierSource, apply_modifiers
 from lodandsy.domain.rules_5e14 import FUNCTIONS, ProjectRules, calculate
@@ -32,9 +33,6 @@ def test_ability_floor_and_proficiency(score, result):
 def test_hp_history_modifiers_manual_armor_skills_and_units():
     card = warrior(
         dexterity=9,
-        armor_type="medium",
-        armor_base=14,
-        shield=True,
         ac_mode="auto",
         speed_mode="auto",
         perception_proficiency=2,
@@ -44,7 +42,13 @@ def test_hp_history_modifiers_manual_armor_skills_and_units():
     assert calculate(card).get("hp_max").value == 44
     modifier = Modifier("constitution", operand=2)
     sources = (ModifierSource(("actor", "table", "row", modifier.id), modifier),)
-    result = calculate(card, sources=sources)
+    equipment = resolve_equipment(
+        (
+            EquipmentEntry("armor", "a", "Кираса", "armor", "medium", 14),
+            EquipmentEntry("shield", "s", "Щит", "shield"),
+        )
+    )
+    result = calculate(card, sources=sources, equipment=equipment)
     assert result.get("hp_max").value == 49
     assert result.get("ac").value == 15
     assert result.get("perception").value == 8
@@ -57,7 +61,11 @@ def test_hp_history_modifiers_manual_armor_skills_and_units():
     assert manual.get("hp_max").value == 80 and manual.automatic["hp_max"].value == 49
     assert calculate(warrior(hp_gains=())).get("hp_max").status == "unknown"
     shield = Modifier("ac", operand=2, group="shield", policy="max")
-    doubled = calculate(card, sources=(ModifierSource(("item", shield.id), shield),))
+    doubled = calculate(
+        card,
+        equipment=resolve_equipment((equipment.armor,)),
+        sources=(ModifierSource(("item", shield.id), shield),),
+    )
     assert doubled.get("ac").value == 15
     assert calculate(warrior(hp_progression="multiclass")).get("hp_max").status == "unsupported"
     assert (

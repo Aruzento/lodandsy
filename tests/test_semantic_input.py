@@ -167,7 +167,8 @@ def test_header_and_inspector_typing_do_not_publish_per_character(project, qtbot
     qtbot.keyClick(title, Qt.Key.Key_S, Qt.KeyboardModifier.ControlModifier)
     qtbot.waitUntil(lambda: app.cards.get(card.id).title == "New title")
     assert title.hasFocus() and title.selectedText() == "New" and title.isUndoAvailable()
-    hp = app.window.inspector_panel.field_form.controls["hp_max"]
+    app.card_views.open_game_sheet(card.id)
+    hp = view.game_sheet.controls["hp_max"]
     hp.setFocus()
     qtbot.waitUntil(hp.hasFocus)
     hp.selectAll()

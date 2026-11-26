@@ -1,14 +1,14 @@
 import math
 
-from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QPainter, QPainterPath, QPen
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSettings, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QGraphicsItem,
     QGraphicsScene,
     QGraphicsView,
+    QHBoxLayout,
     QLabel,
     QMenu,
-    QToolBar,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -82,10 +82,12 @@ class MapView(QGraphicsView):
     object_action = Signal(str, str)
     card_dropped = Signal(str, float, float)
     token_moved = Signal(str, float, float)
+    measurement_changed = Signal(object)
     token_action = Signal(str, str)
     token_selected = Signal(str)
     token_add_requested = Signal(float, float)
     tool_changed = Signal(str)
+    model_changed = Signal()
 
     def __init__(self, role="viewer"):
         super().__init__()
@@ -99,11 +101,21 @@ class MapView(QGraphicsView):
         self._fog_state = FogState()
         self._fog_path = QPainterPath()
         self._fog_preview = QPainterPath()
+        self._fog_vertices = ()
+        self._fog_snap = False
+        self.vector_shapes = ()
+        self.vector_portals = ()
+        self.measurement = None
+        self.measurement_mode = QSettings().value("maps/measurement", "grid")
+        if self.measurement_mode not in {"grid", "geometry"}:
+            self.measurement_mode = "grid"
         self._fog_selection = QPainterPath()
         self.fog_opacity = 0.5
         self.tool = "select"
         self._previous_tool = None
         self.setScene(QGraphicsScene(self))
+        if role == "player":
+            self.scene().setBackgroundBrush(Qt.GlobalColor.black)
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
         self.map_width, self.map_height = 1000, 700
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
@@ -123,6 +135,32 @@ class MapView(QGraphicsView):
             self.setDragMode(QGraphicsView.DragMode.NoDrag)
             self.setInteractive(False)
             self.setFrameShape(QGraphicsView.Shape.NoFrame)
+        if role == "viewer":
+            from lodandsy.ui.map_tools import MapToolState
+
+            self.tool_state = MapToolState(self)
+            self.tool_state.activate("select")
+
+    @property
+    def tool(self):
+        return self.tool_state.active if hasattr(self, "tool_state") else self._editor_tool
+
+    @tool.setter
+    def tool(self, value):
+        self._editor_tool = value
+
+    @property
+    def token_interaction_enabled(self):
+        return self.role == "viewer" and self.tool_state.active == "select"
+
+    def cancel_token_drag(self):
+        self.measurement_changed.emit(None)
+        for item in self._tokens:
+            if getattr(item, "_dragging", False):
+                item._cancelled = True
+                item._dragging = False
+                item.setPos(item._drag_origin)
+                self.transient_changed.emit("token", item.token.id, item.x(), item.y())
 
     def paintEvent(self, event):
         if self.role == "player" and not self._display_ready:
@@ -136,6 +174,7 @@ class MapView(QGraphicsView):
         super().drawForeground(painter, rect)
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        self._paint_measurement(painter)
         color = QColor("#000000")
         color.setAlphaF(1 if self.role == "player" else self.fog_opacity)
         painter.setBrush(color)
@@ -149,13 +188,91 @@ class MapView(QGraphicsView):
             painter.drawPath(self._fog_preview)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(self._fog_selection)
+            # Overlay geometry is in logical viewport pixels, independent of map zoom/DPR.
+            transform = painter.worldTransform()
+            painter.resetTransform()
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            for index, vertex in enumerate(self._fog_vertices):
+                center = transform.map(QPointF(*vertex))
+                snap = index == 0 and self._fog_snap
+                painter.setPen(QPen(QColor("#ffffff"), 1.5))
+                painter.setBrush(QColor("#73d6b2" if snap else "#303030"))
+                radius = 7 if snap else 4
+                painter.drawEllipse(center, radius, radius)
         painter.restore()
+        from lodandsy.ui.map_vectors import paint_vectors
+
+        paint_vectors(self, painter)
         if self.role == "player":
             outside = QPainterPath()
             outside.addRect(rect)
             visible = QPainterPath()
             visible.addRect(self._source_rect)
             painter.fillPath(outside.subtracted(visible), Qt.GlobalColor.black)
+
+    def public_motion_visible(self, item, origin, target):
+        from PySide6.QtGui import QPainterPathStroker
+
+        segment = QPainterPath(QPointF(*origin))
+        segment.lineTo(QPointF(*target))
+        stroke = QPainterPathStroker()
+        stroke.setWidth(max(item.boundingRect().width(), item.boundingRect().height()))
+        corridor = stroke.createStroke(segment)
+        for point in (origin, target):
+            corridor.addRect(item.boundingRect().translated(QPointF(*point)))
+        return not self._fog_path.intersects(corridor)
+
+    def _paint_measurement(self, painter):
+        if self.measurement is None:
+            return
+        from lodandsy.domain.map_measurements import distance
+
+        key, origin, target = self.measurement
+        item = next((i for i in self._tokens if i.token.id == key), None)
+        if item is None or not item.isVisible():
+            return
+        segment = QPainterPath(QPointF(*origin))
+        segment.lineTo(QPointF(*target))
+        if self.role == "player" and not self.public_motion_visible(item, origin, target):
+            return
+        value = distance(self.grid, origin, target, self.measurement_mode)
+        text = (
+            "Масштаб не задан" if value is None else f"{value:.1f}".rstrip("0").rstrip(".") + " фт."
+        )
+        text += " · сетка" if self.measurement_mode == "grid" else " · геометрия"
+        transform = painter.worldTransform()
+        start, end = transform.map(QPointF(*origin)), transform.map(QPointF(*target))
+        painter.save()
+        painter.resetTransform()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor("#eeeeee"), 2))
+        painter.drawLine(start, end)
+        painter.drawEllipse(start, 4, 4)
+        delta = end - start
+        angle = math.atan2(delta.y(), delta.x())
+        for offset in (-0.45, 0.45):
+            painter.drawLine(
+                end, end - QPointF(math.cos(angle + offset) * 10, math.sin(angle + offset) * 10)
+            )
+        label = painter.fontMetrics().boundingRect(text).adjusted(-6, -4, 6, 4)
+        footprint = transform.mapRect(item.boundingRect())
+        radius = max(footprint.width(), footprint.height()) / 2
+        length = math.hypot(delta.x(), delta.y())
+        normal = QPointF(delta.y() / length, -delta.x() / length) if length > 0 else QPointF(0, -1)
+        if normal.y() > 0:
+            normal = -normal
+        spacing = (
+            radius + abs(normal.x()) * label.width() / 2 + abs(normal.y()) * label.height() / 2 + 12
+        )
+        label.moveCenter(((start + end) / 2 + normal * spacing).toPoint())
+        bounds = self.viewport().rect().adjusted(2, 2, -2, -2)
+        if not bounds.contains(label):
+            label.moveCenter(((start + end) / 2 - normal * spacing).toPoint())
+        label.moveLeft(max(bounds.left(), min(label.left(), bounds.right() - label.width())))
+        label.moveTop(max(bounds.top(), min(label.top(), bounds.bottom() - label.height())))
+        painter.fillRect(label, QColor("#202020"))
+        painter.drawText(label, Qt.AlignmentFlag.AlignCenter, text)
+        painter.restore()
 
     def viewportEvent(self, event):
         if self.role == "player" and event.type() == QEvent.Type.ToolTip:
@@ -225,6 +342,8 @@ class MapView(QGraphicsView):
         if self._fog_state != document.fog or fog_path is not None:
             self._fog_path = fog_path if fog_path is not None else state_path(document.fog)
             self._fog_state = document.fog
+        self.vector_shapes = document.shapes
+        self.vector_portals = document.portals if self.role != "player" else ()
         self.grid = document.grid
         previous = {item.token.id: item for item in self._tokens}
         current_ids = {token.id for token in document.tokens}
@@ -264,7 +383,7 @@ class MapView(QGraphicsView):
                 or item.presentation != presentation
                 or item.cell_size != document.grid.cell_size
                 or bool(item.flags() & QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
-                != (self._background is not None and self.role == "viewer")
+                != (self._background is not None and self.token_interaction_enabled)
             ):
                 item.set_value(token, presentation, root, path, provider)
             items.append(item)
@@ -275,7 +394,7 @@ class MapView(QGraphicsView):
             item.setVisible(item.token.layer_id is None or layers[item.token.layer_id].visible)
             item.setAcceptedMouseButtons(
                 Qt.MouseButton.NoButton
-                if self.role != "viewer"
+                if not self.token_interaction_enabled
                 else Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton
             )
         ids = {o.id for o in document.objects}
@@ -293,6 +412,7 @@ class MapView(QGraphicsView):
                 self._objects[value.id] = item
 
         self._model_ready = True
+        self.model_changed.emit()
         if self.role == "player":
             self.follow_camera(self._source_rect)
         if self.role != "player":
@@ -370,6 +490,9 @@ class MapView(QGraphicsView):
             event.ignore()
 
     def set_tool(self, name):
+        if self.role == "viewer":
+            self.tool_state.activate(name)
+            return
         if self.role != "editor" or name not in {"select", "pan", "place"}:
             return
         self.tool = name
@@ -427,14 +550,6 @@ class MapView(QGraphicsView):
                 self.set_tool("pan")
             event.accept()
             return
-        if self.role == "viewer" and event.key() == Qt.Key.Key_Escape:
-            for item in self._tokens:
-                if getattr(item, "_dragging", False):
-                    item._cancelled = True
-                    item.setPos(item._drag_origin)
-                    self.transient_changed.emit("token", item.token.id, item.x(), item.y())
-            event.accept()
-            return
         if self.role == "editor" and event.key() == Qt.Key.Key_Escape:
             for item in self._objects.values():
                 if getattr(item, "_dragging", False):
@@ -457,6 +572,7 @@ class MapView(QGraphicsView):
         super().keyReleaseEvent(event)
 
     def focusOutEvent(self, event):
+        self.measurement_changed.emit(None)
         if self._previous_tool is not None:
             tool, self._previous_tool = self._previous_tool, None
             self.set_tool(tool)
@@ -530,6 +646,7 @@ class MapView(QGraphicsView):
 
 class MapWidget(QWidget):
     grid_requested = Signal()
+    grid_visibility_requested = Signal(bool)
     editor_requested = Signal()
     presentation_requested = Signal()
 
@@ -538,54 +655,56 @@ class MapWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
-        buttons = QToolBar(self)
-        buttons.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.token_add = QAction(icon("plus"), "Токен", self)
-        self.token_add.setEnabled(False)
-        grid = QAction(icon("table"), "Сетка", self)
-        grid.triggered.connect(self.grid_requested)
-        fit = QAction(icon("fit"), "Вся карта", self)
-        editor = QAction(icon("rename"), "Редактор", self)
-        editor.triggered.connect(self.editor_requested)
-        buttons.addActions([self.token_add, grid, fit, editor])
-        presentation = QAction(icon("monitor"), "Открыть презентацию", self)
-        presentation.triggered.connect(self.presentation_requested)
-        button = QToolButton(buttons)
-        button.setDefaultAction(presentation)
-        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        buttons.addWidget(button)
-        buttons.addSeparator()
-        self.add_undo_actions(buttons, undo_stack)
-        layout.addWidget(buttons)
         self.message = QLabel("Загрузка изображения…")
         self.message.setWordWrap(True)
         self.message.setObjectName("mapStatus")
-        layout.addWidget(self.message)
         self.view = MapView()
         from lodandsy.ui.fog_tools import FogTools
+        from lodandsy.ui.map_tools import MapToolbars
+        from lodandsy.ui.map_vectors import VectorTools
 
         self.fog_tools = FogTools(self.view, self)
-        fog = QAction(icon("fog"), "Туман войны", self)
-        fog.setCheckable(True)
-        fog.toggled.connect(self.fog_tools.setVisible)
-        fog_button = QToolButton(buttons)
-        fog_button.setDefaultAction(fog)
-        fog_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        buttons.addWidget(fog_button)
-        layout.addWidget(self.fog_tools)
-        layout.addWidget(self.view, 1)
+        self.vector_tools = VectorTools(self.view, self)
+        self.tools = MapToolbars(self.view, self.fog_tools, self.vector_tools, self)
+        self.tool_state = self.view.tool_state
+        self.token_add = self.tools.actions["token"]
+        self.add_undo_actions(self.tools.general, undo_stack, native=True)
+        self.tools.populate_general()
+        self.tools.grid_settings_requested.connect(self.grid_requested)
+        self.tools.grid_toggled.connect(self.grid_visibility_requested)
+        self.tools.editor_requested.connect(self.editor_requested)
+        self.tools.presentation_requested.connect(self.presentation_requested)
+        layout.addWidget(self.tools.general)
+        layout.addWidget(self.message)
+        body = QHBoxLayout()
+        body.setSpacing(6)
+        body.addWidget(self.tools.sidebar)
+        content = QVBoxLayout()
+        content.setSpacing(4)
+        content.addWidget(self.tools.context)
+        content.addWidget(self.view, 1)
+        body.addLayout(content, 1)
+        layout.addLayout(body, 1)
+        self.tool_state.activate("select")
         self.pending_camera = None
         self.project_root = None
-        fit.triggered.connect(
-            lambda: self.view.fitInView(self.view.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
-        )
 
-    def add_undo_actions(self, bar, stack):
+    def heightForWidth(self, width):
+        # ADS wraps documents in QScrollArea. A wrapped hint must not turn the
+        # map viewport's preferred height into a minimum and hide the toolbar.
+        return self.minimumSizeHint().height()
+
+    def hideEvent(self, event):
+        self.tool_state.cancel()
+        self.tool_state.restore_space()
+        super().hideEvent(event)
+
+    def add_undo_actions(self, bar, stack, *, native=False):
         for name, shortcut, action in [
             ("undo", "Ctrl+Z", stack.createUndoAction(self, "Отменить")),
             ("redo", "Ctrl+Y", stack.createRedoAction(self, "Повторить")),
         ]:
-            action.setIcon(icon(name))
+            action.setIcon(icon(name, 18, stroke_width=1.15) if native else icon(name))
             action.setShortcut(shortcut)
 
             def update_tip(a=action, key=shortcut):
@@ -597,11 +716,14 @@ class MapWidget(QWidget):
             update_tip()
             action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             self.addAction(action)
-            button = QToolButton(bar)
-            button.setDefaultAction(action)
-            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-            button.setAccessibleName("Отменить" if name == "undo" else "Повторить")
-            bar.addWidget(button)
+            if native:
+                bar.addAction(action)
+            else:
+                button = QToolButton(bar)
+                button.setDefaultAction(action)
+                button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+                button.setAccessibleName("Отменить" if name == "undo" else "Повторить")
+                bar.addWidget(button)
 
     def image_ready(self, root, _name):
         if root == self.project_root:

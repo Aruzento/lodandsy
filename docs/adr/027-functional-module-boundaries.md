@@ -107,3 +107,23 @@ validation до post-commit. ProjectActions объединяет Actor+inventory
 Maps получает participant resolver/addressed callbacks; Table остаётся общей таблицей.
 Нет нового registry/service locator/сессии. Actor events по Card+Actor ID; bounded
 derived cache не канон. Фактический AST96modules/220imports/0cycles, imports-cards5e14.json.
+
+
+## Дополнение UI-приёмки — ADR-034
+
+GameSheetBinding, game_sheet/game_labels/item_page/hit_history явно Cards-owned в
+AST gate. Системные страницы UI используют прежние addressed public contracts. Maps
+получает callback перехода к Card+ActorRef из composition root, не импортирует
+private Card widgets. Общие FieldEdits/ConflictBar/Qt theme остаются shared.
+Фактический граф: 101 модуль / 250 связей / 0 циклов (imports-ui-acceptance.json).
+
+
+## Дополнение 22.11.2026 — ADR-035
+
+Лист v2 и equipment facts заменяют сохранённую броню/щит Card и прежние proficiency
+формы. Новый SQLite16/Card7/profile2 по прямому разрешению владельца «все миры тестовые»;
+миграций/legacy нет, старые файлы отклоняются без записи. Actor/Token ownership,
+FieldEdits, native document lifecycle и функциональные границы сохранены.
+Generic Tables cell hooks собирает composition root; pure EquipmentFacts и профиль —
+Cards. AST105modules/264edges/0cycles, gate не ослаблен. Подробности и критерии1–7:
+docs/validation/2026-11-22-character-sheet-v2.md.

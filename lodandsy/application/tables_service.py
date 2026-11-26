@@ -46,6 +46,9 @@ class TablesService(QObject):
         self._drafts = {}
         self._draft_snapshots = {}
         self.references = references
+        self.cell_edit_command = None
+        self.cell_caption = lambda document, row, column: None
+        self.reference_caption_fields = frozenset()
         self._edits = {}
         self._orphans = {}
         self._errors = {}
@@ -104,7 +107,7 @@ class TablesService(QObject):
 
     def clone_inventory(self, source_id, parent_id, title):
         """Copy owned rows/columns, preserving soft Item refs and remapping local IDs."""
-        from lodandsy.domain.table_document import ColumnDefinition, RowRecord, inventory_columns
+        from lodandsy.domain.table_document import RowRecord, inventory_columns
 
         source = self.get_table(source_id) if source_id else None
         original = source.columns if source else inventory_columns()
@@ -117,12 +120,6 @@ class TablesService(QObject):
             )
             for column in original
         )
-        if not any(column.key == "active" for column in columns):
-            columns += (
-                ColumnDefinition(
-                    "Активен", "bool", len(columns), key="active", required=True, default=False
-                ),
-            )
         activity = next(column for column in columns if column.key == "active")
         if activity.data_type != "bool":
             raise ValueError("Столбец активности должен быть логическим")
@@ -325,6 +322,17 @@ class TablesService(QObject):
                     or old.value(column.id) != value
                 ):
                     self._validate_target(column, value)
+
+    def request_cell_change(self, key, row_id, column_id, raw, *, expected=_UNSET, parsed=False):
+        if expected is _UNSET:
+            expected = self._cell(key, row_id, column_id)[1].value(column_id)
+        if self.cell_edit_command:
+            result = self.cell_edit_command(
+                key, row_id, column_id, raw, expected=expected, parsed=parsed
+            )
+            if result is not NotImplemented:
+                return result
+        return self.set_cell(key, row_id, column_id, raw, expected=expected, parsed=parsed)
 
     def set_cell(self, key, row_id, column_id, raw, *, expected=_UNSET, parsed=False):
         document, row, column = self._cell(key, row_id, column_id)
@@ -598,6 +606,8 @@ class TablesService(QObject):
                 columns = self.get_table(table).columns
                 cells = by_table.setdefault(table, set())
                 cells.add((row, source))
+                if fields and self.reference_caption_fields.intersection(fields):
+                    cells.update((row, c.id) for c in columns)
                 cells.update(
                     (row, c.id)
                     for c in columns

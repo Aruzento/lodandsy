@@ -1,0 +1,9 @@
+{
+  "platform": "windows",
+  "device_pixel_ratio": 1.25,
+  "capture": "QWidget.grab: production Qt views; not compositor capture",
+  "isolated_world_and_catalogue": true,
+  "manual_physical_acceptance": false,
+  "card_actor_hp": 32,
+  "effective_hp_max": 49
+}

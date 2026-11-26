@@ -3,7 +3,7 @@
 from html import escape
 
 from PySide6.QtGui import QAction, QKeySequence
-from PySide6.QtWidgets import QInputDialog
+from PySide6.QtWidgets import QInputDialog, QMessageBox
 
 from lodandsy.application.card_inspector_binding import CardInspectorBinding
 from lodandsy.application.cards_controller import CardsController
@@ -49,6 +49,9 @@ class AppController:
         self.actions = ProjectActions(
             self.core, self.cards_service, self.tables_service, self.maps_service
         )
+        self.tables_service.cell_edit_command = self._table_cell_command
+        self.tables_service.cell_caption = self.actions.inventory_activity_caption
+        self.tables_service.reference_caption_fields = frozenset({"equipment_kind"})
         self.tables = TablesController(
             window, self.window_manager, self.tables_service, self.open_entity
         )
@@ -85,10 +88,16 @@ class AppController:
             self.actions.title_edits,
         )
         self.inspector_binding.open_inventory = self.tables.open_table
-        self.card_views.actor_context = self.inspector_binding.show_actor
+        self.inspector_binding.open_sheet = self.card_views.open_game_sheet
         self.card_views.placements_query = self.actions.actor_placements
         self.card_views.locate_placement = self.maps.focus_token
         self.card_views.delete_actor = self.actions.delete_actor
+
+        def show_map_panel(widget):
+            self.inspector_binding.finish_edits()
+            window.inspector_panel.show_feature_page(widget)
+
+        self.maps.show_vector_inspector = show_map_panel
         self.maps.show_actor = lambda card, actor, scale=None: self.inspector_binding.show_actor(
             ActorRef(card, actor), feet_per_cell=scale
         )
@@ -96,7 +105,12 @@ class AppController:
             self.inspector_binding.update_actor_scale(ActorRef(card, actor), scale)
         )
         self._rules_editor = None
-        window.inspector_panel.rules_requested.connect(self.open_rules)
+        self.maps.open_participant = self.card_views.open_game_sheet
+        self.rules_action = QAction("Игровая система и правила…", window)
+        self.rules_action.setEnabled(False)
+        self.rules_action.triggered.connect(self.open_rules)
+        window.right_rail.settings_menu.addAction(self.rules_action)
+        window.right_rail.settings_menu.addSeparator()
         self.maps_service.map_changed.connect(self._placements_changed)
         self.maps_service.map_deleted.connect(self._placements_changed)
         self.navigator_selection = None
@@ -156,6 +170,33 @@ class AppController:
     def card_editor_window_key(key):
         return f"card-editor:{key}"
 
+    def _table_cell_command(self, key, row_id, column_id, value, *, expected, parsed):
+        table = self.tables_service.get_table(key)
+        column = next(c for c in table.columns if c.id == column_id)
+        if not parsed or column.key != "active" or self.actions.inventory_owner(key) is None:
+            return NotImplemented
+        row = next(r for r in table.rows if r.id == row_id)
+        if row.value(column_id) != expected and row.value(column_id) != value:
+            return self.tables_service.set_cell(
+                key, row_id, column_id, value, expected=expected, parsed=True
+            )
+        guard = self.core.generation, self.core.serial
+        conflicts = self.actions.equipment_conflicts(key, row_id) if value is True else ()
+        if conflicts:
+            names = ", ".join(name for _, name in conflicts)
+            answer = QMessageBox.question(
+                self.window,
+                "Заменить экипировку?",
+                f"Уже надето: {names}. Снять и надеть выбранный предмет?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return self.tables_service.get_table(key)
+        return self.actions.set_inventory_activity(
+            key, row_id, value, replace_existing=bool(conflicts), expected=guard
+        )
+
     def ensure_project(self):
         return self.resources.store is not None or (
             self.project_controller is not None and self.project_controller.save_current()
@@ -187,6 +228,14 @@ class AppController:
         self._rules_editor.raise_()
         self._rules_editor.activateWindow()
         return self._rules_editor
+
+    def close_rules(self, *, force=False):
+        if self._rules_editor is None:
+            return True
+        if force:
+            self._rules_editor.close_for_project()
+            return True
+        return self._rules_editor.close()
 
     def _placements_changed(self, map_id):
         for key in self.card_views.opened_ids:
@@ -253,6 +302,7 @@ class AppController:
         self.window.tree_panel.set_entities(self.core.entities.summaries())
 
     def shutdown_features(self):
+        self.close_rules(force=True)
         self.maps.shutdown()
         self.media.shutdown()
 

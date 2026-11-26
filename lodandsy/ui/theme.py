@@ -1,3 +1,4 @@
+from PySide6.QtCore import QLibraryInfo, QTranslator
 from PySide6.QtGui import QColor, QFont, QPalette
 
 COLORS = {
@@ -14,6 +15,13 @@ COLORS = {
 
 
 def apply_theme(app):
+    if not app.findChild(QTranslator, "russianQt"):
+        translator = QTranslator(app)
+        translator.setObjectName("russianQt")
+        if translator.load(
+            "qtbase_ru", QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+        ):
+            app.installTranslator(translator)
     app.setStyle("Fusion")
     app.setFont(QFont("Segoe UI", 10))
     palette = QPalette()

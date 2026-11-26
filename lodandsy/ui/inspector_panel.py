@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QStackedWidget,
     QTabWidget,
     QToolButton,
@@ -22,8 +23,8 @@ from lodandsy.application.clipboard import copy_text
 from lodandsy.domain.card_schema import ACTOR_TYPES, CARD_TYPES, field_definition, permitted_fields
 from lodandsy.ui.card_fields import CardFieldsForm
 from lodandsy.ui.conflict_bar import ConflictBar
+from lodandsy.ui.game_labels import error_text, field_label, field_surface, source_text, value_text
 from lodandsy.ui.icons import icon
-from lodandsy.ui.modifier_editor import ModifierEditor
 from lodandsy.ui.semantic_edits import SemanticLineEdit
 
 
@@ -35,7 +36,7 @@ class InspectorPanel(QDockWidget):
     discard_drafts_requested = Signal()
     base_requested = Signal()
     inventory_requested = Signal()
-    rules_requested = Signal()
+    sheet_requested = Signal()
 
     def __init__(
         self,
@@ -66,6 +67,7 @@ class InspectorPanel(QDockWidget):
         form = QFormLayout(content)
         form.setContentsMargins(16, 12, 16, 16)
         form.setSpacing(10)
+        form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self.id_edit.hide()
         title_row = QHBoxLayout()
@@ -82,6 +84,10 @@ class InspectorPanel(QDockWidget):
         self.type_label = QLabel()
         self.type_label.setObjectName("mutedCaption")
         form.addRow(self.type_label)
+        self.actor_summary = QLabel()
+        self.actor_summary.setWordWrap(True)
+        self.actor_summary.hide()
+        form.addRow(self.actor_summary)
         self.validation_notice = QLabel()
         self.validation_notice.setTextFormat(Qt.TextFormat.PlainText)
         self.validation_notice.setWordWrap(True)
@@ -98,23 +104,22 @@ class InspectorPanel(QDockWidget):
             )
         )
         self.details_tabs = QTabWidget()
+        self.details_tabs.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         self.details_tabs.addTab(self.field_form, "Свойства")
         effective = QWidget()
         self.effective_form = QFormLayout(effective)
         self.effective_labels = {}
         self.details_tabs.addTab(effective, "Расчёты")
-        self.modifiers = ModifierEditor()
-        self.details_tabs.addTab(self.modifiers, "Модификаторы")
         form.addRow(self.details_tabs)
-        self.base_button = QPushButton("Базовые свойства Card")
+        self.base_button = QPushButton("Базовая карточка")
         self.base_button.clicked.connect(self.base_requested)
         self.inventory_button = QPushButton("Индивидуальный инвентарь")
         self.inventory_button.clicked.connect(self.inventory_requested)
-        self.rules_button = QPushButton("Настройки правил проекта…")
-        self.rules_button.clicked.connect(self.rules_requested)
+        self.sheet_button = QPushButton("Открыть характеристики")
+        self.sheet_button.clicked.connect(self.sheet_requested)
         form.addRow(self.base_button)
         form.addRow(self.inventory_button)
-        form.addRow(self.rules_button)
+        form.addRow(self.sheet_button)
         self.base_button.hide()
         self.inventory_button.hide()
         self.add_field = QPushButton("Добавить поле…")
@@ -133,6 +138,7 @@ class InspectorPanel(QDockWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setWidget(content)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         self.pages = QStackedWidget()
         self.pages.addWidget(scroll)
@@ -144,23 +150,23 @@ class InspectorPanel(QDockWidget):
 
         self.title_edit.commit_requested.connect(lambda raw: self._on_title_editing_finished())
         self.parent_combo.currentIndexChanged.connect(self._on_parent_index_changed)
+        self.details_tabs.currentChanged.connect(self._size_details)
 
         self.clear_card()
 
+    def _size_details(self, *_args):
+        form = (
+            self.field_form
+            if self.details_tabs.currentIndex() == 0
+            else self.details_tabs.widget(1)
+        )
+        self.details_tabs.setMaximumHeight(form.sizeHint().height() + 80)
+
     def set_metadata(self, card, drafts):
-        self.fields_caption.setText("ХАРАКТЕРИСТИКИ")
-        keys = [*CARD_TYPES[card.card_type].fields]
-        if card.card_type in ACTOR_TYPES:
-            keys = sorted(
-                permitted_fields(card.card_type)
-                - {
-                    "title",
-                    "description",
-                    "summary",
-                    "aliases",
-                },
-                key=lambda key: (field_definition(key).group, field_definition(key).label),
-            )
+        self.fields_caption.setText("СВОЙСТВА")
+        keys = [
+            key for key in CARD_TYPES[card.card_type].fields if field_surface(key) == "inspector"
+        ]
         keys += [
             key
             for key, value in card.values
@@ -169,9 +175,14 @@ class InspectorPanel(QDockWidget):
         ]
         keys = [key for key in keys if key != "modifiers"]
         self.field_form.set_card(card, tuple(dict.fromkeys(keys)), drafts)
-        self.details_tabs.show()
-        self.details_tabs.setTabVisible(1, card.card_type in ACTOR_TYPES)
-        self.details_tabs.setTabVisible(2, card.card_type == "item")
+        self.details_tabs.setVisible(bool(keys))
+        self.details_tabs.setMaximumHeight(self.field_form.sizeHint().height() + 45)
+        self.actor_summary.hide()
+        self.details_tabs.setTabVisible(1, False)
+        self.sheet_button.setVisible(card.card_type in ACTOR_TYPES or card.card_type == "item")
+        self.sheet_button.setText(
+            "Открыть модификаторы" if card.card_type == "item" else "Открыть характеристики"
+        )
         self.base_button.hide()
         self.inventory_button.hide()
         self.parent_combo.setEnabled(True)
@@ -187,13 +198,18 @@ class InspectorPanel(QDockWidget):
             del blocker
 
     def set_actor_metadata(self, card, actor, drafts):
-        keys = sorted(
-            permitted_fields(card.card_type, "actor"), key=lambda key: field_definition(key).label
-        )
+        keys = [
+            key
+            for key in ("hp_current", "hp_temp", "ac_override", "hp_max_override", "speed_override")
+            if key in permitted_fields(card.card_type, "actor")
+        ]
         self.field_form.set_values(actor.id, actor.value, keys, drafts)
         self.details_tabs.show()
+        self._size_details()
+        self.actor_summary.show()
         self.details_tabs.setTabVisible(1, True)
-        self.details_tabs.setTabVisible(2, False)
+        self.sheet_button.show()
+        self.sheet_button.setText("Открыть игровой лист")
         self.type_label.setText("Участник · " + card.title)
         self.fields_caption.setText("ИНДИВИДУАЛЬНЫЕ ЗНАЧЕНИЯ")
         self.fields_caption.show()
@@ -204,6 +220,14 @@ class InspectorPanel(QDockWidget):
         self.parent_combo.setEnabled(False)
 
     def set_effective(self, effective, card_type, *, feet_per_cell=None):
+        self.actor_summary.setText(
+            "Хиты: "
+            + value_text(effective.get("hp_current"))
+            + " / "
+            + value_text(effective.get("hp_max"))
+            + " · КД: "
+            + value_text(effective.get("ac"))
+        )
         keys = tuple(effective.automatic)
         if card_type == "object":
             keys = tuple(
@@ -227,32 +251,29 @@ class InspectorPanel(QDockWidget):
                 label.setWordWrap(True)
                 label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
                 self.effective_labels[key] = label
-                self.effective_form.addRow(key, label)
+                self.effective_form.addRow(field_label(key), label)
         for key, label in self.effective_labels.items():
             value, automatic = effective.get(key), effective.automatic[key]
-            label.setText(
-                (str(value.value) if value.status == "ok" else "— · " + value.status)
-                + " · "
-                + value.source
-            )
+            label.setText(value_text(value) + " · " + source_text(value.source))
             label.setToolTip(
-                value.diagnostic
+                error_text(value.diagnostic)
                 + "\nАвтоматически: "
                 + (
                     str(automatic.value)
                     if automatic.status == "ok"
-                    else automatic.status + ": " + automatic.diagnostic
+                    else value_text(automatic) + ": " + error_text(automatic.diagnostic)
                 )
                 + "\nЗависимости: "
-                + ", ".join(sorted(map(str, value.dependencies)))
+                + ", ".join(field_label(str(key)) for key in sorted(value.dependencies, key=str))
             )
             if key == "speed" and value.status == "ok":
-                conversion = f"{value.value} ft · {value.value * 0.3048:g} м"
+                conversion = f"{value.value} фт. · {value.value * 0.3048:g} м"
                 if feet_per_cell is not None:
                     conversion += f" · {value.value / feet_per_cell:g} клеток"
                 else:
                     conversion += " · масштаб карты не задан"
                 label.setToolTip(label.toolTip() + "\n" + conversion)
+        self._size_details()
 
     def clear_metadata(self):
         self.type_label.clear()
@@ -263,6 +284,8 @@ class InspectorPanel(QDockWidget):
         self.details_tabs.hide()
         self.base_button.hide()
         self.inventory_button.hide()
+        self.sheet_button.hide()
+        self.actor_summary.hide()
 
     def set_card(
         self,
@@ -306,6 +329,20 @@ class InspectorPanel(QDockWidget):
         del id_blocker
         del title_blocker
         del parent_blocker
+
+    @property
+    def feature_page_active(self):
+        return self.pages.currentIndex() > 1
+
+    def clear_feature_page(self):
+        if self.feature_page_active:
+            self.pages.setCurrentIndex(1)
+
+    def show_feature_page(self, widget):
+        """Display a feature-owned native panel without transferring data ownership."""
+        if self.pages.indexOf(widget) < 0:
+            self.pages.addWidget(widget)
+        self.pages.setCurrentWidget(widget)
 
     def show_entity_summary(self, entity_id, title):
         self.clear_card()
