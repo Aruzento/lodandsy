@@ -53,6 +53,12 @@ def path_region(path, key=None):
     return FogRegion(tuple(rings), **({"id": key} if key else {}))
 
 
+def brush_stamp(center, diameter):
+    path = QPainterPath()
+    path.addEllipse(center, diameter / 2, diameter / 2)
+    return path
+
+
 def stroke_path(points, diameter):
     _validate_points(points)
     if (
@@ -62,6 +68,8 @@ def stroke_path(points, diameter):
         or not 1 <= diameter <= 100000
     ):
         raise ValueError("Слишком длинный жест или некорректный размер кисти")
+    if len(points) == 1:
+        return brush_stamp(QPointF(*points[0]), diameter)
     path = QPainterPath(QPointF(*points[0]))
     for p in points[1:]:
         path.lineTo(QPointF(*p))
@@ -71,9 +79,7 @@ def stroke_path(points, diameter):
     stroker.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
     result = stroker.createStroke(path)
     for p in (points[0], points[-1]):
-        cap = QPainterPath()
-        cap.addEllipse(QPointF(*p), diameter / 2, diameter / 2)
-        result = result.united(cap)
+        result = result.united(brush_stamp(QPointF(*p), diameter))
     return result
 
 

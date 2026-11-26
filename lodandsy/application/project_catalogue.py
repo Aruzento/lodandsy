@@ -17,6 +17,7 @@ from lodandsy.application.sqlite_project_store import (
 
 # Leave room for database sidecars and the longest workspace-recovery filename.
 MAX_WORLD_PATH = 200
+WINDOWS_PATH_CHARACTERS = '<>:"/\\|?*'
 
 
 def _system_documents():
@@ -60,7 +61,9 @@ class ProjectCatalogue:
 
     def destination(self, name):
         if (
-            not name or not name.strip() or name in {".", ".."} or ntpath.isreserved(name)
+            not isinstance(name, str) or not name.strip() or name in {".", ".."}
+            or any(char in WINDOWS_PATH_CHARACTERS or ord(char) < 32 for char in name)
+            or ntpath.isreserved(name)
             or name.casefold().startswith(".lodandsy-")
         ):
             raise ProjectError("Введите допустимое название проекта для Windows.")

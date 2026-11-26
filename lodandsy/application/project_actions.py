@@ -152,16 +152,21 @@ class ProjectActions:
 
     def inventory_owner(self, table_id):
         signature = self.core.generation, self.core.serial
-        if self._inventory_owner_cache[0] != signature:
+        if self.core.in_transaction or self._inventory_owner_cache[0] != signature:
             owners = {}
-            for card in self.cards.cards.all():
-                for section in card.sections:
+            for entity in self.core.entities.summaries():
+                if entity.kind != "card":
+                    continue
+                payload = self.core.entities.payload(entity.id)
+                for section in payload.sections:
                     if section.purpose == "inventory" and section.table_id:
-                        owners[section.table_id] = card.id
-                for actor in card.actors:
+                        owners[section.table_id] = entity.id
+                for actor in payload.actors:
                     if actor.inventory_id:
-                        owners[actor.inventory_id] = ActorRef(card.id, actor.id)
-            self._inventory_owner_cache = signature, owners
+                        owners[actor.inventory_id] = ActorRef(entity.id, actor.id)
+            if not self.core.in_transaction:
+                self._inventory_owner_cache = signature, owners
+            return owners.get(table_id)
         return self._inventory_owner_cache[1].get(table_id)
 
     def used_denominations(self):

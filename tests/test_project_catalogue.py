@@ -170,6 +170,27 @@ def test_managed_project_name_validation(tmp_path, name):
     assert not catalogue.root.exists()
 
 
+@pytest.mark.parametrize("same_drive", [True, False])
+@pytest.mark.parametrize("suffix", ["World", "\\World", "/World", ""])
+def test_disk_designation_rejected_before_constructing_path(tmp_path, same_drive, suffix):
+    drive = tmp_path.drive or "C:"
+    other = "D:" if drive.casefold() == "c:" else "C:"
+    calls = []
+    catalogue = ProjectCatalogue(lambda: calls.append(True) or tmp_path)
+    with pytest.raises(ProjectError, match="допустимое название"):
+        catalogue.destination((drive if same_drive else other) + suffix)
+    assert calls == []
+
+
+@pytest.mark.parametrize("character", '<>:"/\\|?*' + "\x1f")
+def test_windows_path_characters_rejected_before_accessing_documents(character):
+    def unexpected_documents():
+        pytest.fail("Invalid names must be rejected before building Paths")
+
+    with pytest.raises(ProjectError, match="допустимое название"):
+        ProjectCatalogue(unexpected_documents).destination(f"world{character}name")
+
+
 def test_catalogue_lists_valid_worlds_and_diagnoses_damage_without_writes(tmp_path):
     catalogue = ProjectCatalogue(lambda: tmp_path)
     root = catalogue.root

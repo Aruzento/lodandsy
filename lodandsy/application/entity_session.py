@@ -1,10 +1,13 @@
 """Shared entity lifecycle and transaction notifications; no feature payload knowledge."""
 
+import logging
 from contextlib import contextmanager
 
 from PySide6.QtCore import QObject, Signal
 
 from lodandsy.domain.entity import EntityCollection
+
+logger = logging.getLogger(__name__)
 
 
 class EntitySession(QObject):
@@ -22,9 +25,15 @@ class EntitySession(QObject):
         self.generation = 0
         self._depth = 0
         self._notifications = []
+        self._publishing = False
+        self._pending_notifications = []
         self._dirty = False
         self.serial = 0
         self.prepare = None
+
+    @property
+    def in_transaction(self):
+        return self._depth > 0
 
     @contextmanager
     def transaction(self):
@@ -49,11 +58,35 @@ class EntitySession(QObject):
         if self._depth == 0:
             notifications, self._notifications = self._notifications, []
             changed, self._dirty = self._dirty, False
-            for callback in notifications:
-                callback()
+            self._publish(notifications, changed)
+
+    def _publish(self, notifications, changed):
+        if changed:
+            self.serial += 1
+        self._pending_notifications.extend(
+            (self.generation, callback) for callback in notifications
+        )
+        if self._publishing:
             if changed:
-                self.serial += 1
                 self.committed.emit()
+            return
+        self._publishing = True
+        try:
+            # Saving must observe the committed revision even if a callback opens
+            # a nested event loop, commits again or raises after the rollback boundary.
+            if changed:
+                self.committed.emit()
+            while self._pending_notifications:
+                pending, self._pending_notifications = self._pending_notifications, []
+                for generation, callback in pending:
+                    if generation != self.generation:
+                        continue
+                    try:
+                        callback()
+                    except Exception:
+                        logger.exception("Post-commit entity notification failed")
+        finally:
+            self._publishing = False
 
     def after_commit(self, callback):
         if self._depth:
@@ -65,8 +98,7 @@ class EntitySession(QObject):
         if self._depth:
             self._dirty = True
         else:
-            self.serial += 1
-            self.committed.emit()
+            self._publish((), True)
 
     def select(self, key):
         if key is not None:
@@ -106,6 +138,6 @@ class EntitySession(QObject):
 
     def replace(self, entities):
         self.generation += 1
-        self.select(None)
         self.entities = entities
+        self.select(None)
         self.replaced.emit()

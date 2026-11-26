@@ -1,6 +1,6 @@
 """GM-only gesture buffer. Only a completed gesture reaches MapsService."""
 
-from PySide6.QtCore import QEvent, QPointF, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QPainterPath
 from PySide6.QtWidgets import (
     QBoxLayout,
@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 )
 from shiboken6 import isValid
 
-from lodandsy.application.fog_geometry import polygon_path, region_path, stroke_path
+from lodandsy.application.fog_geometry import brush_stamp, polygon_path, region_path, stroke_path
 from lodandsy.domain.map_fog import MAX_GESTURE_POINTS
 
 
@@ -26,6 +26,7 @@ class FogTools(QWidget):
         super().__init__(parent)
         self.view = view
         self.points = []
+        self._cursor = None
         self.selected = None
         self.snap_radius = 10.0
         view.viewport().setMouseTracking(True)
@@ -44,6 +45,7 @@ class FogTools(QWidget):
         self.size.setSuffix(" px мира")
         self.size.setAccessibleName("Размер кисти тумана")
         self.size.setMaximumWidth(132)
+        self.size.valueChanged.connect(self._brush_size_changed)
         brush.addWidget(self.size)
         row.addWidget(self.brush_group, 0, Qt.AlignmentFlag.AlignLeft)
         opacity_group = QWidget()
@@ -93,6 +95,24 @@ class FogTools(QWidget):
 
     def set_mode(self, mode):
         self.view.tool_state.activate("fog_" + mode)
+
+    def brush_outline(self):
+        if self._cursor is None or self.mode not in {"hide", "erase"}:
+            return None
+        if self.view._background is None or not QRectF(self.view.viewport().rect()).contains(
+            self._cursor
+        ):
+            return None
+        point = self.view.viewportTransform().inverted()[0].map(self._cursor)
+        if QRectF(0, 0, self.view.map_width, self.view.map_height).contains(point):
+            return brush_stamp(point, self.size.value())
+        return None
+
+    def _brush_size_changed(self):
+        if self.points and self.mode in {"hide", "erase"}:
+            self._preview()
+        else:
+            self.view.viewport().update()
 
     def _snaps(self, point):
         if len(self.points) < 3:
@@ -160,9 +180,21 @@ class FogTools(QWidget):
     def eventFilter(self, watched, event):
         if getattr(self, "view", None) is None or not isValid(self.view):
             return False
-        if self.view.role != "viewer" or not self.view.tool_state.active.startswith("fog_"):
-            return False
         kind = event.type()
+        if watched is self.view.viewport():
+            if kind in {
+                QEvent.Type.Enter, QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress,
+                QEvent.Type.MouseButtonRelease, QEvent.Type.Wheel,
+            }:
+                self._cursor = event.position()
+            elif kind == QEvent.Type.Leave:
+                self._cursor = None
+            if self.mode in {"hide", "erase"} and kind in {
+                QEvent.Type.Enter, QEvent.Type.Leave, QEvent.Type.MouseMove,
+            }:
+                self.view.viewport().update()
+        if not self.view.tool_state.active.startswith("fog_"):
+            return False
         if kind == QEvent.Type.KeyPress:
             if event.key() == Qt.Key.Key_Escape:
                 self.cancel()
@@ -184,7 +216,7 @@ class FogTools(QWidget):
         }:
             return False
         if kind == QEvent.Type.MouseMove:
-            point = self.view.mapToScene(event.position().toPoint())
+            point = self.view.viewportTransform().inverted()[0].map(event.position())
             if self.points and self.mode in {"hide", "erase"}:
                 previous = QPointF(*self.points[-1])
                 if (point - previous).manhattanLength() >= max(1, self.size.value() / 8):
@@ -195,7 +227,7 @@ class FogTools(QWidget):
             return True
         if event.button() != Qt.MouseButton.LeftButton:
             return True
-        point = self.view.mapToScene(event.position().toPoint())
+        point = self.view.viewportTransform().inverted()[0].map(event.position())
         if kind == QEvent.Type.MouseButtonPress:
             self.view.setFocus()
             if self.mode == "select":

@@ -25,4 +25,7 @@ jobs:
       - name: Offscreen geometry and data regression checks
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest tests/test_map_fog.py tests/test_conflict_resolution.py tests/test_project_catalogue.py
+        run: >-
+          python -m pytest tests/test_map_fog.py tests/test_map_cursor_ux.py
+          tests/test_conflict_resolution.py tests/test_entity_session.py
+          tests/test_project_catalogue.py tests/test_project_migrations.py

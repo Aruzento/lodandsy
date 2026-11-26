@@ -1,10 +1,15 @@
+import errno
 import hashlib
 import json
+import sqlite3
+import zipfile
 from contextlib import closing
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
+from lodandsy.application import sqlite_project_store
 from lodandsy.application.sqlite_project_store import (
     SCHEMA_VERSION,
     ProjectError,
@@ -117,3 +122,77 @@ def test_failed_map10_upgrade_preserves_original_world(
         assert len(list(tmp_path.glob("LODANDSY-before-Map10-*.lodbackup"))) == 1
     assert hashlib.sha256(store.path.read_bytes()).hexdigest() == before
     assert store.load() == original
+
+
+@pytest.mark.parametrize("failure", ["temp-db", "archive", "verify-space", "budget"])
+def test_map10_storage_budget_and_disk_failures_keep_original(
+    project, tmp_path, qtbot, monkeypatch, failure,
+):
+    store, _, original, updated, _ = map9_world(project, tmp_path, qtbot)
+    before = store.path.read_bytes()
+    if failure == "temp-db":
+        connect = sqlite3.connect
+
+        def connect_with_full_temp(database, *args, **kwargs):
+            if "lodandsy-backup-" in str(database):
+                raise sqlite3.OperationalError("database or disk is full")
+            return connect(database, *args, **kwargs)
+
+        monkeypatch.setattr(sqlite3, "connect", connect_with_full_temp)
+        expected = ProjectError
+    elif failure == "archive":
+        open_archive = zipfile.ZipFile
+
+        def open_with_full_destination(file, mode="r", *args, **kwargs):
+            if mode == "x":
+                raise OSError(errno.ENOSPC, "archive destination full")
+            return open_archive(file, mode, *args, **kwargs)
+
+        monkeypatch.setattr(zipfile, "ZipFile", open_with_full_destination)
+        expected = OSError
+    elif failure == "verify-space":
+        monkeypatch.setattr(
+            sqlite_project_store.shutil, "disk_usage", lambda unused: SimpleNamespace(free=0),
+        )
+        expected = ProjectError
+    else:
+        monkeypatch.setattr(sqlite_project_store, "MAX_BACKUP_BYTES", len(before) - 1)
+        expected = ProjectError
+    with pytest.raises(expected) as error:
+        store.save(updated)
+    assert store.path.read_bytes() == before and store.load() == original
+    backups = tuple(tmp_path.glob("LODANDSY-before-Map10-*.lodbackup"))
+    assert len(backups) == (1 if failure == "verify-space" else 0)
+    assert not tuple(tmp_path.glob("LODANDSY-before-Map10-*.tmp"))
+    if failure == "temp-db":
+        assert isinstance(error.value.__cause__, sqlite3.OperationalError)
+    if failure == "verify-space":
+        assert "Недостаточно свободного места" in str(error.value)
+    if failure == "budget":
+        assert "4 GiB" in str(error.value)
+
+
+@pytest.mark.parametrize("batch", [False, True])
+def test_map10_multiple_map_upgrades_only_backup_the_required_writes(
+    project, tmp_path, qtbot, batch,
+):
+    store, key, _, updated, transformed = map9_world(project, tmp_path, qtbot)
+    app, projects = project
+    other_key = next(m.id for m in updated.maps if m.id != key)
+    other_token = app.actions.place_card(other_key, transformed.card_id, 100, 100)
+    assert projects.save_current()
+    initial = store.load()
+    first_map = next(m for m in updated.maps if m.id == key)
+    other_map = next(m for m in initial.maps if m.id == other_key)
+    second_map = replace(other_map, tokens=(replace(other_token, rotation=16.75),))
+    if not batch:
+        store.save(replace(initial, revision=initial.revision + 1, maps=(first_map, other_map)))
+    revision = initial.revision + (1 if batch else 2)
+    final = replace(initial, revision=revision, maps=(first_map, second_map))
+    store.save(final)
+    loaded = store.load()
+    assert {m.id: m for m in loaded.maps} == {m.id: m for m in final.maps}
+    backups = tuple(tmp_path.glob("LODANDSY-before-Map10-*.lodbackup"))
+    assert len(backups) == (1 if batch else 2)
+    store.save(replace(loaded, revision=revision + 1))
+    assert set(tmp_path.glob("LODANDSY-before-Map10-*.lodbackup")) == set(backups)

@@ -1,6 +1,6 @@
 import math
 
-from PySide6.QtCore import QEvent, QPointF, QRectF, QSettings, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSettings, QSignalBlocker, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QGraphicsItem,
@@ -120,7 +120,7 @@ class MapView(QGraphicsView):
         self.map_width, self.map_height = 1000, 700
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.NoAnchor)
         self.setAccessibleName("Карта: колесо — масштаб, перетаскивание — перемещение")
         self.setAcceptDrops(role != "player")
         self.card_exists = lambda key: False
@@ -188,6 +188,15 @@ class MapView(QGraphicsView):
             painter.drawPath(self._fog_preview)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(self._fog_selection)
+            fog_tools = self.tool_state.fog if self.role == "viewer" else None
+            outline = fog_tools.brush_outline() if fog_tools is not None else None
+            if outline is not None:
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                for color, width in (("#191919", 3), ("#ffffff", 1)):
+                    pen = QPen(QColor(color), width)
+                    pen.setCosmetic(True)
+                    painter.setPen(pen)
+                    painter.drawPath(outline)
             # Overlay geometry is in logical viewport pixels, independent of map zoom/DPR.
             transform = painter.worldTransform()
             painter.resetTransform()
@@ -600,16 +609,25 @@ class MapView(QGraphicsView):
         super().focusOutEvent(event)
 
     def wheelEvent(self, event):
-        if self.role == "player":
-            event.accept()
+        event.accept()
+        delta = event.angleDelta().y() or event.pixelDelta().y()
+        if self.role == "player" or not delta:
             return
         scale = self.transform().m11()
         target = max(
-            self.minimum_zoom(), min(16, scale * (1.2 if event.angleDelta().y() > 0 else 1 / 1.2))
+            self.minimum_zoom(), min(16, scale * (1.2 if delta > 0 else 1 / 1.2))
         )
-        self.scale(target / scale, target / scale)
+        if target == scale:
+            return
+        cursor = event.position()
+        world = self.viewportTransform().inverted()[0].map(cursor)
+        with QSignalBlocker(self):
+            self.scale(target / scale, target / scale)
+            error = self.viewportTransform().map(world) - cursor
+            horizontal, vertical = self.horizontalScrollBar(), self.verticalScrollBar()
+            horizontal.setValue(horizontal.value() + round(error.x()))
+            vertical.setValue(vertical.value() + round(error.y()))
         self._publish_camera()
-        event.accept()
 
     def contextMenuEvent(self, event):
         if self.role == "player":
