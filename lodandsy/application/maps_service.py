@@ -371,12 +371,13 @@ class MapsService(QObject):
         self.edit_map(map_id, tokens=(*document.tokens, token), command="Разместить карточку")
         return token
 
-    def edit_token(self, map_id, token_id, **changes):
+    def edit_token(self, map_id, token_id, *, command="Изменить токен", **changes):
         if changes.keys() - {
             "x",
             "y",
             "cells_w",
             "cells_h",
+            "rotation",
             "kind_override",
             "z",
             "label_override",
@@ -391,7 +392,22 @@ class MapsService(QObject):
             replace(token, **changes) if token.id == token_id else token
             for token in document.tokens
         )
-        self.edit_map(map_id, tokens=tokens, command="Изменить токен")
+        self.edit_map(map_id, tokens=tokens, command=command)
+
+    def transform_object_token(self, map_id, previous, candidate):
+        if previous not in self.get_map(map_id).tokens:
+            raise ValueError("Токен изменён другим представлением. Повторите жест.")
+        if self.entities.payload(previous.card_id).card_type != "object":
+            raise ValueError("Трансформация доступна токенам карточек «Объект».")
+        command = (
+            "Повернуть объект" if previous.rotation != candidate.rotation
+            else "Изменить размер объекта"
+        )
+        self.edit_token(
+            map_id, previous.id, command=command,
+            x=candidate.x, y=candidate.y, cells_w=candidate.cells_w, cells_h=candidate.cells_h,
+            rotation=candidate.rotation,
+        )
 
     def move_token(self, map_id, token_id, x, y, *, bounds=None):
         if any(

@@ -1,13 +1,12 @@
 """Native currency settings with a local draft and a single explicit save."""
 
+from dataclasses import replace
 from uuid import uuid4
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
-    QDialog,
-    QDialogButtonBox,
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
@@ -16,9 +15,9 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
-    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -33,9 +32,10 @@ from lodandsy.domain.currency import (
     parse_rate,
 )
 from lodandsy.domain.item_categories import MAX_CUSTOM_CATEGORIES, STANDARD_CATEGORIES, ItemCategory
+from lodandsy.ui.theme import TABLE_ROW, apply_role
 
 
-class CurrencyEditor(QDialog):
+class CurrencyEditor(QWidget):
     def __init__(self, settings, used_ids, save_settings, parent=None):
         super().__init__(parent)
         system = settings.currency
@@ -50,17 +50,15 @@ class CurrencyEditor(QDialog):
             else ((self._base_id, "Базовая монета", "бм", "1"),)
         )
         self._ids = []
-        self.setWindowTitle("Экономика проекта")
-        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        self.resize(550, 380)
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(16, 12, 16, 12)
-        tabs = QTabWidget()
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.pages = QStackedWidget()
         currencies = QWidget()
         currency_layout = QVBoxLayout(currencies)
-        tabs.addTab(currencies, "Валюты")
-        outer.addWidget(tabs)
+        currency_layout.setContentsMargins(0, 0, 0, 0)
+        self.pages.addWidget(currencies)
+        outer.addWidget(self.pages, 1)
         form = QFormLayout()
         self.system = QComboBox()
         self.system.addItem("D&D 5e 2014", STANDARD)
@@ -76,7 +74,12 @@ class CurrencyEditor(QDialog):
         self.table.setAccessibleName("Номиналы валюты")
         self.table.setHorizontalHeaderLabels(("Номинал", "Сокращение", "Курс к базе"))
         self.table.verticalHeader().hide()
+        self.table.verticalHeader().setDefaultSectionSize(TABLE_ROW)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for column in (1, 2):
+            self.table.horizontalHeader().setSectionResizeMode(
+                column, QHeaderView.ResizeMode.ResizeToContents
+            )
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         currency_layout.addWidget(self.table)
@@ -84,6 +87,7 @@ class CurrencyEditor(QDialog):
         actions = QHBoxLayout()
         self.add_button = QPushButton("Добавить номинал")
         self.remove_button = QPushButton("Удалить")
+        apply_role(self.remove_button, "danger")
         actions.addWidget(self.add_button)
         actions.addWidget(self.remove_button)
         actions.addStretch(1)
@@ -91,6 +95,7 @@ class CurrencyEditor(QDialog):
 
         categories = QWidget()
         category_layout = QVBoxLayout(categories)
+        category_layout.setContentsMargins(0, 0, 0, 0)
         self.categories = QListWidget()
         self.categories.setAccessibleName("Категории предметов")
         category_layout.addWidget(self.categories)
@@ -99,23 +104,36 @@ class CurrencyEditor(QDialog):
         category_layout.addWidget(self.add_category, alignment=Qt.AlignmentFlag.AlignLeft)
         for category in settings.categories:
             self._insert_category(category, custom=category not in STANDARD_CATEGORIES)
-        tabs.addTab(categories, "Категории предметов")
+        self.pages.addWidget(categories)
         self.message = QLabel()
         self.message.setWordWrap(True)
         self.message.setTextFormat(Qt.TextFormat.PlainText)
+        apply_role(self.message, "error")
         outer.addWidget(self.message)
-        self.buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Save | QDialogButtonBox.StandardButton.Cancel
-        )
-        outer.addWidget(self.buttons)
 
         self.system.currentIndexChanged.connect(self._show_mode)
         self.table.itemSelectionChanged.connect(self._update_buttons)
         self.add_button.clicked.connect(self._add)
         self.remove_button.clicked.connect(self._remove)
-        self.buttons.accepted.connect(self._apply)
-        self.buttons.rejected.connect(self.reject)
         self._show_mode()
+        self._saved_draft = self._draft()
+
+    def select_section(self, section):
+        self.pages.setCurrentIndex(int(section == "categories"))
+
+    def _category_draft(self):
+        return tuple(
+            (item.data(Qt.ItemDataRole.UserRole), item.text())
+            for index in range(len(STANDARD_CATEGORIES), self.categories.count())
+            if (item := self.categories.item(index)) is not None
+        )
+
+    def _draft(self):
+        return self._shown_kind, tuple(self._rows()), self._category_draft()
+
+    @property
+    def dirty(self):
+        return self._draft() != self._saved_draft
 
     @staticmethod
     def _display_rows(system):
@@ -198,7 +216,7 @@ class CurrencyEditor(QDialog):
             except ValueError as error:
                 self.message.setText(str(error))
 
-    def _apply(self):
+    def save(self):
         try:
             candidate = CurrencySystem()
             if self._shown_kind == CUSTOM:
@@ -208,13 +226,12 @@ class CurrencyEditor(QDialog):
                 )
                 candidate = CurrencySystem(CUSTOM, self._base_id, denominations)
             self._initial.currency.validate_change(candidate, self._used_ids)
-            categories = tuple(
-                ItemCategory(item.data(Qt.ItemDataRole.UserRole), item.text())
-                for index in range(len(STANDARD_CATEGORIES), self.categories.count())
-                if (item := self.categories.item(index)) is not None
-            )
+            categories = tuple(ItemCategory(*entry) for entry in self._category_draft())
             self._save_settings(self._initial, candidate, categories)
         except ValueError as error:
             self.message.setText(str(error))
-            return
-        self.accept()
+            return False
+        self._initial = replace(self._initial, currency=candidate, custom_categories=categories)
+        self._saved_draft = self._draft()
+        self.message.clear()
+        return True

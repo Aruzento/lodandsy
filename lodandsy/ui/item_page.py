@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QLabel,
     QLineEdit,
     QPushButton,
     QVBoxLayout,
@@ -37,11 +38,15 @@ class ItemPage(QWidget):
         self.price = QPushButton()
         self.price.setObjectName("field_cost")
         self.price.clicked.connect(self._edit_price)
-        commerce = QFormLayout()
-        commerce.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
-        commerce.addRow("Категория", self.category)
-        commerce.addRow("Стоимость", self.price)
-        layout.addLayout(commerce)
+        self.commerce = QFormLayout()
+        self.commerce.setSpacing(8)
+        self.commerce.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        self.commerce.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        for title, widget in (("Категория", self.category), ("Стоимость", self.price)):
+            label = QLabel(title)
+            label.setBuddy(widget)
+            self.commerce.addRow(label, widget)
+        layout.addLayout(self.commerce)
         self._price_value, self._price_draft = None, None
         self.modifiers = ModifierEditor()
         layout.addWidget(self.modifiers, 1)
@@ -67,6 +72,15 @@ class ItemPage(QWidget):
         for key in ("armor_category", "armor_ac"):
             self.properties.set_field_visible(key, kind == "armor")
         self.properties.set_field_visible("shield_bonus", kind == "shield")
+        labels = [
+            item.widget()
+            for form in (self.properties.form, self.commerce)
+            for row in range(form.rowCount())
+            if (item := form.itemAt(row, QFormLayout.ItemRole.LabelRole)) is not None
+        ]
+        width = max(label.sizeHint().width() for label in labels)
+        for label in labels:
+            label.setMinimumWidth(width)
         settings = self.settings()
         with QSignalBlocker(self.category):
             choices = (("Без категории", None), *((c.name, c.id) for c in settings.categories))

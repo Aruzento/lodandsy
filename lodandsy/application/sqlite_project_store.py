@@ -43,8 +43,14 @@ from lodandsy.domain.rules_5e14 import ProjectRules
 from lodandsy.domain.table_document import RowRecord, TableDocument
 
 DATABASE_NAME = "project.sqlite3"
+LOCK_NAME = ".lodandsy.lock"
 SCHEMA_VERSION = 17
 MAX_BACKUP_BYTES = 4 * 1024**3
+TRANSFORM_MAP_VERSION = 10
+TOKEN_FIELDS = {
+    "x", "y", "cells_w", "cells_h", "z", "label_override", "image_override", "kind_override",
+    "layer_id",
+}
 
 
 class ProjectError(ValueError):
@@ -105,8 +111,8 @@ class ProjectSnapshot:
 
 
 class ProjectLock:
-    def __init__(self, root: Path):
-        self._file = (root / ".lodandsy.lock").open("a+b")
+    def __init__(self, root: Path, filename=LOCK_NAME):
+        self._file = (root / filename).open("a+b")
         try:
             self._file.seek(0, os.SEEK_END)
             if self._file.tell() == 0:
@@ -130,13 +136,35 @@ class ProjectLock:
             self._file.close()
 
 
-def connect_database(path: Path, *, readonly=False):
+def connect_database(path: Path, *, readonly=False, immutable=False):
+    options = "?mode=ro" if readonly or immutable else "?mode=rw"
+    if immutable:
+        options += "&immutable=1"
     connection = sqlite3.connect(
-        path.as_uri() + ("?mode=ro" if readonly else "?mode=rw"), uri=True, timeout=5
+        path.as_uri() + options, uri=True, timeout=5
     )
     connection.execute("PRAGMA foreign_keys=ON")
     connection.execute("PRAGMA trusted_schema=OFF")
     return connection
+
+
+def _publish_project(staging, destination):
+    if os.name == "nt":
+        # Windows rename is atomic and refuses an existing destination, including empty folders.
+        staging.rename(destination)
+        return
+    # On Unix, rename may replace an empty directory. Reserve the name ourselves first.
+    destination.mkdir()
+    reserved = destination.stat()
+    try:
+        staging.rename(destination)
+    except OSError:
+        try:
+            if os.path.samestat(reserved, destination.lstat()):
+                destination.rmdir()
+        except OSError:
+            pass
+        raise
 
 
 def project_operation(operation):
@@ -164,7 +192,7 @@ class SQLiteProjectStore:
         self._operation_lock = threading.RLock()
 
     @classmethod
-    def create(cls, folder: Path):
+    def create(cls, folder: Path, *, name=None):
         root = Path(folder).resolve()
         root.mkdir(parents=True, exist_ok=True)
         if any(root.iterdir()):
@@ -181,7 +209,7 @@ class SQLiteProjectStore:
                     "project_id TEXT NOT NULL UNIQUE)"
                 )
                 connection.execute(
-                    "INSERT INTO metadata VALUES(?, 0, ?)", (root.name, store._project_id)
+                    "INSERT INTO metadata VALUES(?, 0, ?)", (name or root.name, store._project_id)
                 )
                 connection.execute(
                     "CREATE TABLE entity(id TEXT PRIMARY KEY, kind TEXT NOT NULL, "
@@ -276,10 +304,55 @@ class SQLiteProjectStore:
         return store
 
     @classmethod
-    def open(cls, folder: Path):
+    def create_new(cls, folder: Path, snapshot=None):
+        destination = folder.parent.resolve() / folder.name
+        if destination.exists() or destination.is_symlink():
+            raise ProjectError("Папка проекта уже существует. Выберите другое название.")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(
+            prefix=".lodandsy-create-", dir=destination.parent
+        ) as temporary:
+            staging = Path(temporary)
+            with closing(cls.create(staging, name=destination.name)) as store:
+                if snapshot is not None:
+                    store.save(snapshot)
+                store.load()
+            _publish_project(staging, destination)
+        return cls.open(destination)
+
+    @staticmethod
+    def _check_schema(connection):
+        version = connection.execute("PRAGMA user_version").fetchone()[0]
+        if version != SCHEMA_VERSION:
+            raise ProjectError(
+                f"Unsupported project schema version: {version}. "
+                f"Требуется SQLite-схема {SCHEMA_VERSION}."
+            )
+
+    @classmethod
+    def _project_root(cls, folder: Path):
         root = Path(folder).resolve()
-        if not (root / DATABASE_NAME).is_file():
-            raise ProjectError(f"No {DATABASE_NAME} in the selected folder")
+        database = root / DATABASE_NAME
+        if not database.is_file():
+            raise ProjectError(f"Нет файла мира {DATABASE_NAME} в выбранной папке.")
+        if database.resolve() != database or database.is_symlink():
+            raise ProjectError("Файл базы должен находиться непосредственно в папке мира.")
+        try:
+            with closing(connect_database(database, immutable=True)) as connection:
+                cls._check_schema(connection)
+        except sqlite3.Error as error:
+            raise ProjectError(f"Не удалось прочитать версию базы проекта: {error}") from error
+        return root
+
+    @classmethod
+    def inspect(cls, folder: Path):
+        """Check a catalogue entry without taking the writer lease."""
+        root = cls._project_root(folder)
+        cls._read_snapshot(root / DATABASE_NAME)
+
+    @classmethod
+    def open(cls, folder: Path):
+        root = cls._project_root(folder)
         store = cls(root, ProjectLock(root))
         try:
             store.load()
@@ -301,12 +374,15 @@ class SQLiteProjectStore:
 
     @project_operation
     def load(self) -> ProjectSnapshot:
-        self._check_open()
+        snapshot, self._project_id = self._read_snapshot(self.path, self._project_id)
+        return snapshot
+
+    @classmethod
+    def _read_snapshot(cls, path, expected_project_id=None):
         try:
-            with closing(connect_database(self.path, readonly=True)) as connection:
-                version = connection.execute("PRAGMA user_version").fetchone()[0]
-                if version != SCHEMA_VERSION:
-                    raise ProjectError(f"Unsupported project schema version: {version}")
+            with closing(connect_database(path, readonly=True)) as connection:
+                connection.execute("BEGIN")
+                cls._check_schema(connection)
                 if connection.execute("PRAGMA quick_check").fetchone() != ("ok",):
                     raise ProjectError("Project database is damaged; restore a backup")
                 if connection.execute("PRAGMA foreign_key_check").fetchall():
@@ -316,7 +392,7 @@ class SQLiteProjectStore:
                     raise ProjectError("Invalid project metadata")
                 project_id = metadata[0][1]
                 validate_id(project_id)
-                if self._project_id is not None and self._project_id != project_id:
+                if expected_project_id is not None and expected_project_id != project_id:
                     raise ProjectError("Project identity changed")
                 assets = tuple(
                     AssetRecord(*row)
@@ -378,14 +454,14 @@ class SQLiteProjectStore:
                         "FROM entity e JOIN card_content c ON e.id=c.id WHERE e.kind='card'"
                     )
                 )
-                maps, tables = self._load_modules(connection)
+                maps, tables = cls._load_modules(connection)
                 snapshot = ProjectSnapshot(
                     tuple(cards), metadata[0][0], assets, maps, tables, envelopes, rules,
                     currency, categories,
                 )
                 collection = snapshot.entity_collection()
                 ordered_cards = CardCollection(entities=collection).all()
-                self._validate_modules(ordered_cards, assets, maps, tables)
+                cls._validate_modules(ordered_cards, assets, maps, tables)
                 expected = {
                     "card": "card_content",
                     "map": "map_document",
@@ -395,7 +471,6 @@ class SQLiteProjectStore:
                     ids = {row[0] for row in connection.execute(f"SELECT id FROM {table}")}
                     if ids != {e.id for e in envelopes if e.kind == kind}:
                         raise ProjectError("Entity payload inventory mismatch")
-                self._project_id = project_id
                 return ProjectSnapshot(
                     ordered_cards,
                     metadata[0][0],
@@ -406,7 +481,7 @@ class SQLiteProjectStore:
                     rules,
                     currency,
                     categories,
-                )
+                ), project_id
         except sqlite3.Error as error:
             raise ProjectError(f"Cannot read project: {error}") from error
         except (ValueError, TypeError, KeyError, RecursionError) as error:
@@ -424,6 +499,9 @@ class SQLiteProjectStore:
     def _load_modules(connection):
         maps, tables = [], []
         try:
+            versions = dict(connection.execute("SELECT id,payload_version FROM map_document"))
+            if any(v not in (7, 8, 9, TRANSFORM_MAP_VERSION) for v in versions.values()):
+                raise ValueError("Unsupported Map version")
             token_rows = {}
             for key, map_id, ordinal, card_id, actor_id, placement in connection.execute(
                 "SELECT id,map_id,ordinal,card_id,actor_id,placement FROM map_token "
@@ -433,19 +511,14 @@ class SQLiteProjectStore:
                 if ordinal != len(entries):
                     raise ValueError("Non-contiguous token order")
                 values = json.loads(placement)
-                if not isinstance(values, dict) or values.keys() != {
-                    "x",
-                    "y",
-                    "cells_w",
-                    "cells_h",
-                    "z",
-                    "label_override",
-                    "image_override",
-                    "kind_override",
-                    "layer_id",
-                }:
+                extended = versions[map_id] == TRANSFORM_MAP_VERSION
+                fields = TOKEN_FIELDS | {"rotation"} if extended else TOKEN_FIELDS
+                if not isinstance(values, dict) or values.keys() != fields:
                     raise ValueError("Invalid Token placement fields")
-                entries.append(TokenInstance(card_id, id=key, actor_id=actor_id, **values))
+                token = TokenInstance(card_id, id=key, actor_id=actor_id, **values)
+                if not extended and token.uses_object_transform:
+                    raise ValueError("Дробный размер и поворот требуют Map10")
+                entries.append(token)
             for (
                 key,
                 title,
@@ -461,8 +534,6 @@ class SQLiteProjectStore:
                 "m.grid,m.layers,m.objects,m.layers_initialized,m.fog "
                 "FROM map_document m JOIN entity e ON e.id=m.id ORDER BY e.position,e.id"
             ):
-                if version not in (7, 8, 9):
-                    raise ValueError("Unsupported Map version")
                 vector_data = json.loads(objects)
                 if version == 7:
                     vector_data = {"objects": vector_data, "shapes": [], "portals": []}
@@ -552,12 +623,34 @@ class SQLiteProjectStore:
             if connection.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
                 raise ProjectError("Project schema changed; save refused")
             # Refuse to overwrite unsupported/corrupt existing data, including payload inventory.
-            self.load()
+            previous = self.load()
             current = connection.execute("SELECT revision FROM metadata").fetchone()[0]
             if snapshot.revision <= current:
                 raise ProjectError("Stale revision cannot overwrite a newer project")
             # Validate existing module versions before replacing any canonical payload.
             self._load_modules(connection)
+            previous_versions = dict(
+                connection.execute("SELECT id,payload_version FROM map_document")
+            )
+            map_versions = {
+                document.id: TRANSFORM_MAP_VERSION
+                if (
+                    previous_versions.get(document.id) == TRANSFORM_MAP_VERSION
+                    or any(token.uses_object_transform for token in document.tokens)
+                )
+                else 9
+                for document in snapshot.maps
+            }
+            first_extended_save = current > 0 and TRANSFORM_MAP_VERSION not in (
+                previous_versions.values()
+            )
+            upgrading = any(
+                version == TRANSFORM_MAP_VERSION
+                and (first_extended_save or previous_versions.get(map_id, version) < version)
+                for map_id, version in map_versions.items()
+            )
+            if upgrading:
+                self._backup_before_map_upgrade(previous)
             existing_assets = {
                 row[0]: AssetRecord(*row)
                 for row in connection.execute("SELECT id,path,sha256,size FROM asset")
@@ -596,7 +689,7 @@ class SQLiteProjectStore:
                     (
                         m.id,
                         m.asset_id,
-                        9,
+                        map_versions[m.id],
                         json.dumps(asdict(m.grid)),
                         json.dumps([asdict(layer) for layer in m.layers], ensure_ascii=False),
                         json.dumps(
@@ -638,7 +731,11 @@ class SQLiteProjectStore:
                             {
                                 k: v
                                 for k, v in asdict(token).items()
-                                if k not in {"id", "card_id", "actor_id"}
+                                if (
+                                    k in TOKEN_FIELDS
+                                    or (k == "rotation"
+                                        and map_versions[document.id] == TRANSFORM_MAP_VERSION)
+                                )
                             },
                             ensure_ascii=False,
                         ),
@@ -683,6 +780,23 @@ class SQLiteProjectStore:
                     json.dumps(snapshot.rules.overrides, ensure_ascii=False),
                 ),
             )
+            if upgrading:
+                written, _ = self._load_modules(connection)
+                if (
+                    {document.id: document for document in written}
+                    != {document.id: document for document in snapshot.maps}
+                    or connection.execute("PRAGMA quick_check").fetchone() != ("ok",)
+                    or connection.execute("PRAGMA foreign_key_check").fetchone() is not None
+                ):
+                    raise ProjectError("Проверка перехода на Map10 не пройдена")
+
+    def _backup_before_map_upgrade(self, snapshot):
+        archive = self.root.parent / f"LODANDSY-before-Map10-{uuid4().hex[:12]}.lodbackup"
+        self.backup(archive)
+        with tempfile.TemporaryDirectory(prefix="lodandsy-verify-map10-") as temporary:
+            with closing(self.restore(archive, Path(temporary) / "world")) as restored:
+                if restored.project_id != self.project_id or restored.load() != snapshot:
+                    raise ProjectError("Не прошла проверка резервной копии перед Map10")
 
     @project_operation
     def import_asset(
@@ -807,8 +921,9 @@ class SQLiteProjectStore:
 
     @classmethod
     def restore(cls, archive: Path, destination: Path):
-        destination = Path(destination).resolve()
-        if destination.exists():
+        destination = Path(destination)
+        destination = destination.parent.resolve() / destination.name
+        if destination.exists() or destination.is_symlink():
             raise ProjectError("Restore requires a new folder; existing data is never overwritten")
         destination.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(
@@ -821,8 +936,11 @@ class SQLiteProjectStore:
                 names = [entry.filename for entry in entries]
                 if len(set(names)) != len(names) or DATABASE_NAME not in names:
                     raise ProjectError("Invalid backup inventory")
-                if sum(entry.file_size for entry in entries) > MAX_BACKUP_BYTES:
+                total_size = sum(entry.file_size for entry in entries)
+                if total_size > MAX_BACKUP_BYTES:
                     raise ProjectError("Backup exceeds the 4 GiB restore limit")
+                if shutil.disk_usage(destination.parent).free < total_size:
+                    raise ProjectError("Недостаточно свободного места для восстановления копии.")
                 for entry in entries:
                     parts = PurePosixPath(entry.filename).parts
                     allowed = entry.filename == DATABASE_NAME or (
@@ -850,7 +968,7 @@ class SQLiteProjectStore:
                     validation._verify_asset(asset)
             finally:
                 validation.close()
-            staging.rename(destination)
+            _publish_project(staging, destination)
         return cls.open(destination)
 
     def close(self):

@@ -69,7 +69,7 @@ SHARED = (
         "ui",
         "entity_picker semantic_edits conflict_bar icons project_tree_model card_tree_view "
         "navigator_actions window_manager workspace_host workspace_placement fixed_panel_host "
-        "left_rail right_rail theme project_chooser",
+        "left_rail right_rail theme project_chooser project_name_dialog",
     )
 )
 # Built-in composition, project persistence/codecs and fixed shell adapters deliberately wire
@@ -79,10 +79,11 @@ INTEGRATION = (
     | modules("domain", "document_payloads")
     | modules(
         "application",
-        "app_controller project_actions project_controller save_coordinator sqlite_project_store "
+        "app_controller project_actions project_controller project_catalogue "
+        "save_coordinator sqlite_project_store "
         "workspace_state",
     )
-    | modules("ui", "app_shell inspector_panel tree_panel")
+    | modules("ui", "app_shell inspector_panel tree_panel settings_dialog")
 )
 INTEGRATION_EDGES = {
     ("lodandsy.domain.card_collection", "lodandsy.domain.document_payloads"),

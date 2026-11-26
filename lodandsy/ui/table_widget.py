@@ -21,8 +21,10 @@ from lodandsy.application.clipboard import INVENTORY_MIME, copy_text, decode_inv
 from lodandsy.domain.table_document import ColumnDefinition
 from lodandsy.ui.conflict_bar import ConflictBar
 from lodandsy.ui.entity_picker import EntityPicker
+from lodandsy.ui.icons import icon
 from lodandsy.ui.table_headers import TableView
 from lodandsy.ui.table_model import SemanticCellDelegate, TableModel
+from lodandsy.ui.theme import apply_role
 from lodandsy.ui.wallet_widget import WalletWidget
 
 
@@ -31,7 +33,7 @@ class TableWidget(QWidget):
     draft_changed = Signal()
 
     def __init__(
-        self, document, drafts=None, *, service=None, open_entity=None, set_wallet=None,
+        self, document, drafts=None, *, service=None, open_entity=None, wallet_edits=None,
         paste_inventory=None,
     ):
         super().__init__()
@@ -45,9 +47,9 @@ class TableWidget(QWidget):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
         self.wallet = None
-        if set_wallet is not None:
+        if wallet_edits is not None:
             self.wallet = WalletWidget(
-                lambda: service.currency, lambda: self.model.document, set_wallet, self
+                lambda: service.currency, lambda: self.model.document, wallet_edits, self
             )
             layout.addWidget(self.wallet)
         self.table = TableView()
@@ -71,7 +73,7 @@ class TableWidget(QWidget):
         layout.addWidget(self.discard)
         self.error = QLabel()
         self.error.setTextFormat(Qt.TextFormat.PlainText)
-        self.error.setStyleSheet("color:#f19a9a")
+        apply_role(self.error, "error")
         layout.addWidget(self.error)
         self.conflicts = ConflictBar(self)
         self.conflicts.resolve_requested.connect(self._resolve_conflict)
@@ -120,6 +122,8 @@ class TableWidget(QWidget):
 
     def hideEvent(self, event):
         self.model.flush_owned_edits()
+        if self.wallet is not None:
+            self.wallet.finish_edits()
         super().hideEvent(event)
 
     def _activate_reference(self, index):
@@ -447,7 +451,7 @@ class TableWidget(QWidget):
         if index >= 0:
             self._context_column_id = self.model.document.columns[index].id
             menu.addAction("Название и тип…", self.edit_column)
-            menu.addAction("Удалить столбец…", self.remove_column)
+            menu.addAction(icon("delete"), "Удалить столбец…", self.remove_column)
         menu.exec(header.mapToGlobal(point))
         self._context_column_id = None
 
@@ -458,7 +462,7 @@ class TableWidget(QWidget):
         menu.addAction("Добавить строку", self.add_row)
         if index >= 0:
             self._context_row_id = self.model.document.rows[index].id
-            menu.addAction("Удалить строку…", self.remove_row)
+            menu.addAction(icon("delete"), "Удалить строку…", self.remove_row)
         menu.exec(header.mapToGlobal(point))
         self._context_row_id = None
 

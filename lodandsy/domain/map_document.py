@@ -5,6 +5,9 @@ from uuid import uuid4
 from lodandsy.domain.map_fog import FogState
 from lodandsy.domain.module_values import validate_id, validate_title
 
+MAX_TOKEN_CELLS = 100
+MAX_TOKEN_EXTENT = 1e9
+
 
 def _number(value, minimum, maximum, label):
     if (
@@ -49,14 +52,15 @@ class TokenInstance:
     x: float
     y: float
     id: str = field(default_factory=lambda: str(uuid4()))
-    cells_w: int | None = None
-    cells_h: int | None = None
+    cells_w: float | int | None = None
+    cells_h: float | int | None = None
     z: int = 0
     label_override: str | None = None
     image_override: str | None = None
     kind_override: str | None = None
     layer_id: str | None = None
     actor_id: str | None = None
+    rotation: float = 0
 
     def __post_init__(self):
         for value in (self.id, self.card_id):
@@ -71,10 +75,20 @@ class TokenInstance:
         for value in (self.x, self.y):
             _number(value, 0, 1e9, "координата токена")
         for value in (self.cells_w, self.cells_h):
-            if value is not None and (type(value) is not int or not 1 <= value <= 100):
-                raise ValueError("Footprint must contain 1..100 cells")
+            if value is not None:
+                _number(value, 0, MAX_TOKEN_EXTENT, "размер токена")
+                if value <= 0:
+                    raise ValueError("Размер токена должен быть положительным")
+        _number(self.rotation, -360, 360, "поворот токена")
         if type(self.z) is not int or not 0 <= self.z <= 10000:
             raise ValueError("Некорректный порядок токена")
+
+    @property
+    def uses_object_transform(self):
+        return self.rotation != 0 or any(
+            value is not None and (type(value) is not int or value > MAX_TOKEN_CELLS)
+            for value in (self.cells_w, self.cells_h)
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,8 +96,8 @@ class TokenPresentation:
     label: str
     asset_id: str | None
     kind: str
-    cells_w: int
-    cells_h: int
+    cells_w: float | int
+    cells_h: float | int
     missing: bool = False
     summary: str = ""
     crop: tuple = (0.0, 0.0, 1.0, 1.0)
@@ -194,6 +208,12 @@ def validate_map_contents(tokens, grid, layers, objects):
         t.layer_id is not None and t.layer_id not in layer_ids for t in tokens
     ):
         raise ValueError("Слой объекта отсутствует")
+    for token in tokens:
+        for cells in (token.cells_w, token.cells_h):
+            if cells is not None:
+                extent = cells * grid.cell_size
+                if extent / 2 <= 0 or extent > MAX_TOKEN_EXTENT:
+                    raise ValueError("Размер токена вне технических пределов карты")
 
 
 @dataclass(frozen=True, slots=True)
@@ -357,7 +377,7 @@ class MapPayload:
     fog: FogState = field(default_factory=FogState)
     shapes: tuple = ()
     portals: tuple = ()
-    version: int = field(default=9, init=False)
+    version: int = field(default=10, init=False)
 
     def __post_init__(self):
         validate_id(self.asset_id)

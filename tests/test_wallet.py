@@ -2,12 +2,71 @@ from dataclasses import replace
 from uuid import uuid4
 
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage
+from PySide6.QtWidgets import QHBoxLayout, QWidget
 
 from lodandsy.domain.currency import CUSTOM, RATE_SCALE, CoinAmount, CurrencySystem, Denomination
 from lodandsy.domain.item_categories import ItemCategory
 
 pytest_plugins = ["tests.project_fixture"]
+
+
+def test_inline_wallet_keyboard_and_shared_conflict(project, qtbot, tmp_path):
+    app, projects = project
+    assert projects.create_project(tmp_path / "world")
+    owner = app.create_card("Страж", card_type="character")
+    section = next(s for s in owner.sections if s.purpose == "inventory")
+    table = app.actions.section_table(owner.id, section.id)
+    base = app.economy.currency.base_id
+    address = (table.id, base)
+    host = QWidget()
+    qtbot.addWidget(host)
+    layout = QHBoxLayout(host)
+    left, right = [app.tables.table_view(table.id) for _ in range(2)]
+    for view in (left, right):
+        layout.addWidget(view)
+    host.resize(850, 500)
+    host.show()
+    host.activateWindow()
+    editor = left.wallet.controls[address]
+    peer = right.wallet.controls[address]
+
+    def type_amount(raw):
+        editor.setFocus()
+        qtbot.waitUntil(editor.hasFocus)
+        editor.selectAll()
+        qtbot.keyClicks(editor, raw)
+
+    def saved():
+        return app.tables_service.get_table(table.id).wallet
+
+    type_amount("7")
+    assert saved() == ()
+    qtbot.keyClick(editor, Qt.Key.Key_Return)
+    assert saved() == (CoinAmount(base, 7),)
+    assert peer.text() == "7"
+    type_amount("8")
+    qtbot.keyClick(editor, Qt.Key.Key_Escape)
+    assert editor.text() == "7"
+    type_amount("9")
+    qtbot.keyClick(editor, Qt.Key.Key_Tab)
+    assert saved() == (CoinAmount(base, 9),)
+    type_amount("-1")
+    peer.setFocus()
+    assert saved() == (CoinAmount(base, 9),)
+    assert address in app.tables.wallet_edits.errors
+    left.wallet.discard.click()
+    assert editor.text() == "9"
+
+    type_amount("10")
+    app.actions.set_wallet(table.id, (CoinAmount(base, 11),), expected=saved())
+    qtbot.keyClick(editor, Qt.Key.Key_Return)
+    assert saved() == (CoinAmount(base, 11),)
+    assert right.wallet.conflicts.fields.currentData() == address
+    assert app.tables.wallet_edits.resolve(address, mine=True)
+    assert peer.text() == "10"
+    assert saved() == (CoinAmount(base, 10),)
 
 
 def test_wallet_and_item_metadata_inherit_and_roundtrip(project, tmp_path):

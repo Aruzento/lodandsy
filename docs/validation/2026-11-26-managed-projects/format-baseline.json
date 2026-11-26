@@ -1,0 +1,16 @@
+{
+  "previous_candidate": "LODANDSY-UI-System-T3-2026-11-26.zip",
+  "verified_written_formats": {
+    "SQLite": 17,
+    "Card": 8,
+    "Map": 9,
+    "Actor": 1,
+    "Table": 4,
+    "Rules": 1,
+    "Economy": 1,
+    "Rules profile": 2
+  },
+  "opened_twice": true,
+  "existing_files_unchanged": true,
+  "files_checked": 4
+}

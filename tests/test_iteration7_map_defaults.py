@@ -26,7 +26,9 @@ def test_defaults_and_one_time_layer_initialization(qapp):
     assert service.get_map(document.id) == initialized
 
 
-def test_token_context_contains_only_open_and_delete(project, tmp_path, qtbot, monkeypatch):
+def test_token_context_without_actor_keeps_inventory_action_disabled(
+    project, tmp_path, qtbot, monkeypatch
+):
     from PySide6.QtCore import QPoint
     from PySide6.QtWidgets import QMenu
 
@@ -37,11 +39,11 @@ def test_token_context_contains_only_open_and_delete(project, tmp_path, qtbot, m
     card = app.create_card("Card")
     app.maps_service.add_token(document.id, card.id, 50, 50)
     app.maps_service.add_token(document.id, card.id, 100, 100)
-    labels = []
+    actions = []
 
     class InspectMenu(QMenu):
         def exec(self, _point):
-            labels.extend(action.text() for action in self.actions())
+            actions.extend((action.text(), action.isEnabled()) for action in self.actions())
             return self.actions()[-1]
 
     class Event:
@@ -53,6 +55,12 @@ def test_token_context_contains_only_open_and_delete(project, tmp_path, qtbot, m
 
     monkeypatch.setattr("lodandsy.ui.map_annotations.QMenu", InspectMenu)
     viewer.view._tokens[0].contextMenuEvent(Event())
-    assert labels == ["Открыть карточку", "Копировать токен", "Показать картинку", "Удалить токен"]
+    assert actions == [
+        ("Открыть карточку", True),
+        ("Открыть инвентарь", False),
+        ("Копировать токен", True),
+        ("Показать картинку", True),
+        ("Удалить токен", True),
+    ]
     assert app.cards.get(card.id)
     assert len(app.maps_service.get_map(document.id).tokens) == 1

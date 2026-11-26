@@ -135,7 +135,7 @@ def test_corrupt_database_is_diagnosed_without_replacement(tmp_path):
     root.mkdir()
     path = root / "project.sqlite3"
     path.write_bytes(b"not a SQLite database")
-    with pytest.raises(ProjectError, match="Cannot read"):
+    with pytest.raises(ProjectError, match="Не удалось прочитать версию"):
         SQLiteProjectStore.open(root)
     assert path.read_bytes() == b"not a SQLite database"
 

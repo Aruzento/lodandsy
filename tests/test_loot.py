@@ -23,6 +23,21 @@ from lodandsy.domain.treasure import (
 pytest_plugins = ["tests.project_fixture"]
 
 
+def test_equal_price_pool_produces_varied_multisets_without_banning_repeats():
+    currency = CurrencySystem()
+    price = CoinAmount(currency.base_id, 1)
+    pool = tuple(CatalogItem(str(uuid4()), str(i), None, price, None, True) for i in range(10))
+    params = LootParameters(5, 5, (5 * RATE_SCALE, 5 * RATE_SCALE))
+    rng = Random(724)
+    results = [generate_loot(pool, params, currency, rng) for _ in range(100)]
+    assert len({frozenset(result.items) for result in results}) > 50
+    assert sum(len(result.items) > 1 for result in results) > 90
+    assert any(stack.count > 1 for result in results for stack in result.items)
+    required = generate_loot(pool[:1], params, currency, Random(724))
+    assert required.items == (ItemStack(pool[0].id, 5),)
+    assert all(result.total == 5 * RATE_SCALE for result in results)
+
+
 def test_loot_repeat_money_and_pin_are_exact():
     currency = CurrencySystem()
     rate = RATE_SCALE

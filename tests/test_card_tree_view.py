@@ -41,3 +41,21 @@ def test_context_menu_event_emits_clicked_index(
 
     assert emitted_index.isValid()
     assert emitted_index.data() == "World"
+
+
+def test_keyboard_context_menu_uses_current_row(qtbot):
+    model = ProjectTreeModel()
+    model.set_entities(project_entities([Card("First"), Card("Second")]).summaries())
+    view = CardTreeView()
+    qtbot.addWidget(view)
+    view.setModel(model)
+    view.show()
+    first, second = [model.index(i, 0) for i in range(2)]
+    view.setCurrentIndex(second)
+    event = QContextMenuEvent(
+        QContextMenuEvent.Reason.Keyboard, view.visualRect(first).center(), QPoint(100, 100),
+    )
+    with qtbot.waitSignal(view.context_menu_requested) as signal:
+        view.contextMenuEvent(event)
+    anchor = view.viewport().mapToGlobal(view.visualRect(second).bottomLeft())
+    assert signal.args == [second, anchor]

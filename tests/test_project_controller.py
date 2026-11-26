@@ -1,8 +1,10 @@
 import pytest
+from PySide6.QtCore import QTimer
 from PySide6.QtGui import QKeySequence
-from PySide6.QtWidgets import QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from lodandsy.application.app_controller import AppController
+from lodandsy.application.project_catalogue import ProjectCatalogue
 from lodandsy.application.project_controller import ProjectController
 from lodandsy.application.rich_html import html_text
 from lodandsy.application.save_coordinator import SaveState
@@ -93,18 +95,22 @@ def test_failed_new_project_does_not_clear_current_dirty_state(project, tmp_path
     controller, project = project
     project.create_project(tmp_path / "world")
     card = controller.create_card("Keep me")
-    bad = tmp_path / "not-empty"
-    bad.mkdir()
+    project.catalogue = ProjectCatalogue(lambda: tmp_path / "Documents")
+    bad = project.catalogue.root / "not-empty"
+    bad.mkdir(parents=True)
     (bad / "personal.txt").write_text("keep", encoding="utf-8")
-    monkeypatch.setattr(
-        "lodandsy.application.project_controller.QFileDialog.getExistingDirectory",
-        lambda *args: str(bad),
-    )
     monkeypatch.setattr(QMessageBox, "warning", lambda *args: QMessageBox.StandardButton.Discard)
-    errors = []
-    monkeypatch.setattr(project, "_show_error", errors.append)
-    project._request_new()
-    assert errors and project.saver.dirty
+
+    def try_collision():
+        dialog = QApplication.activeModalWidget()
+        dialog.name.setText(bad.name)
+        dialog.confirm.click()
+        assert "уже существует" in dialog.error.text()
+        dialog.reject()
+
+    QTimer.singleShot(0, try_collision)
+    assert not project._request_new()
+    assert project.saver.dirty
     assert controller.cards.get(card.id).title == "Keep me"
     assert project.save_current()
     assert project.store.load().cards[0].id == card.id
@@ -127,7 +133,7 @@ def test_failed_open_keeps_current_project_and_documents(project, tmp_path):
     card = controller.create_card("Kept")
     dock = controller.open_card_editor(card.id)
     assert project.save_current()
-    with pytest.raises(ProjectError, match="No project"):
+    with pytest.raises(ProjectError, match="Нет файла мира"):
         project.open_project(tmp_path / "missing")
     assert controller.card_views.editors[card.id] is dock.widget()
     assert project.store.root == (tmp_path / "world").resolve()

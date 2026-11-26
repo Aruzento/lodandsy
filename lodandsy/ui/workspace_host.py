@@ -2,6 +2,7 @@ import PySide6QtAds as ads
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget
 
+from lodandsy.ui.theme import ADS_STYLE, ICON_SIZE
 from lodandsy.ui.workspace_placement import WorkspacePlacement
 
 
@@ -10,11 +11,18 @@ class WorkspaceHost(ads.CDockManager):
 
     def __init__(self, shell: QMainWindow):
         super().__init__(shell)
+        self.setStyleSheet(self.styleSheet() + ADS_STYLE)
 
     def create_document(self, key: str, title: str, content: QWidget):
         dock = ads.CDockWidget(self, title)
         dock.setObjectName(key)
         dock.setWidget(content)
+        if key.startswith("tool:"):
+            from lodandsy.ui.icons import icon
+
+            name = key.partition(":")[2]
+            if name in {"dice", "loot", "shop"}:
+                dock.setIcon(icon(name, ICON_SIZE))
         return dock
 
     def add_document(self, dock, placement: WorkspacePlacement, anchor=None):

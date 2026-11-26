@@ -163,15 +163,18 @@ def generate_loot(catalogue, parameters, currency, rng, *, locked=(), max_steps=
             return tail
         return (CoinAmount(key, count), *tail)
 
+    def finish(total):
+        least = max(money_low, low - total)
+        most = min(money_high, high - total)
+        if parameters.money is None:
+            return () if least <= 0 <= most else None
+        return coins(0, least, most)
+
     @lru_cache(maxsize=SEARCH_STEPS)
     def items(start, remaining, total):
         step()
         if remaining == 0:
-            least = max(money_low, low - total)
-            most = min(money_high, high - total)
-            if parameters.money is None:
-                return ((), ()) if least <= 0 <= most else None
-            extra = coins(0, least, most)
+            extra = finish(total)
             return ((), extra) if extra is not None else None
         if (
             start >= len(pool)
@@ -191,7 +194,20 @@ def generate_loot(catalogue, parameters, currency, rng, *, locked=(), max_steps=
                         parameters.maximum - pinned_count + 1))
     rng.shuffle(counts)
     for count in counts:
-        answer = items(0, count, pinned_total)
+        answer = None
+        if count and pool:
+            # Probe a random multiset first. DFS still proves failure for a count when needed.
+            step()
+            sample, total = [], pinned_total
+            for _ in range(count):
+                step()
+                key, price = pool[rng.randint(0, len(pool) - 1)]
+                sample.append(key)
+                total += price
+            if (wallet := finish(total)) is not None:
+                answer = sample, wallet
+        if answer is None:
+            answer = items(0, count, pinned_total)
         if answer is not None:
             keys, wallet = answer
             quantities = Counter(pinned)

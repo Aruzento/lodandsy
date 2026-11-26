@@ -45,6 +45,7 @@ class MapsController(QObject):
         self.resources, self.media, self.actions = resources, media, actions
         self.open_card, self.ensure_project = open_card, ensure_project
         self.open_participant = None
+        self.open_participant_inventory = lambda card_id, actor_id: None
         self.tasks = BackgroundTasks(self, workers=2, name="map-images")
         self.request_card_creation = request_card_creation
         self.queries = queries
@@ -242,6 +243,8 @@ class MapsController(QObject):
         if existing:
             return self.windows.focus_window(key)
 
+        generation = self.service.core.generation
+
         def factory():
             widget = (
                 MapEditorWidget(
@@ -302,6 +305,9 @@ class MapsController(QObject):
                         widget.tool_state.activate("select")
 
                 widget.vector_tools.committed.connect(put_vector)
+                widget.vector_tools.token_transformed.connect(
+                    lambda before, after: self._transform_token(map_id, before, after)
+                )
                 widget.vector_tools.removed.connect(
                     lambda key: self.service.delete_vector(map_id, key)
                 )
@@ -333,6 +339,7 @@ class MapsController(QObject):
                 )
                 widget.view.token_action.connect(
                     lambda token, action: self._token_action(map_id, token, action)
+                    if generation == self.service.core.generation else None
                 )
                 widget.view.token_selected.connect(
                     lambda token: self._select_participant(map_id, token)
@@ -468,7 +475,9 @@ class MapsController(QObject):
         hidden = (
             item is None
             or not item.isVisible()
-            or view._fog_path.intersects(item.sceneBoundingRect())
+            or view._fog_path.intersects(
+                item.mapToScene(item.shape()) if item.object_card else item.sceneBoundingRect()
+            )
         )
         generation = self.service.core.generation
         if (
@@ -623,6 +632,12 @@ class MapsController(QObject):
         try:
             self.service.put_vector(map_id, value)
             return True
+        except ValueError as error:
+            self._error(str(error))
+
+    def _transform_token(self, map_id, before, after):
+        try:
+            self.service.transform_object_token(map_id, before, after)
         except ValueError as error:
             self._error(str(error))
 
@@ -974,7 +989,11 @@ class MapsController(QObject):
             self.media.import_image(source, publish)
 
     def _token_action(self, map_id, token_id, action):
-        token = next((t for t in self.service.get_map(map_id).tokens if t.id == token_id), None)
+        try:
+            document = self.service.get_map(map_id)
+        except ValueError:
+            return
+        token = next((t for t in document.tokens if t.id == token_id), None)
         if token is None:
             return
         if action == "delete":
@@ -986,6 +1005,9 @@ class MapsController(QObject):
                 self.actions.copy_token(map_id, token_id)
             except ValueError as error:
                 self._error(str(error))
+        elif action == "inventory":
+            if token.actor_id is not None:
+                self.open_participant_inventory(token.card_id, token.actor_id)
         elif action == "open":
             try:
                 self.cards.get_card(token.card_id)

@@ -1,6 +1,7 @@
 from PySide6.QtCore import QSignalBlocker, QSize, Qt
 from PySide6.QtWidgets import (
     QAbstractSpinBox,
+    QBoxLayout,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -8,6 +9,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QToolButton,
     QVBoxLayout,
@@ -16,7 +18,8 @@ from PySide6.QtWidgets import (
 
 from lodandsy.application.clipboard import copy_text
 from lodandsy.domain.dice import FACES, DiceConfig, roll_dice
-from lodandsy.ui.icons import icon
+from lodandsy.ui.icons import configure_tool_button, icon
+from lodandsy.ui.theme import ICON_SIZE, apply_role
 
 
 class DiceWidget(QWidget):
@@ -32,7 +35,7 @@ class DiceWidget(QWidget):
         self.content = QWidget()
         self.content.setMaximumWidth(760)
         outer = QHBoxLayout(page)
-        outer.setContentsMargins(24, 36, 24, 24)
+        outer.setContentsMargins(12, 12, 12, 12)
         outer.addStretch(1)
         outer.addWidget(self.content, 20)
         outer.addStretch(1)
@@ -42,50 +45,46 @@ class DiceWidget(QWidget):
         root.addWidget(scroll)
         layout = QVBoxLayout(self.content)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(18)
-        crumb = QHBoxLayout()
-        caption = QLabel("Инструменты / Кубики")
-        caption.setObjectName("mutedCaption")
-        crumb.addWidget(caption, 1)
-        clear = QToolButton()
-        clear.setText("Очистить")
+        layout.setSpacing(8)
+        heading_row = QHBoxLayout()
+        heading = QLabel("Кубики")
+        apply_role(heading, "heading")
+        heading_row.addWidget(heading, 1)
+        clear = configure_tool_button(QToolButton(), "clear", "Сбросить количество кубиков")
         clear.clicked.connect(self.clear_counts)
-        crumb.addWidget(clear)
-        layout.addLayout(crumb)
-        heading = QLabel("Бросок кубиков")
-        heading.setObjectName("pageHeading")
-        layout.addWidget(heading)
+        heading_row.addWidget(clear)
+        layout.addLayout(heading_row)
         self.grid = QGridLayout()
-        self.grid.setSpacing(12)
+        self.grid.setSpacing(8)
         self.tiles, self.counts = [], {}
         for faces in FACES:
             tile = QWidget()
             tile.setObjectName("diceFace")
             column = QVBoxLayout(tile)
-            column.setContentsMargins(10, 10, 10, 10)
+            column.setContentsMargins(6, 4, 6, 6)
+            column.setSpacing(4)
             button = QToolButton()
-            button.setIcon(icon(f"d{faces}", 24))
-            button.setIconSize(QSize(24, 24))
+            button.setIcon(icon(f"d{faces}"))
+            button.setIconSize(QSize(ICON_SIZE, ICON_SIZE))
             button.setText(f"d{faces}")
             button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-            button.setStyleSheet("font-size:22px;font-weight:600")
             button.setAccessibleName(f"Добавить d{faces}")
             button.setToolTip(button.accessibleName())
             box = QSpinBox()
             box.setRange(0, 1000)
             box.setAlignment(Qt.AlignmentFlag.AlignCenter)
             box.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+            box.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+            box.setMinimumWidth(38)
             box.setAccessibleName(f"Количество d{faces}")
             self.counts[faces] = box
             button.clicked.connect(lambda checked=False, f=faces: self.counts[f].stepUp())
             box.valueChanged.connect(self._edited)
             column.addWidget(button, 0, Qt.AlignmentFlag.AlignHCenter)
             count_row = QHBoxLayout()
-            minus, plus = QToolButton(), QToolButton()
-            minus.setText("−")
-            plus.setText("+")
-            minus.setAccessibleName(f"Уменьшить количество d{faces}")
-            plus.setAccessibleName(f"Увеличить количество d{faces}")
+            count_row.setSpacing(4)
+            minus = configure_tool_button(QToolButton(), "minus", f"Уменьшить число d{faces}")
+            plus = configure_tool_button(QToolButton(), "plus", f"Увеличить число d{faces}")
             minus.clicked.connect(box.stepDown)
             plus.clicked.connect(box.stepUp)
             count_row.addWidget(minus)
@@ -96,19 +95,22 @@ class DiceWidget(QWidget):
         modifier_tile = QWidget()
         modifier_tile.setObjectName("diceFace")
         modifier_layout = QVBoxLayout(modifier_tile)
+        modifier_layout.setContentsMargins(6, 4, 6, 6)
         label = QLabel("Модификатор")
         label.setObjectName("mutedCaption")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         modifier_layout.addWidget(label)
         self.modifier = QSpinBox()
         self.modifier.setRange(-1000000000, 1000000000)
+        self.modifier.setMinimumWidth(0)
+        self.modifier.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.modifier.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.modifier.setAccessibleName("Модификатор броска")
         self.modifier.valueChanged.connect(self._edited)
         modifier_layout.addWidget(self.modifier)
         self.tiles.append(modifier_tile)
         layout.addLayout(self.grid)
-        buttons = QHBoxLayout()
+        buttons = self.actions = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         self.formula = QLabel()
         self.formula.setWordWrap(True)
         self.formula.setTextFormat(Qt.TextFormat.PlainText)
@@ -129,21 +131,15 @@ class DiceWidget(QWidget):
         self.details.setTextFormat(Qt.TextFormat.PlainText)
         self.details.setWordWrap(True)
         result_row.addWidget(self.details, 1)
-        self.repeat = QToolButton()
-        self.repeat.setIcon(icon("redo"))
-        self.repeat.setToolTip("Повторить бросок")
-        self.repeat.setAccessibleName(self.repeat.toolTip())
+        self.repeat = configure_tool_button(QToolButton(), "repeat", "Повторить бросок")
         self.repeat.clicked.connect(self.throw)
-        self.copy = QToolButton()
-        self.copy.setIcon(icon("link"))
-        self.copy.setToolTip("Копировать результат")
-        self.copy.setAccessibleName(self.copy.toolTip())
+        self.copy = configure_tool_button(QToolButton(), "copy", "Копировать результат")
         self.copy.clicked.connect(lambda: copy_text(self.runtime.get("last", "")))
         result_row.addWidget(self.repeat)
         result_row.addWidget(self.copy)
         layout.addWidget(result_panel)
-        history_label = QLabel("ИСТОРИЯ БРОСКОВ")
-        history_label.setObjectName("mutedCaption")
+        history_label = QLabel("История бросков")
+        apply_role(history_label, "group")
         layout.addWidget(history_label)
         self.result = QPlainTextEdit()
         self.result.setReadOnly(True)
@@ -157,7 +153,7 @@ class DiceWidget(QWidget):
         layout.addWidget(self.error)
         layout.addStretch(1)
         self._columns = 0
-        self._layout_faces(4)
+        self._layout_faces(2)
         self._restore_config()
         self.copy.setEnabled(bool(self.runtime.get("last")))
 
@@ -172,7 +168,12 @@ class DiceWidget(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self._layout_faces(max(2, min(4, self.width() // 120)))
+        available = min(self.width(), 760) - 36
+        self._layout_faces(max(1, min(4, (available + 8) // 136)))
+        self.actions.setDirection(
+            QBoxLayout.Direction.TopToBottom if available < 260
+            else QBoxLayout.Direction.LeftToRight
+        )
 
     def _restore_config(self):
         config = self.runtime["config"]

@@ -103,6 +103,32 @@ def test_column_row_commands_reorder_rename_delete_cancel_and_type_rejection(qtb
     assert widget.model.document.columns[-1].name == "Renamed"
 
 
+def test_table_append_buttons_share_geometry_and_reach_scroll_end(qtbot, monkeypatch):
+    widget = TableWidget(TableDocument("Пустая таблица"))
+    qtbot.addWidget(widget)
+    widget.resize(278, 162)
+    widget.show()
+    horizontal, vertical = widget.table.horizontalHeader(), widget.table.verticalHeader()
+    assert horizontal.plus.size() == vertical.plus.size()
+    assert horizontal.plus.iconSize() == vertical.plus.iconSize()
+    assert horizontal.plus.icon().cacheKey() == vertical.plus.icon().cacheKey()
+    assert vertical.plus.y() == 0
+    qtbot.mouseClick(vertical.plus, Qt.MouseButton.LeftButton)
+    assert widget.model.rowCount() == 1
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a: ("Новый столбец", True))
+    monkeypatch.setattr(QInputDialog, "getItem", lambda *a: ("Текст", True))
+    for _ in range(8):
+        widget.add_row()
+        widget.add_column()
+    for header, scroll in (
+        (horizontal, widget.table.horizontalScrollBar()),
+        (vertical, widget.table.verticalScrollBar()),
+    ):
+        scroll.setValue(scroll.maximum())
+        assert scroll.maximum() > 0
+        assert header.viewport().rect().contains(header.plus.geometry())
+
+
 def test_live_invalid_draft_survives_close_saves_canon_and_can_be_fixed(project, qtbot, tmp_path):
     app, project = project
     project.create_project(tmp_path / "world")

@@ -6,7 +6,10 @@ from PySide6.QtCore import QObject
 from PySide6.QtWidgets import QInputDialog
 from shiboken6 import isValid
 
+from lodandsy.application.field_edits import FieldEdits
+from lodandsy.domain.currency import CoinAmount, parse_coins
 from lodandsy.ui.table_widget import TableWidget
+from lodandsy.ui.workspace_placement import WorkspacePlacement
 
 
 class TablesController(QObject):
@@ -15,10 +18,15 @@ class TablesController(QObject):
         self.window, self.windows, self.service = window, windows, service
         self.open_entity = open_entity
         self.inventory_owner = lambda key: None
+        self.window_title = lambda document: document.title
         self.set_wallet = None
         self.paste_inventory = None
         self._views = {}
         self._ui = {}
+        self.wallet_edits = FieldEdits(
+            self._read_count, self._write_count, lambda key, text: parse_coins(text), {}, self
+        )
+        service.core.entities_deleted.connect(self.wallet_edits.remove_entities)
         service.table_changed.connect(self._refresh)
         service.table_deleted.connect(self._deleted)
         service.draft_changed.connect(self._draft_changed)
@@ -30,13 +38,16 @@ class TablesController(QObject):
         if ok and title.strip():
             self.open_table(self.service.create_table(title, parent_id).id)
 
-    def open_table(self, key):
+    def open_table(self, key, *, floating=False):
         document = self.service.get_table(key)
-        existing = self.windows.find_window(f"table:{key}")
-        if existing:
-            return self.windows.focus_window(f"table:{key}")
+        window_key = f"table:{key}"
+        if self.windows.find_window(window_key):
+            return self.windows.focus_window(window_key, floating=floating)
         window = self.windows.open_window(
-            f"table:{key}", document.title, lambda: self.table_view(key)
+            window_key,
+            self.window_title(document),
+            lambda: self.table_view(key),
+            placement=WorkspacePlacement.FLOATING if floating else WorkspacePlacement.CENTER,
         )
         window.widget().restore_ui(self._ui.get(key, {}))
         window.closed.connect(lambda closed: self._ui.update({key: closed.widget().ui_state()}))
@@ -44,11 +55,6 @@ class TablesController(QObject):
 
     def table_view(self, key):
         generation = self.service.core.generation
-
-        def wallet_edit(wallet, *, expected):
-            if self.service.core.generation != generation:
-                raise ValueError("Проект изменился. Откройте инвентарь заново.")
-            return self.set_wallet(key, wallet, expected=expected)
 
         def paste(transfer):
             if self.service.core.generation != generation:
@@ -60,7 +66,7 @@ class TablesController(QObject):
             self.service.drafts(key),
             service=self.service,
             open_entity=self.open_entity,
-            set_wallet=wallet_edit if self.inventory_owner(key) is not None else None,
+            wallet_edits=self.wallet_edits if self.inventory_owner(key) is not None else None,
             paste_inventory=paste if self.paste_inventory is not None else None,
         )
         self.service.track_references(key)
@@ -68,6 +74,34 @@ class TablesController(QObject):
         self._views.setdefault(key, WeakSet()).add(widget)
         widget.draft_changed.connect(lambda: self.service.notify_drafts(key))
         return widget
+
+    def _read_count(self, address):
+        key, denomination = address
+        self.service.currency.denomination(denomination)
+        return next(
+            (coin.count for coin in self.service.get_table(key).wallet
+             if coin.denomination_id == denomination), 0
+        )
+
+    def _write_count(self, address, value):
+        key, denomination = address
+        previous = self.service.get_table(key).wallet
+        coin = CoinAmount(denomination, value)
+        updated = {entry.denomination_id: entry for entry in previous}
+        if value:
+            updated[denomination] = coin
+        else:
+            updated.pop(denomination, None)
+        wallet = tuple(
+            updated[d.id] for d in self.service.currency.denominations if d.id in updated
+        )
+        self.set_wallet(key, wallet, expected=previous)
+
+    def focus_wallet_draft(self):
+        key = next(iter(self.wallet_edits.drafts))
+        wallet = self.open_table(key[0]).widget().wallet
+        if wallet is not None and key in wallet.controls:
+            wallet.controls[key].setFocus()
 
     def refresh_economy(self):
         for views in tuple(self._views.values()):
@@ -93,11 +127,15 @@ class TablesController(QObject):
         except ValueError:
             return None
 
-    def _refresh(self, key, change):
-        document = self.service.get_table(key)
+    def refresh_title(self, key):
         window = self.windows.find_window(f"table:{key}")
         if window:
-            window.setWindowTitle(document.title)
+            window.setWindowTitle(self.window_title(self.service.get_table(key)))
+
+    def _refresh(self, key, change):
+        document = self.service.get_table(key)
+        if change.title:
+            self.refresh_title(key)
         for widget in tuple(self._views.get(key, ())):
             if isValid(widget):
                 widget.set_document(document)
@@ -170,3 +208,4 @@ class TablesController(QObject):
     def reset(self):
         self._views.clear()
         self._ui.clear()
+        self.wallet_edits.discard()

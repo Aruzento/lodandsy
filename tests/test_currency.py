@@ -3,7 +3,7 @@ from uuid import uuid4
 
 import pytest
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QDialogButtonBox
+from PySide6.QtWidgets import QMessageBox
 
 from lodandsy.application.sqlite_project_store import SQLiteProjectStore
 from lodandsy.domain.currency import (
@@ -85,8 +85,7 @@ def test_currency_editor_and_project_backup(project, qtbot, tmp_path):
     dialog.table.item(1, 0).setText("Искра")
     dialog.table.item(1, 1).setText("и")
     dialog.table.item(1, 2).setText("0,00001")
-    qtbot.mouseClick(dialog.buttons.button(QDialogButtonBox.StandardButton.Save),
-                     Qt.MouseButton.LeftButton)
+    qtbot.mouseClick(app.settings_window.save, Qt.MouseButton.LeftButton)
     expected = app.economy.currency
     assert expected.kind == CUSTOM
     assert expected.denominations[1].rate_units == 1
@@ -107,3 +106,29 @@ def test_currency_editor_and_project_backup(project, qtbot, tmp_path):
         assert snapshot.rules.revision == 1
     finally:
         restored.close()
+
+
+def test_gear_settings_keep_drafts_until_project_switch_is_confirmed(
+    project, qtbot, tmp_path, monkeypatch,
+):
+    app, projects = project
+    assert projects.create_project(tmp_path / "Первый")
+    qtbot.mouseClick(app.window.right_rail.settings_button, Qt.MouseButton.LeftButton)
+    window = app.settings_window
+    assert window.section == "rules"
+    assert app.open_settings("currency") is window
+    window.economy.system.setCurrentIndex(window.economy.system.findData(CUSTOM))
+    window.select_section("categories")
+    window.select_section("backup")
+    assert window.data_action.isVisible()
+    window.select_section("currency")
+    assert window.economy.system.currentData() == CUSTOM
+    assert app.economy.currency.kind != CUSTOM
+    monkeypatch.setattr(QMessageBox, "question", lambda *_, **__: QMessageBox.StandardButton.No)
+    assert not projects.create_project(tmp_path / "Второй", preserve_current=False)
+    assert app.settings_window is window
+    assert window.economy.dirty
+    monkeypatch.setattr(QMessageBox, "question", lambda *_, **__: QMessageBox.StandardButton.Yes)
+    assert projects.create_project(tmp_path / "Второй", preserve_current=False)
+    assert app.settings_window is None
+    assert app.economy.currency == CurrencySystem()

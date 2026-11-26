@@ -92,7 +92,7 @@ def test_item_modifier_editor_and_formula_preview_are_local_until_apply(
     app.cards_service.update_card_fields(item.id, {"summary": "concurrent"})
     widget.apply_project()
     assert "устарел" in widget.status.text()
-    widget.close_for_project()
+    widget.close()
 
 
 def test_player_toggle_cancel_and_generic_current_above_max(project, monkeypatch):

@@ -270,8 +270,9 @@ def test_rules_gear_typed_example_errors_staleness_and_close(project, qtbot, mon
     app.create_card("Конкурентная правка")
     assert not widget.apply.isEnabled() and widget.preview is None
     monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.No)
-    widget.reject()
-    assert widget.result() == 0 and app._rules_editor is widget
+    dialog = app.settings_window
+    dialog.reject()
+    assert app.settings_window is dialog and dialog.rules is widget
     assert app.cards_service.rules == old
-    widget.close_for_project()
-    assert app._rules_editor is None
+    app.close_settings()
+    assert app.settings_window is None

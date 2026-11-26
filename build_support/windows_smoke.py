@@ -14,12 +14,14 @@ from PySide6.QtCore import QEvent, QSettings, Qt, QTimer
 from PySide6.QtGui import QImage, QKeyEvent, QPainterPath
 from PySide6.QtWidgets import QApplication, QDialogButtonBox, QLineEdit, QMessageBox
 
+from lodandsy import APP_VERSION
 from lodandsy.application.app_controller import AppController
 from lodandsy.application.clipboard import (
     INVENTORY_MIME,
     clipboard_writer,
     decode_inventory_transfer,
 )
+from lodandsy.application.project_catalogue import ProjectCatalogue
 from lodandsy.application.project_controller import ProjectController
 from lodandsy.application.project_history import ProjectHistory
 from lodandsy.application.sqlite_project_store import SQLiteProjectStore
@@ -31,6 +33,8 @@ from lodandsy.domain.table_document import ColumnDefinition, RowRecord
 from lodandsy.ui.app_shell import AppShell
 from lodandsy.ui.game_labels import ATTRIBUTES_PAGE, MODIFIERS_PAGE
 from lodandsy.ui.modifier_editor import ModifierDialog
+from lodandsy.ui.project_chooser import ProjectChooser
+from lodandsy.ui.project_name_dialog import ProjectNameDialog
 from lodandsy.ui.theme import apply_theme
 
 
@@ -59,6 +63,49 @@ def copy_and_wait(app, action, expected):
         writer.message.disconnect(receiver)
 
 
+def managed_projects_smoke(app, project, root, screenshots):
+    def capture(widget, filename):
+        if screenshots:
+            screenshots.mkdir(parents=True, exist_ok=True)
+            app.processEvents()
+            assert widget.grab().save(str(screenshots / filename))
+
+    catalogue = project.catalogue
+    assert catalogue.entries(()) == ()
+    assert not catalogue.root.exists()
+    empty = ProjectChooser((), welcome=True, root=catalogue.root)
+    empty.show()
+    capture(empty, "01-welcome-empty.png")
+    empty.close()
+    dialog = ProjectNameDialog(
+        catalogue.destination,
+        lambda name: project.create_project(name, preserve_current=False),
+        project.window,
+    )
+    dialog.show()
+    dialog.name.setText("Этар и окрестности")
+    assert str(catalogue.root / dialog.name.text()) == dialog.path.text()
+    capture(dialog, "02-create-project.png")
+    dialog.confirm.click()
+    assert not dialog.isVisible() and project.store.root.name == "Этар и окрестности"
+    assert project.store.root.parent == catalogue.root
+    card = project.controller.create_card("Ворота Этара")
+    assert project.save_current()
+    backup = root / "Этар — резервная копия.lodbackup"
+    project.store.backup(backup)
+    assert project.restore_project(backup, "Этар из копии")
+    assert project.store.load().cards[0].id == card.id
+    assert {entry["title"] for entry in catalogue.entries(())} == {
+        "Этар и окрестности", "Этар из копии",
+    }
+    welcome = ProjectChooser(
+        catalogue.entries(project.history.entries), welcome=True, root=catalogue.root,
+    )
+    welcome.show()
+    capture(welcome, "03-welcome-projects.png")
+    welcome.close()
+
+
 def economy_smoke(app, controller, project, root, screenshots):
     def capture(widget, name):
         if screenshots:
@@ -71,8 +118,8 @@ def economy_smoke(app, controller, project, root, screenshots):
     currency = controller.economy.currency
     settings = controller.open_economy()
     assert settings.table.rowCount() == 5
-    capture(settings, "01-currency-standard")
-    settings.reject()
+    capture(controller.settings_window, "01-currency-standard")
+    controller.settings_window.reject()
     owner = controller.create_card("Дозорный Мира", card_type="character")
     section = next(s for s in owner.sections if s.purpose == "inventory")
     table = controller.actions.section_table(owner.id, section.id)
@@ -168,8 +215,9 @@ def economy_smoke(app, controller, project, root, screenshots):
     settings.table.item(1, 0).setText("Искра")
     settings.table.item(1, 1).setText("и")
     settings.table.item(1, 2).setText("0,00001")
-    capture(settings, "06-currency-custom")
-    settings.buttons.button(QDialogButtonBox.StandardButton.Save).click()
+    capture(controller.settings_window, "06-currency-custom")
+    controller.settings_window.save.click()
+    controller.settings_window.reject()
     assert controller.economy.currency.denominations[1].rate_units == 1
     assert project.save_current()
     project.open_project(world)
@@ -186,6 +234,7 @@ def main():
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--large-map-image", type=Path)
     parser.add_argument("--screenshots", type=Path)
+    parser.add_argument("--project-screenshots", type=Path)
     args = parser.parse_args()
     app = QApplication([])
     apply_theme(app)
@@ -201,6 +250,7 @@ def main():
         ProjectHistory(
             QSettings(str(Path(catalogue.name) / "user.ini"), QSettings.Format.IniFormat)
         ),
+        ProjectCatalogue(lambda: Path(catalogue.name) / "Documents"),
     )
     window.show()
     try:
@@ -396,7 +446,7 @@ def main():
             assert (
                 dict(controller.cards_service.rules.overrides)["initiative"] == "dexterity_mod + 1"
             )
-            rule_editor.reject()
+            controller.settings_window.reject()
             app.processEvents()
             window.activateWindow()
             print("Smoke: actors, inventory and project rules passed", flush=True)
@@ -548,6 +598,7 @@ def main():
             assert controller.cards.get(b.id)
             assert project.save_current()
             economy_smoke(app, controller, project, root, args.screenshots)
+            managed_projects_smoke(app, project, root, args.project_screenshots)
             result = {
                 "player_presentation_shared_tiles_vector_fog": True,
                 "passed": True,
@@ -555,6 +606,7 @@ def main():
                 "python": sys.version,
                 "qt": PySide6.__version__,
                 "platform": app.platformName(),
+                "app_version": APP_VERSION,
                 "cards_maps_tools_sqlite": True,
                 "backup_restore": True,
                 "independent_windows": True,
@@ -584,6 +636,7 @@ def main():
                 "economy_t3_price_wallet_clipboard_loot_shop": True,
                 "economy_t3_project_isolation_floating_and_restore": True,
                 "mixed_entity_hierarchy": True,
+                "managed_project_name_catalogue_and_restore": True,
                 "large_map_supplied": bool(args.large_map_image),
                 "manual_acceptance": "not performed by this automated smoke",
             }

@@ -3,6 +3,7 @@
 from PySide6.QtCore import QSignalBlocker, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QBoxLayout,
     QCheckBox,
     QComboBox,
     QFormLayout,
@@ -11,8 +12,8 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
-    QPlainTextEdit,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -29,6 +30,8 @@ from lodandsy.domain.treasure import (
     LootParameters,
     ShopParameters,
 )
+from lodandsy.ui.icons import icon
+from lodandsy.ui.theme import TABLE_ROW, apply_role
 
 
 class CatalogTable(QTableWidget):
@@ -40,6 +43,9 @@ class CatalogTable(QTableWidget):
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.setAlternatingRowColors(True)
+        self.setShowGrid(False)
+        self.setMinimumHeight(112)
+        self.verticalHeader().setDefaultSectionSize(TABLE_ROW)
         self.verticalHeader().hide()
         header = self.horizontalHeader()
         header.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
@@ -67,10 +73,15 @@ class CatalogTable(QTableWidget):
                         cell.setFont(font)
                         cell.setForeground(self.palette().link())
                         cell.setData(Qt.ItemDataRole.UserRole, key)
+                    elif column:
+                        cell.setTextAlignment(Qt.AlignmentFlag.AlignRight
+                                              | Qt.AlignmentFlag.AlignVCenter)
                     self.setItem(row, column, cell)
                 if self.pin is not None:
                     cell = QTableWidgetItem()
-                    cell.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable)
+                    cell.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable
+                                  | Qt.ItemFlag.ItemIsSelectable)
+                    cell.setToolTip("Закрепить эту позицию")
                     cell.setCheckState(
                         Qt.CheckState.Checked if key in locked else Qt.CheckState.Unchecked
                     )
@@ -88,7 +99,7 @@ class CatalogTable(QTableWidget):
             self.pin(cell.row(), cell.checkState() == Qt.CheckState.Checked)
 
 
-def range_row(first, second, name):
+def range_row(first, second, name, unit=None):
     row = QWidget()
     layout = QHBoxLayout(row)
     layout.setContentsMargins(0, 0, 0, 0)
@@ -97,6 +108,9 @@ def range_row(first, second, name):
     layout.addWidget(first, 1)
     layout.addWidget(QLabel("—"))
     layout.addWidget(second, 1)
+    if unit is not None:
+        apply_role(unit, "group")
+        layout.addWidget(unit)
     return row
 
 
@@ -105,6 +119,7 @@ def count_range(minimum, maximum, limit):
     for control, initial in zip(controls, (minimum, maximum)):
         control.setRange(0, limit)
         control.setValue(initial)
+        control.setMinimumWidth(44)
     return controls
 
 
@@ -112,6 +127,8 @@ def money_range(values):
     controls = tuple(QLineEdit(format_rate(value)) for value in values)
     for control in controls:
         control.setMaxLength(24)
+        control.setMinimumWidth(44)
+        control.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
     return controls
 
 
@@ -126,6 +143,18 @@ def tool_notice():
 def set_notice(label, message):
     label.setText(message)
     label.setVisible(bool(message))
+
+
+def parameter_panel(form, actions):
+    panel = QWidget()
+    apply_role(panel, "parameterPanel")
+    layout = QVBoxLayout(panel)
+    layout.setContentsMargins(8, 8, 8, 8)
+    layout.setSpacing(8)
+    form.setVerticalSpacing(4)
+    layout.addLayout(form)
+    layout.addLayout(actions)
+    return panel
 
 
 class LootWidget(QWidget):
@@ -147,38 +176,39 @@ class LootWidget(QWidget):
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         form.addRow("Категории", self.category)
-        form.addRow("Количество предметов", range_row(*self.count, "Количество предметов"))
-        form.addRow("Общая стоимость", range_row(*self.budget, "Общая стоимость"))
+        form.addRow("Предметов", range_row(*self.count, "Количество предметов"))
+        self.budget_unit, self.money_unit = QLabel(), QLabel()
+        form.addRow("Общий бюджет", range_row(*self.budget, "Общая стоимость", self.budget_unit))
         form.addRow(self.include_money)
-        self.money_limits = range_row(*self.money, "Стоимость монет")
+        self.money_limits = range_row(*self.money, "Стоимость монет", self.money_unit)
         form.addRow("Стоимость монет", self.money_limits)
         self.include_money.toggled.connect(self._toggle_money)
         self.money_label = form.labelForField(self.money_limits)
         self._toggle_money(self.include_money.isChecked())
 
-        self.results = CatalogTable(("Предмет", "Кол-во", "Стоимость", "Вес", "Закрепить"),
+        self.results = CatalogTable(("Предмет", "Кол-во", "Стоимость", "Вес", "Фикс."),
                                     open_item, pin=pin)
         self.results.setAccessibleName("Результат генерации добычи")
-        self.coin_box = QPlainTextEdit()
+        self.coin_box = tool_notice()
         self.coin_box.setAccessibleName("Монеты в добыче")
-        self.coin_box.setReadOnly(True)
-        self.coin_box.setMaximumHeight(64)
-        self.coin_box.hide()
         self.summary, self.error = tool_notice(), tool_notice()
-        self.error.setObjectName("errorNotice")
+        apply_role(self.summary, "total")
+        apply_role(self.error, "error")
         self.generate_button = QPushButton("Сгенерировать")
+        apply_role(self.generate_button, "primary")
         self.generate_button.clicked.connect(self._generate)
-        self.copy_button = QPushButton("Копировать в инвентарь")
+        self.copy_button = QPushButton(icon("copy"), "Копировать")
+        self.copy_button.setAccessibleName("Копировать результат в инвентарь")
+        self.copy_button.setToolTip(self.copy_button.accessibleName())
         self.copy_button.clicked.connect(self.copy)
         self.copy_button.setEnabled(False)
-        buttons = QHBoxLayout()
+        buttons = self.actions = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         buttons.addWidget(self.generate_button)
         buttons.addWidget(self.copy_button)
         buttons.addStretch(1)
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(12, 10, 12, 10)
-        outer.addLayout(form)
-        outer.addLayout(buttons)
+        outer.setContentsMargins(12, 8, 12, 8)
+        outer.addWidget(parameter_panel(form, buttons))
         outer.addWidget(self.error)
         outer.addWidget(self.results, 1)
         outer.addWidget(self.coin_box)
@@ -186,15 +216,23 @@ class LootWidget(QWidget):
         self._category_options = None
         self.set_settings(settings)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.actions.setDirection(
+            QBoxLayout.Direction.TopToBottom if self.width() < 300
+            else QBoxLayout.Direction.LeftToRight
+        )
+
     def _toggle_money(self, enabled):
         self.money_limits.setVisible(enabled)
         self.money_label.setVisible(enabled)
 
     def set_settings(self, settings):
         abbreviation = settings.currency.base.abbreviation
+        self.budget_unit.setText(abbreviation)
+        self.money_unit.setText(abbreviation)
         for control in (*self.budget, *self.money):
             control.setToolTip(f"Базовый номинал ({abbreviation})")
-            control.setPlaceholderText(abbreviation)
         options = (("Без категории", None), *((c.name, c.id) for c in settings.categories))
         if options != self._category_options:
             self._category_options = options
@@ -243,9 +281,8 @@ class LootWidget(QWidget):
     def render(self, rows, locks, status, coins, copyable):
         self.results.set_rows(rows, locks)
         self.generate_button.setText("Перегенерировать" if rows or coins else "Сгенерировать")
-        set_notice(self.summary, status)
-        self.coin_box.setPlainText(coins)
-        self.coin_box.setVisible(bool(coins))
+        set_notice(self.summary, status or "Задайте диапазоны и сгенерируйте добычу.")
+        set_notice(self.coin_box, coins)
         self.copy_button.setEnabled(copyable)
 
 
@@ -264,15 +301,19 @@ class ShopWidget(QWidget):
         form.addRow("Категория", self.category)
         form.addRow("Уникальных позиций", range_row(*self.count, "Уникальных позиций"))
         self.generate_button = QPushButton("Обновить ассортимент")
+        apply_role(self.generate_button, "primary")
         self.generate_button.clicked.connect(self._generate)
         self.error, self.summary = tool_notice(), tool_notice()
-        self.error.setObjectName("errorNotice")
+        apply_role(self.error, "error")
+        apply_role(self.summary, "total")
         self.results = CatalogTable(("Предмет", "Цена за ед.", "Вес"), open_item)
         self.results.setAccessibleName("Ассортимент магазина")
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(12, 10, 12, 10)
-        outer.addLayout(form)
-        outer.addWidget(self.generate_button, alignment=Qt.AlignmentFlag.AlignLeft)
+        outer.setContentsMargins(12, 8, 12, 8)
+        actions = QHBoxLayout()
+        actions.addWidget(self.generate_button)
+        actions.addStretch(1)
+        outer.addWidget(parameter_panel(form, actions))
         outer.addWidget(self.error)
         outer.addWidget(self.results, 1)
         outer.addWidget(self.summary)
@@ -305,4 +346,4 @@ class ShopWidget(QWidget):
 
     def render(self, rows, status):
         self.results.set_rows(rows)
-        set_notice(self.summary, status)
+        set_notice(self.summary, status or "Выберите категорию и обновите ассортимент.")

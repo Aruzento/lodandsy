@@ -33,13 +33,15 @@ Inspector карточки оставляет технические свойс�
 Cards/Tables/Maps/Dice сохраняют отдельных владельцев ADR-027. Composition root
 связывает публичные контракты, Core/Resources/Media/Navigation и атомарные ProjectActions.
 Один канон EntityCollection/SQLite17/Card8/Map9/Actor1/Rules1(profile2)/Table4/Economy1, assets отдельно, UI state4.
-Legacy не адаптируется: несовместимый мир отклоняется без записи; пользовательские
-проекты автоматически не удаляются. MOW importer/source fields удалены.
+v0.01 фиксирует базу совместимости. Последующие версии обязаны безопасно мигрировать
+поддерживаемые миры. Неподдерживаемые прототипы и неизвестные будущие версии
+отклоняются без записи. MOW importer/source fields удалены.
 
-Нормальный старт — Welcome с MRU известных миров, без автоматического открытия.
-Open показывает каталог title/path; другая папка, locate и удаление только записи —
-вторичные действия. QSettings identity LODANDSY/LODANDSY вне мира/backup, история
-только успешных create/open/restore. Backup/restore — gear правого rail, без дублей меню.
+Welcome перечисляет миры в системном `Документы/LODANDSY/project/` без
+автоматического открытия. Создание и восстановление запрашивают только имя.
+Существующий мир из другого каталога можно открыть явно. История успешных открытий
+хранится в QSettings вне мира. Backup/restore доступны из окна настроек.
+[ADR-040](docs/adr/040-managed-projects-v001.md)
 
 Card Editor: крупный portrait слева132–220px, справа immutable type badge/title/
 inline summary; отдельная строка tabs и контент с общим inset16px. Нет breadcrumb,

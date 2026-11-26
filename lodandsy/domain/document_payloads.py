@@ -287,7 +287,10 @@ def validate_project(collection, previous=None):
             card = collection.get(token.card_id)
             if card.kind != "card":
                 raise ValueError("Token requires Card")
-            if collection.payload(card.id).card_type in ACTOR_TYPES and token.actor_id is None:
+            card_type = collection.payload(card.id).card_type
+            if token.uses_object_transform and card_type != "object":
+                raise ValueError("Дробный размер и поворот доступны только объектам")
+            if card_type in ACTOR_TYPES and token.actor_id is None:
                 raise ValueError("Игровой Token требует Actor")
             if token.actor_id is not None and actors.get(token.actor_id) != token.card_id:
                 raise ValueError("Token Actor/Card reference mismatch")

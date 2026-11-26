@@ -1,0 +1,30 @@
+{
+  "append_button_logical_px": 30,
+  "dice_floating_logical_width": 420,
+  "settings_standard_rows_visible": 5,
+  "settings_logical_size": [
+    900,
+    610
+  ],
+  "map_menu_bounds": [
+    [
+      0,
+      0,
+      1920,
+      1040
+    ],
+    [
+      -1920,
+      0,
+      1920,
+      1040
+    ]
+  ],
+  "platform": "windows",
+  "device_pixel_ratio": 1.0,
+  "screen_count": 2,
+  "logical_screen_size": [
+    1920,
+    1080
+  ]
+}

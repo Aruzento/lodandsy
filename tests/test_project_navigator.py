@@ -1,8 +1,8 @@
 from uuid import uuid4
 
-from PySide6.QtCore import QModelIndex, Qt
-from PySide6.QtGui import QImage
-from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
+from PySide6.QtCore import QEvent, QModelIndex, QPoint, QPointF, QSize, Qt, QTimer
+from PySide6.QtGui import QImage, QMouseEvent
+from PySide6.QtWidgets import QApplication, QFileDialog, QInputDialog, QMessageBox
 
 from lodandsy.application.sqlite_project_store import SQLiteProjectStore
 from lodandsy.application.workspace_state import capture_workspace, restore_workspace
@@ -11,6 +11,7 @@ from lodandsy.domain.document_payloads import project_entities
 from lodandsy.domain.map_document import MapDocument
 from lodandsy.ui.card_creation_dialog import CardCreationDialog
 from lodandsy.ui.project_tree_model import NODE_ID_ROLE, NODE_KIND_ROLE, ProjectTreeModel
+from lodandsy.ui.tree_panel import TreePanel
 from tests.project_fixture import text_table
 
 pytest_plugins = ["tests.project_fixture"]
@@ -81,6 +82,31 @@ def action(menu, name):
     return next(item for item in menu.actions() if item.objectName() == name)
 
 
+def move_over(viewport, point):
+    QApplication.sendEvent(viewport, QMouseEvent(
+        QEvent.Type.MouseMove, QPointF(point), QPointF(viewport.mapToGlobal(point)),
+        Qt.MouseButton.NoButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
+    ))
+
+
+def visit_context_menu(panel, monkeypatch, visit):
+    create = panel.context_menu
+
+    def context_menu(index=None):
+        menu = create(index)
+
+        def inspect():
+            try:
+                visit(menu)
+            finally:
+                menu.close()
+
+        menu.aboutToShow.connect(lambda: QTimer.singleShot(0, inspect))
+        return menu
+
+    monkeypatch.setattr(panel, "context_menu", context_menu)
+
+
 def test_create_map_and_table_from_plus_menu_without_top_navigation(
     project, tmp_path, qtbot, monkeypatch
 ):
@@ -136,25 +162,84 @@ def test_search_is_opened_from_button_and_shortcut_without_duplicate_menu(projec
     qtbot.waitUntil(app._search_dialog.isVisible)
 
 
-def test_selected_row_buttons_open_and_child_creation_is_contextual(project, qtbot, monkeypatch):
+def test_row_action_opens_document_and_pins_to_its_row_during_menu(project, qtbot, monkeypatch):
     app, project = project
     app.window.show()
     card = app.create_card("Root")
+    other = app.create_card("Other")
     panel = app.window.tree_panel
-    index = panel.tree_model.index_for_node("card:" + card.id)
-    panel.tree_view.setCurrentIndex(index)
-    qtbot.waitUntil(lambda: panel.inline_actions.open_button.isVisible())
-    qtbot.mouseClick(panel.inline_actions.open_button, Qt.MouseButton.LeftButton)
-    assert len(app.cards.all()) == 1
+    tree, actions = panel.tree_view, panel.inline_actions
+    index = panel.tree_model.index_for_node(f"card:{card.id}")
+    other_index = panel.tree_model.index_for_node(f"card:{other.id}")
+    tree.setCurrentIndex(other_index)
+    viewport = tree.viewport()
+    button = actions.menu_button
+    before = tree.visualRect(index)
+    move_over(viewport, QPoint(0, viewport.height() - 2))
+    assert not button.isVisible()
+    move_over(viewport, before.center())
+    assert button.isVisible() and actions.index == index and tree.currentIndex() == other_index
+    assert button.size() == QSize(24, 24)
+    assert tree.visualRect(index) == before
+
+    def open_document(menu):
+        move_over(viewport, tree.visualRect(other_index).center())
+        assert button.isVisible() and actions.index == index
+        assert menu.actions()[0] == action(menu, "open")
+        assert not action(menu, "child").menu().isVisible()
+        action(menu, "open").trigger()
+
+    visit_context_menu(panel, monkeypatch, open_document)
+    qtbot.mouseClick(button, Qt.MouseButton.LeftButton)
     first = app.window_manager.find_window(f"card-editor:{card.id}")
     assert first is not None
-    qtbot.mouseClick(panel.inline_actions.open_button, Qt.MouseButton.LeftButton)
+    move_over(viewport, before.center())
+    qtbot.mouseClick(button, Qt.MouseButton.LeftButton)
     assert app.window_manager.find_window(f"card-editor:{card.id}") is first
     monkeypatch.setattr(CardCreationDialog, "get_card", lambda *a: ("Child", "note", False, True))
     menu = panel.context_menu(index)
     action(action(menu, "child").menu(), "create-card").trigger()
     assert app.cards.child_ids(card.id)
     assert app.cards.get(app.cards.child_ids(card.id)[0]).title == "Child"
+
+
+def test_mixed_rows_keep_same_hover_geometry_and_context_menu_shortcut(qtbot, monkeypatch):
+    panel = TreePanel()
+    qtbot.addWidget(panel)
+    panel.resize(180, 280)
+    panel.show()
+    tree, model = panel.tree_view, panel.tree_model
+    _, entities, _, _, document, table = mixed_model()
+    panel.set_entities(entities.summaries())
+    tree.expandAll()
+    rows = [model.index_for_node(key) for key in model.node_keys()]
+    button = panel.inline_actions.menu_button
+    for row in rows:
+        before = tree.visualRect(row)
+        move_over(tree.viewport(), before.center())
+        assert panel.inline_actions.index == row and button.isVisible()
+        assert tree.visualRect(row) == before
+        assert button.geometry().right() == tree.viewport().width() - 5
+
+    table_row = model.index_for_node(f"table:{table.id}")
+    tree.setCurrentIndex(table_row)
+    move_over(tree.viewport(), QPoint(0, tree.viewport().height() - 2))
+    assert not button.isVisible()
+    menus = []
+
+    def visit_menu(menu):
+        assert panel.inline_actions.index == table_row and button.isVisible()
+        assert action(menu, "open").isEnabled()
+        menus.append(menu)
+
+    visit_context_menu(panel, monkeypatch, visit_menu)
+    with qtbot.waitActive(panel):
+        panel.activateWindow()
+    tree.setFocus()
+    qtbot.keyClick(tree, Qt.Key.Key_F10, Qt.KeyboardModifier.ShiftModifier)
+    assert len(menus) == 1
+    map_row = model.index_for_node(f"map:{document.id}")
+    assert action(panel.context_menu(map_row), "open").isEnabled()
 
 
 def test_enter_opens_dice_and_table_and_selection_does_not_retarget_cards(project, qtbot):

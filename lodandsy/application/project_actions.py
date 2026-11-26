@@ -335,6 +335,7 @@ class ProjectActions:
             token.y + 16 if y is None else y,
             cells_w=token.cells_w,
             cells_h=token.cells_h,
+            rotation=token.rotation,
             z=token.z,
             label_override=token.label_override,
             image_override=token.image_override,

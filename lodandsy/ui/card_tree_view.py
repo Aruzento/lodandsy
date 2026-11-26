@@ -46,11 +46,12 @@ class CardTreeView(QTreeView):
         self,
         event: QContextMenuEvent,
     ) -> None:
-        index = self.indexAt(event.pos())
-
-        self.context_menu_requested.emit(
-            index,
-            event.globalPos(),
-        )
+        if event.reason() == QContextMenuEvent.Reason.Keyboard:
+            index = self.currentIndex()
+            position = self.viewport().mapToGlobal(self.visualRect(index).bottomLeft())
+        else:
+            index = self.indexAt(event.pos())
+            position = event.globalPos()
+        self.context_menu_requested.emit(index, position)
 
         event.accept()

@@ -1,0 +1,23 @@
+{
+  "platform": "windows",
+  "device_pixel_ratio": 1.0,
+  "logical_icon_px": 16,
+  "card_types": [
+    "note",
+    "article",
+    "character",
+    "item",
+    "location",
+    "folder",
+    "creature",
+    "region",
+    "object",
+    "magic",
+    "skill",
+    "lore"
+  ],
+  "selected_type": "character",
+  "hovered_type_in_active_capture": "item",
+  "inactive_window_verified": true,
+  "scrolled_capture": false
+}

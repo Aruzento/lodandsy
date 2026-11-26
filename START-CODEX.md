@@ -38,7 +38,8 @@
 определяются только active inventory rows, один armor/shield с atomic replace/cancel.
 Card armor_type/armor_base/shield удалены; это только resolved formula inputs.
 SQLite16/Card7, профиль5e14 version2; legacy/миграции отсутствуют по новому прямому
-решению владельца «все миры тестовые». SQLite15 отклоняется без записи/удаления.
+решению владельца для дорелизного этапа. SQLite15 отклоняется без записи/удаления.
+Для поддерживаемых миров начиная с v0.01 действует ADR-040.
 Ручной итоговый AC побеждает, оборудование и источники видны в native AC dialog.
 Отчёт: docs/validation/2026-11-22-character-sheet-v2.md. Новые Git-публикации не разрешены.
 

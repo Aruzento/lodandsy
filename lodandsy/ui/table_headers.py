@@ -1,7 +1,8 @@
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QTableView, QToolButton
 
-from lodandsy.ui.icons import icon
+from lodandsy.ui.icons import configure_tool_button
+from lodandsy.ui.theme import TABLE_ROW, TOOL_SIZE
 
 
 class AppendHeader(QHeaderView):
@@ -11,29 +12,29 @@ class AppendHeader(QHeaderView):
         super().__init__(orientation, parent)
         self.setSectionsMovable(True)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.plus = QToolButton(self.viewport())
-        self.plus.setIcon(icon("plus"))
-        self.plus.setAccessibleName(
-            "Добавить столбец" if orientation == Qt.Orientation.Horizontal else "Добавить строку"
+        self.plus = configure_tool_button(
+            QToolButton(self.viewport()), "plus",
+            "Добавить столбец" if orientation == Qt.Orientation.Horizontal else "Добавить строку",
         )
-        self.plus.setToolTip(self.plus.accessibleName())
         self.plus.clicked.connect(self.append_requested)
         self.sectionResized.connect(self.position_plus)
+        self.sectionMoved.connect(self.position_plus)
         self.sectionCountChanged.connect(self.position_plus)
         self.geometriesChanged.connect(self.position_plus)
         if orientation == Qt.Orientation.Horizontal:
-            self.setMinimumHeight(32)
+            self.setMinimumHeight(TOOL_SIZE + 2)
         else:
-            self.setMinimumWidth(38)
+            self.setMinimumWidth(TOOL_SIZE + 8)
+            self.setDefaultSectionSize(TABLE_ROW)
 
     def position_plus(self, *args):
         horizontal = self.orientation() == Qt.Orientation.Horizontal
         index = self.logicalIndex(self.count() - 1) if self.count() else -1
         end = self.sectionViewportPosition(index) + self.sectionSize(index) if index >= 0 else 0
         if horizontal:
-            self.plus.setGeometry(end, 0, 28, max(24, self.height()))
+            self.plus.move(end, max(0, (self.height() - TOOL_SIZE) // 2))
         else:
-            self.plus.setGeometry(0, end, max(28, self.width()), 28)
+            self.plus.move(max(0, (self.width() - TOOL_SIZE) // 2), end)
         self.plus.show()
         self.plus.raise_()
 
@@ -64,10 +65,10 @@ class TableView(QTableView):
             return
         # Reserve scrollable footer space; the [+] controls are never model cells.
         self.horizontalScrollBar().setRange(
-            0, max(0, self.horizontalHeader().length() + 28 - self.viewport().width())
+            0, max(0, self.horizontalHeader().length() + TOOL_SIZE - self.viewport().width())
         )
         self.verticalScrollBar().setRange(
-            0, max(0, self.verticalHeader().length() + 28 - self.viewport().height())
+            0, max(0, self.verticalHeader().length() + TOOL_SIZE - self.viewport().height())
         )
         self.horizontalHeader().position_plus()
         self.verticalHeader().position_plus()

@@ -4,6 +4,9 @@ from html import escape
 from PySide6.QtCore import QEvent, QLineF, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QGraphicsItem, QMenu
+from shiboken6 import isValid
+
+from lodandsy.ui.icons import icon
 
 
 class GridLayer(QGraphicsItem):
@@ -68,19 +71,27 @@ class TokenItem(QGraphicsItem):
         self.token, self.presentation, self.view = token, presentation, view
         self.cell_size = view.grid.cell_size
         self.root, self.asset_path, self.provider = root, asset_path, provider
+        self.object_card = False
+        self.has_inventory = False
+        self.transform_preview = None
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, view.role != "player")
         self.set_value(token, presentation, root, asset_path, provider)
 
     def set_value(self, token, presentation, root, asset_path, provider):
-        if (presentation.cells_w, presentation.cells_h, self.view.grid.cell_size) != (
+        if (
+            presentation.cells_w, presentation.cells_h, self.view.grid.cell_size
+        ) != (
             self.presentation.cells_w,
             self.presentation.cells_h,
             self.cell_size,
-        ):
+        ) or (self.transform_preview is not None and self.token != token):
             self.prepareGeometryChange()
+            self.transform_preview = None
         self.cell_size = self.view.grid.cell_size
         self.token, self.presentation = token, presentation
-        self.setPos(token.x, token.y)
+        position = self.transform_preview or token
+        self.setPos(position.x, position.y)
+        self.setRotation(position.rotation)
         self.root, self.asset_path, self.provider = root, asset_path, provider
         self.broken = presentation.missing
         overrides = [
@@ -111,10 +122,30 @@ class TokenItem(QGraphicsItem):
         )
         self.update()
 
+    @property
+    def can_transform(self):
+        return (
+            self.object_card and self.view.token_interaction_enabled
+            and self.view._background is not None and self.isVisible()
+        )
+
+    def set_transform_preview(self, token):
+        if token == self.token:
+            token = None
+        if token == self.transform_preview:
+            return
+        self.prepareGeometryChange()
+        self.transform_preview = token
+        position = token or self.token
+        self.setPos(position.x, position.y)
+        self.setRotation(position.rotation)
+        self.update()
+
     def boundingRect(self):
+        size = self.transform_preview or self.presentation
         width, height = (
-            self.presentation.cells_w * self.cell_size,
-            self.presentation.cells_h * self.cell_size,
+            size.cells_w * self.cell_size,
+            size.cells_h * self.cell_size,
         )
         return QRectF(-width / 2, -height / 2, width, height)
 
@@ -162,10 +193,12 @@ class TokenItem(QGraphicsItem):
             painter.drawLine(rect.topLeft(), rect.bottomRight())
             painter.drawLine(rect.bottomLeft(), rect.topRight())
         painter.restore()
-        if not character and not self.isSelected():
+        selected = self.isSelected()
+        tools = getattr(self.view, "vector_tools", None)
+        if not character and (not selected or (tools and tools.selected_transform_item() is self)):
             return
         pen = QPen(
-            QColor("#e5e5e3" if self.isSelected() else "#ffffff"), 3 if self.isSelected() else 2
+            QColor("#e5e5e3" if selected else "#ffffff"), 3 if selected else 2
         )
         pen.setCosmetic(True)
         painter.setPen(pen)
@@ -225,22 +258,28 @@ class TokenItem(QGraphicsItem):
         event.accept()
 
     def contextMenuEvent(self, event):
-        if self.view.role != "viewer":
+        view = self.view
+        if view.role != "viewer":
             event.ignore()
             return
         menu = QMenu()
         for label, name in [
             ("Открыть карточку", "open"),
+            ("Открыть инвентарь", "inventory"),
             ("Копировать токен", "copy"),
             ("Показать картинку", "portrait"),
             ("Удалить токен", "delete"),
         ]:
             action = menu.addAction(label)
             action.setData(name)
-        chosen = menu.exec(event.screenPos())
-        if chosen:
-            self.view.token_action.emit(self.token.id, chosen.data())
+            if name == "inventory":
+                action.setIcon(icon("inventory"))
+                action.setEnabled(self.has_inventory)
+        token_id = self.token.id
         event.accept()
+        chosen = menu.exec(event.screenPos())
+        if isValid(view) and chosen:
+            view.token_action.emit(token_id, chosen.data())
 
 
 class RasterObjectItem(QGraphicsItem):
