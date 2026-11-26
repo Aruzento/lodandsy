@@ -10,16 +10,22 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 import PySide6
-from PySide6.QtCore import QEvent, QSettings, Qt
+from PySide6.QtCore import QEvent, QSettings, Qt, QTimer
 from PySide6.QtGui import QImage, QKeyEvent, QPainterPath
-from PySide6.QtWidgets import QApplication, QDialogButtonBox, QLineEdit
+from PySide6.QtWidgets import QApplication, QDialogButtonBox, QLineEdit, QMessageBox
 
 from lodandsy.application.app_controller import AppController
-from lodandsy.application.clipboard import clipboard_writer
+from lodandsy.application.clipboard import (
+    INVENTORY_MIME,
+    clipboard_writer,
+    decode_inventory_transfer,
+)
 from lodandsy.application.project_controller import ProjectController
 from lodandsy.application.project_history import ProjectHistory
 from lodandsy.application.sqlite_project_store import SQLiteProjectStore
 from lodandsy.application.workspace_state import capture_workspace
+from lodandsy.domain.currency import CUSTOM, RATE_SCALE, CoinAmount
+from lodandsy.domain.item_categories import STANDARD_CATEGORIES
 from lodandsy.domain.map_document import MapGrid, MapPortal, MapShape
 from lodandsy.domain.table_document import ColumnDefinition, RowRecord
 from lodandsy.ui.app_shell import AppShell
@@ -53,11 +59,133 @@ def copy_and_wait(app, action, expected):
         writer.message.disconnect(receiver)
 
 
+def economy_smoke(app, controller, project, root, screenshots):
+    def capture(widget, name):
+        if screenshots:
+            screenshots.mkdir(parents=True, exist_ok=True)
+            app.processEvents()
+            assert widget.grab().save(str(screenshots / (name + ".png")))
+
+    world = root / "Синтетическая экономика"
+    assert project.create_project(world, preserve_current=False)
+    currency = controller.economy.currency
+    settings = controller.open_economy()
+    assert settings.table.rowCount() == 5
+    capture(settings, "01-currency-standard")
+    settings.reject()
+    owner = controller.create_card("Дозорный Мира", card_type="character")
+    section = next(s for s in owner.sections if s.purpose == "inventory")
+    table = controller.actions.section_table(owner.id, section.id)
+    wallet = tuple(
+        CoinAmount(denom.id, count)
+        for denom, count in zip(currency.denominations, (2, 12, 3, 6, 14))
+    )
+    controller.actions.set_wallet(table.id, wallet, expected=())
+    for title, price, weight, eligible, category in (
+        ("Клинок дозорного", 12, 3, True, 0),
+        ("Зелье ясности", 5, 0.5, True, 3),
+        ("Рунный осколок", 5, 0.25, True, 4),
+        ("Связка отмычек", 2, 1, False, 2),
+        ("Печать смотрителя", None, 0.1, False, 5),
+    ):
+        item = controller.create_card(title, card_type="item")
+        controller.cards_service.update_card_fields(item.id, {
+            "cost": CoinAmount(currency.base_id, price) if price is not None else None,
+            "weight": weight, "loot_enabled": eligible,
+            "item_category": STANDARD_CATEGORIES[category].id,
+        })
+
+    loot = controller.loot.open()
+    assert controller.loot.open() is loot
+    view = loot.widget()
+    controller.loot.rng.seed(41)
+    for control in view.count:
+        control.setValue(3)
+    view.budget[0].setText("17")
+    view.budget[1].setText("40")
+    view.include_money.setChecked(True)
+    view.money[0].setText("2")
+    view.money[1].setText("4")
+    view.generate_button.click()
+    result = controller.loot.result
+    assert 17 * RATE_SCALE <= result.total <= 40 * RATE_SCALE
+    assert sum(stack.count for stack in result.items) == 3 and result.coins
+    view.results.item(0, 4).setCheckState(Qt.CheckState.Checked)
+    capture(view, "02-loot")
+    loot.dock.setFloating()
+    app.processEvents()
+    floating = loot.dock.floatingDockContainer()
+    assert floating.isWindow()
+    floating.resize(440, 490)
+    capture(floating, "03-loot-floating")
+    view.copy_button.click()
+    clipboard = QApplication.clipboard()
+    wait(app, lambda: clipboard.mimeData() is not None
+         and clipboard.mimeData().hasFormat(INVENTORY_MIME))
+    mime = bytes(clipboard.mimeData().data(INVENTORY_MIME))
+    assert decode_inventory_transfer(mime).items == result.items
+    inventory = controller.tables.open_table(table.id).widget()
+
+    def confirm_money():
+        dialog = app.activeModalWidget()
+        if isinstance(dialog, QMessageBox):
+            dialog.button(QMessageBox.StandardButton.Yes).click()
+
+    QTimer.singleShot(150, confirm_money)
+    inventory.paste_selection()
+    saved = controller.tables_service.get_table(table.id)
+    assert len(saved.rows) == len(result.items)
+    assert sum(currency.value(coin) for coin in saved.wallet) > sum(
+        currency.value(coin) for coin in wallet
+    )
+    clipboard.clear()
+    capture(inventory, "04-wallet")
+
+    shop = controller.shop.open()
+    assert controller.shop.open() is shop
+    shop.widget().generate_button.click()
+    assert shop.widget().results.rowCount() == 5
+    assert "доступно 5" in shop.widget().summary.text()
+    capture(shop.widget(), "05-shop")
+    assert project.save_current()
+    identity = project.store.project_id
+    backup = root / "economy.lodbackup"
+    project.store.backup(backup)
+    restored = SQLiteProjectStore.restore(backup, root / "Лут восстановлен")
+    try:
+        assert restored.project_id == identity
+        assert next(t for t in restored.load().tables if t.id == table.id).wallet == saved.wallet
+    finally:
+        restored.close()
+
+    assert project.create_project(root / "Другие валюты", preserve_current=False)
+    assert controller.loot.result is None and controller.shop.result is None
+    assert project.store.project_id != identity
+    settings = controller.open_economy()
+    settings.system.setCurrentIndex(settings.system.findData(CUSTOM))
+    settings.add_button.click()
+    settings.table.setCurrentCell(1, 1)
+    settings.table.item(1, 0).setText("Искра")
+    settings.table.item(1, 1).setText("и")
+    settings.table.item(1, 2).setText("0,00001")
+    capture(settings, "06-currency-custom")
+    settings.buttons.button(QDialogButtonBox.StandardButton.Save).click()
+    assert controller.economy.currency.denominations[1].rate_units == 1
+    assert project.save_current()
+    project.open_project(world)
+    assert project.store.project_id == identity
+    assert controller.loot.result == result and controller.loot.locked
+    assert controller.shop.result.available == 5
+    reopened = controller.window_manager.find_window(controller.loot.key)
+    assert reopened is not None and reopened.dock.floatingDockContainer().isWindow()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--report", type=Path, required=True)
     parser.add_argument("--large-map-image", type=Path)
+    parser.add_argument("--screenshots", type=Path)
     args = parser.parse_args()
     app = QApplication([])
     apply_theme(app)
@@ -119,13 +247,14 @@ def main():
             inventory_view = controller.tables.open_table(inventory_table.id).widget()
             inventory_view.add_row()
             item_card = controller.create_card("Стальной меч", card_type="item")
+            base = controller.economy.currency.base_id
             controller.cards_service.update_card_fields(
-                item_card.id, {"cost": 0, "summary": "Сталь"}
+                item_card.id, {"cost": CoinAmount(base, 0), "summary": "Сталь"}
             )
             assert inventory_view.model.setData(inventory_view.model.index(0, 0), item_card.id)
-            assert embedded_inventory.model.data(embedded_inventory.model.index(0, 3)) == "0"
-            controller.cards_service.update_card_fields(item_card.id, {"cost": 9})
-            assert embedded_inventory.model.data(embedded_inventory.model.index(0, 3)) == "9"
+            assert embedded_inventory.model.data(embedded_inventory.model.index(0, 3)) == "0 зм"
+            controller.cards_service.update_card_fields(item_card.id, {"cost": CoinAmount(base, 9)})
+            assert embedded_inventory.model.data(embedded_inventory.model.index(0, 3)) == "9 зм"
             assert len(controller.tables_service.get_table(inventory_table.id).rows[0].cells) == 3
             controller.window_manager.close_window(f"table:{inventory_table.id}")
             progress = []
@@ -418,6 +547,7 @@ def main():
             assert len(controller.maps_service.get_map(document.id).tokens) == 1
             assert controller.cards.get(b.id)
             assert project.save_current()
+            economy_smoke(app, controller, project, root, args.screenshots)
             result = {
                 "player_presentation_shared_tiles_vector_fog": True,
                 "passed": True,
@@ -451,6 +581,8 @@ def main():
                 "independent_map_editor_free_tokens": True,
                 "typed_table_and_nonblocking_drafts": True,
                 "application_dice_tool": True,
+                "economy_t3_price_wallet_clipboard_loot_shop": True,
+                "economy_t3_project_isolation_floating_and_restore": True,
                 "mixed_entity_hierarchy": True,
                 "large_map_supplied": bool(args.large_map_image),
                 "manual_acceptance": "not performed by this automated smoke",

@@ -1,5 +1,6 @@
 """Transactional cross-feature use cases; no widgets, workers or SQL."""
 
+from collections import Counter
 from dataclasses import replace
 
 from PySide6.QtGui import QUndoCommand
@@ -8,9 +9,12 @@ from lodandsy.application.maps_service import map_payload
 from lodandsy.domain.actor_state import ActorRef
 from lodandsy.domain.card import Card, Portrait
 from lodandsy.domain.card_schema import ACTOR_TYPES
+from lodandsy.domain.currency import CoinAmount
 from lodandsy.domain.document_payloads import inventory_inputs, validate_inventory_columns
 from lodandsy.domain.entity import EntityCollection
+from lodandsy.domain.inventory_transfer import ItemStack
 from lodandsy.domain.map_document import TokenInstance
+from lodandsy.domain.table_document import RowRecord
 
 
 class PlacementEdit(QUndoCommand):
@@ -159,6 +163,67 @@ class ProjectActions:
                         owners[actor.inventory_id] = ActorRef(card.id, actor.id)
             self._inventory_owner_cache = signature, owners
         return self._inventory_owner_cache[1].get(table_id)
+
+    def used_denominations(self):
+        ids = set()
+        for entity in self.core.entities.summaries():
+            payload = self.core.entities.payload(entity.id)
+            if entity.kind == "card" and payload.card_type == "item":
+                if (price := dict(payload.values).get("cost")) is not None:
+                    ids.add(price.denomination_id)
+            elif entity.kind == "table":
+                ids.update(coin.denomination_id for coin in payload.wallet)
+        return frozenset(ids)
+
+    def set_wallet(self, table_id, wallet, *, expected):
+        if self.inventory_owner(table_id) is None:
+            raise ValueError("Кошелёк доступен только в инвентаре")
+        validate_inventory_columns(self.core.entities, table_id)
+        table = self.tables.get_table(table_id)
+        if table.wallet != expected:
+            raise ValueError("Кошелёк изменился в другом представлении. Откройте его заново.")
+        return self.tables.update_table(replace(table, wallet=wallet), expected=table)
+
+    def plan_inventory_paste(self, table_id, transfer, project_id):
+        if transfer.project_id != project_id:
+            raise ValueError("Буфер обмена содержит набор из другого проекта")
+        if self.inventory_owner(table_id) is None:
+            raise ValueError("Набор предметов и монет можно вставить только в инвентарь")
+        validate_inventory_columns(self.core.entities, table_id)
+        table = self.tables.get_table(table_id)
+        columns = {column.key: column.id for column in table.columns}
+        quantities = Counter()
+        for stack in transfer.items:
+            try:
+                item = self.cards.get_card(stack.item_id)
+                if item.card_type != "item":
+                    raise ValueError("Wrong Card type")
+            except ValueError:
+                raise ValueError(f"Предмет {stack.item_id} недоступен") from None
+            quantities[stack.item_id] += stack.count
+        rows = list(table.rows)
+        defaults = dict(table.new_row().cells)
+        for item_id, count in quantities.items():
+            stack = ItemStack(item_id, count)
+            cells = defaults | {
+                columns["item"]: stack.item_id,
+                columns["quantity"]: stack.count,
+                columns["active"]: False,
+            }
+            rows.append(RowRecord(len(rows), tuple(cells.items())))
+        currency = self.tables.currency
+        incoming = Counter()
+        for coin in transfer.coins:
+            currency.denomination(coin.denomination_id)
+            incoming[coin.denomination_id] += coin.count
+        added = tuple(CoinAmount(key, count) for key, count in incoming.items())
+        totals = Counter({coin.denomination_id: coin.count for coin in table.wallet})
+        totals.update(incoming)
+        wallet = tuple(
+            CoinAmount(denom.id, totals[denom.id])
+            for denom in currency.denominations if totals[denom.id]
+        ) if added else table.wallet
+        return table, replace(table, rows=tuple(rows), wallet=wallet), added
 
     def inventory_activity_caption(self, document, row, column):
         if column.key != "active" or self.inventory_owner(document.id) is None:

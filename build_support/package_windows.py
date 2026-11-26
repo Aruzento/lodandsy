@@ -78,6 +78,7 @@ def main():
                             "docs/validation/2026-11-25-map-m5",
                             "docs/validation/2026-11-25-map-m55",
                             "docs/validation/2026-11-26-map-m55-final",
+                            "docs/validation/2026-11-26-tools-t3",
                         )
                     )
                 )

@@ -8,6 +8,7 @@ from PySide6.QtCore import QObject, Signal
 
 from lodandsy.application.edit_conflict import ConcurrentEditError, EditConflict
 from lodandsy.application.entity_session import EntitySession
+from lodandsy.domain.currency import CoinAmount, CurrencySystem
 from lodandsy.domain.table_document import TableDocument, TablePayload, display_value, parse_cell
 
 _UNSET = object()
@@ -65,6 +66,11 @@ class TablesService(QObject):
         self.core.replaced.connect(self.reset)
 
     @property
+    def currency(self):
+        settings = self.core.entities.settings
+        return settings.currency if settings is not None else CurrencySystem()
+
+    @property
     def tables(self):
         return MappingProxyType(
             {
@@ -78,7 +84,7 @@ class TablesService(QObject):
         if self.core.entities.get(key).kind != "table":
             raise ValueError("Ожидается таблица")
         return self.core.entities.project(
-            key, lambda e, p: TableDocument(e.title, e.id, p.columns, p.rows)
+            key, lambda e, p: TableDocument(e.title, e.id, p.columns, p.rows, p.wallet)
         )
 
     def create_table(self, title, parent_id=None, *, columns=None):
@@ -145,10 +151,11 @@ class TablesService(QObject):
             )
             for row in (source.rows if source else ())
         )
-        document = TableDocument(title, columns=columns, rows=rows)
+        wallet = source.wallet if source else ()
+        document = TableDocument(title, columns=columns, rows=rows, wallet=wallet)
         with self.core.transaction():
             self.core.entities.create(
-                "table", title, TablePayload(columns, rows), parent_id, id=document.id
+                "table", title, TablePayload(columns, rows, wallet), parent_id, id=document.id
             )
             self.core.after_commit(lambda: self.core.entity_created.emit(document.id))
             self.core.after_commit(
@@ -185,7 +192,7 @@ class TablesService(QObject):
         with self.core.transaction():
             self.core.entities.update(document.id, title=document.title)
             self.core.entities.put_payload(
-                document.id, TablePayload(document.columns, document.rows)
+                document.id, TablePayload(document.columns, document.rows, document.wallet)
             )
             self.core.entities.project(document.id, lambda e, p: document)
             self._lookups.pop(document.id, None)
@@ -560,7 +567,10 @@ class TablesService(QObject):
                 )
             if column.field_key not in {name for name, value in info.fields}:
                 return None, "Поле проекции недоступно", info
-            return info.value(column.field_key), "", info
+            value = info.value(column.field_key)
+            if isinstance(value, CoinAmount):
+                value = self.currency.price_text(value)
+            return value, "", info
         return row.value(column.id), "", None
 
     def _remove_edges(self, key):

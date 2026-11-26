@@ -30,6 +30,7 @@ from lodandsy.application.workspace_state import (
     save_workspace_file,
 )
 from lodandsy.domain.card_collection import CardCollection
+from lodandsy.ui.icons import icon
 
 if TYPE_CHECKING:
     from lodandsy.application.app_controller import AppController
@@ -93,6 +94,12 @@ class ProjectController(QObject):
         tools = self.window.menuBar().addMenu("Инструменты")
         dice = tools.addAction("Кубики")
         dice.triggered.connect(self.controller.dice.open)
+        self.loot_action = tools.addAction("Генератор лута")
+        self.loot_action.setIcon(icon("loot"))
+        self.loot_action.triggered.connect(self.controller.loot.open)
+        self.shop_action = tools.addAction("Магазин")
+        self.shop_action.setIcon(icon("shop"))
+        self.shop_action.triggered.connect(self.controller.shop.open)
 
     @property
     def store(self):
@@ -123,6 +130,8 @@ class ProjectController(QObject):
             tuple(self.controller.tables_service.tables.values()),
             self.controller.core.entities.summaries(),
             self.controller.cards_service.rules,
+            self.controller.economy.currency,
+            self.controller.economy.settings.custom_categories,
         )
 
     @property
@@ -204,6 +213,9 @@ class ProjectController(QObject):
 
     def _update_status(self, *_args):
         self.controller.rules_action.setEnabled(self.store is not None and not self.busy)
+        self.controller.economy_action.setEnabled(self.store is not None and not self.busy)
+        self.loot_action.setEnabled(self.store is not None)
+        self.shop_action.setEnabled(self.store is not None)
         labels = {
             SaveState.CLEAN: "Сохранено",
             SaveState.DIRTY: "Есть несохранённые изменения",
@@ -264,6 +276,8 @@ class ProjectController(QObject):
                 store.close()
                 raise
         self.store = store
+        self.controller.close_economy()
+        self.controller.reset_catalogue_tools()
         self._ui_restore_failed = False
         self.controller.set_project_root(store.root)
         if not preserve_current:

@@ -12,6 +12,7 @@ UI_STATE_NAME = ".lodandsy-ui.json"
 
 def capture_workspace(controller):
     panel = controller.window.tree_panel
+    store = controller.resources.store
     return {
         "version": 4,
         "documents": list(controller.window_manager.window_keys()),
@@ -23,6 +24,11 @@ def capture_workspace(controller):
         "cards": controller.card_views.capture_ui(),
         **controller.maps.capture_ui(),
         "tables": controller.tables.capture_ui(),
+        "economy_tools": {
+            "project_id": store.project_id if store is not None else None,
+            "loot": controller.loot.capture(),
+            "shop": controller.shop.capture(),
+        },
         "panel_widths": controller.window.panel_widths(),
         "geometry": base64.b64encode(bytes(controller.window.saveGeometry())).decode("ascii"),
         "chrome": base64.b64encode(bytes(controller.window.saveState(1))).decode("ascii"),
@@ -39,6 +45,15 @@ def restore_workspace(controller, data):
     geometry = base64.b64decode(data.get("geometry", ""), validate=True)
     layout = base64.b64decode(data.get("layout", ""), validate=True)
     chrome = base64.b64decode(data.get("chrome", ""), validate=True)
+    tools = data.get("economy_tools")
+    store = controller.resources.store
+    if (
+        store is not None
+        and isinstance(tools, dict)
+        and tools.get("project_id") == store.project_id
+    ):
+        controller.loot.restore(tools.get("loot"))
+        controller.shop.restore(tools.get("shop"))
     complete = True
     for key in documents:
         try:

@@ -45,6 +45,12 @@ PATHS = {
     "table": '<rect x="2" y="3" width="12" height="10"/><path d="M2 7h12M6 3v10M10 7v6"/>',
     "dice": '<rect x="3" y="3" width="10" height="10" rx="2"/>'
     '<path d="M6 6h.01M10 6h.01M8 8h.01M6 10h.01M10 10h.01"/>',
+    "loot": '<path d="M6 5 4 2h8l-2 3m-4 0h4l3 4v3a2 2 0 0 1-2 2H5'
+    'a2 2 0 0 1-2-2V9zM6 9h4M8 7v4"/>',
+    "shop": '<path d="M2 6 4 2h8l2 4v2h-2l-1-1-1 1H6L5 7 4 8H2z'
+    'M3 8v6h10V8M6 14v-4h4v4"/>',
+    "coins": '<ellipse cx="7" cy="4" rx="5" ry="2"/><path d="M2 4v6c0 1 2 2 5 2'
+    'm-5-5c0 1 2 2 5 2m5-5v3"/><circle cx="11" cy="11" r="3"/>',
     "open": '<path d="M3 8h10M9 4l4 4-4 4"/>',
     "search": '<circle cx="7" cy="7" r="4"/><path d="m10 10 4 4"/>',
     "more": '<circle cx="3" cy="8" r=".8"/><circle cx="8" cy="8" r=".8"/>'

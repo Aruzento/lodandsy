@@ -1,9 +1,11 @@
 from lodandsy.domain.card import Card
 from lodandsy.domain.card_schema import ACTOR_TYPES, field_definition
+from lodandsy.domain.currency import validate_wallet
 from lodandsy.domain.entity import Entity, EntityCollection
 from lodandsy.domain.equipment import EquipmentEntry, resolve_equipment
 from lodandsy.domain.map_document import MapDocument, MapPayload
 from lodandsy.domain.modifiers import ModifierSource
+from lodandsy.domain.project_settings import ProjectSettings
 from lodandsy.domain.rules_5e14 import ProjectRules, calculate
 from lodandsy.domain.table_document import TableDocument, TablePayload
 
@@ -128,7 +130,7 @@ def module_payload(document):
             document.portals,
         )
     if isinstance(document, TableDocument):
-        return TablePayload(document.columns, document.rows)
+        return TablePayload(document.columns, document.rows, document.wallet)
     return document.payload()
 
 
@@ -153,7 +155,7 @@ def _module_document(entity, payload):
             payload.portals,
         )
     if entity.kind == "table":
-        return TableDocument(entity.title, key, payload.columns, payload.rows)
+        return TableDocument(entity.title, key, payload.columns, payload.rows, payload.wallet)
     raise ValueError("Unsupported module document")
 
 
@@ -186,20 +188,35 @@ def validate_inventory_columns(collection, table_id):
 
 
 def validate_project(collection, previous=None):
-    if collection.settings is not None and not isinstance(collection.settings, ProjectRules):
+    settings = collection.settings or ProjectSettings()
+    if not isinstance(settings, ProjectSettings):
+        raise ValueError("Invalid project settings")
+    rules = settings.rules
+    if rules is not None and not isinstance(rules, ProjectRules):
         raise ValueError("Invalid project rules")
-    actors, tokens, owned_tables = {}, set(), set()
-    entity_ids = {entity.id for entity in collection.summaries()}
+    actors, tokens, owned_tables, template_tables = {}, set(), set(), set()
+    entities = collection.summaries()
+    entity_ids = {entity.id for entity in entities}
+    category_ids = {category.id for category in settings.categories}
     old_owners = {
         actor.id: key
         for key, payload in (previous or {}).items()
         for actor in getattr(payload, "actors", ())
     }
-    for entity in collection.summaries():
+    for entity in entities:
         payload = collection.payload(entity.id)
         if entity.kind != "card":
             continue
         card = card_projection(collection, entity.id)
+        if card.card_type == "item":
+            if (price := card.value("cost")) is not None:
+                settings.currency.denomination(price.denomination_id)
+            category = card.value("item_category")
+            if category is not None and category not in category_ids:
+                raise ValueError("Категория предмета отсутствует в настройках проекта")
+        template_tables.update(
+            (s.table_id, entity.id) for s in card.sections if s.purpose == "inventory"
+        )
         if inventory_inputs(collection, card, None)["equipment"].conflicts:
             raise ValueError("В базовом инвентаре надето несколько доспехов или щитов")
         for actor in payload.actors:
@@ -228,19 +245,29 @@ def validate_project(collection, previous=None):
                 card.sections,
                 actor.values,
                 actor.inventory_id,
-                collection.settings,
+                rules,
                 tuple(sorted(inputs.items())),
             )
             proof = actor._validation_proof
             if proof is not None and proof[0] == signature:
                 maximum = proof[1]
             else:
-                maximum = calculate(card, actor, collection.settings, **inputs).get("hp_max")
+                maximum = calculate(card, actor, rules, **inputs).get("hp_max")
                 object.__setattr__(actor, "_validation_proof", (signature, maximum))
             current = actor.value("hp_current")
             if maximum.status == "ok" and current is not None and current > maximum.value:
                 raise ValueError("Actor current HP exceeds effective maximum")
-    for entity in collection.summaries():
+    for entity in entities:
+        if entity.kind == "table" and (wallet := collection.payload(entity.id).wallet):
+            if (
+                entity.id not in owned_tables
+                and (entity.id, entity.parent_id) not in template_tables
+            ):
+                raise ValueError("Кошелёк может принадлежать только инвентарю")
+            validate_inventory_columns(collection, entity.id)
+            validate_wallet(wallet)
+            for coin in wallet:
+                settings.currency.denomination(coin.denomination_id)
         if entity.kind != "map":
             continue
         payload = collection.payload(entity.id)

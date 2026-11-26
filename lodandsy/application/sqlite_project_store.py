@@ -13,12 +13,21 @@ from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
 from lodandsy.application.card_payload_codec import decode_actor, decode_card, encode_card_aggregate
+from lodandsy.application.economy_codec import (
+    ECONOMY_VERSION,
+    decode_economy,
+    decode_wallet,
+    encode_economy,
+    encode_wallet,
+)
 from lodandsy.application.fog_geometry import decode_fog
 from lodandsy.application.table_column_codec import decode_column, encode_settings
 from lodandsy.domain.card import Card, validate_card_id
 from lodandsy.domain.card_collection import CardCollection
+from lodandsy.domain.currency import CurrencySystem
 from lodandsy.domain.document_payloads import project_entities
 from lodandsy.domain.entity import Entity
+from lodandsy.domain.item_categories import ItemCategory
 from lodandsy.domain.map_document import (
     MapDocument,
     MapGrid,
@@ -28,11 +37,13 @@ from lodandsy.domain.map_document import (
     PlacedAssetObject,
     TokenInstance,
 )
+from lodandsy.domain.module_values import validate_id
+from lodandsy.domain.project_settings import ProjectSettings
 from lodandsy.domain.rules_5e14 import ProjectRules
 from lodandsy.domain.table_document import RowRecord, TableDocument
 
 DATABASE_NAME = "project.sqlite3"
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 MAX_BACKUP_BYTES = 4 * 1024**3
 
 
@@ -79,10 +90,13 @@ class ProjectSnapshot:
     tables: tuple[TableDocument, ...] = ()
     entities: tuple[Entity, ...] = ()
     rules: ProjectRules = field(default_factory=ProjectRules)
+    currency: CurrencySystem = field(default_factory=CurrencySystem)
+    custom_categories: tuple[ItemCategory, ...] = ()
 
     def entity_collection(self):
         return project_entities(
-            self.cards, self.maps, self.tables, self.entities, settings=self.rules
+            self.cards, self.maps, self.tables, self.entities,
+            settings=ProjectSettings(self.rules, self.currency, self.custom_categories),
         )
 
     def __post_init__(self):
@@ -146,6 +160,7 @@ class SQLiteProjectStore:
         self.path = root / DATABASE_NAME
         self._lock = lock
         self._closed = False
+        self._project_id = None
         self._operation_lock = threading.RLock()
 
     @classmethod
@@ -156,14 +171,18 @@ class SQLiteProjectStore:
             raise ProjectError("Create a project in an empty folder")
         lock = ProjectLock(root)
         store = cls(root, lock)
+        store._project_id = str(uuid4())
         try:
             with closing(sqlite3.connect(store.path)) as connection, connection:
                 connection.execute("PRAGMA foreign_keys=ON")
                 connection.execute("PRAGMA synchronous=FULL")
                 connection.execute(
-                    "CREATE TABLE metadata(name TEXT NOT NULL, revision INTEGER NOT NULL)"
+                    "CREATE TABLE metadata(name TEXT NOT NULL, revision INTEGER NOT NULL, "
+                    "project_id TEXT NOT NULL UNIQUE)"
                 )
-                connection.execute("INSERT INTO metadata VALUES(?, 0)", (root.name,))
+                connection.execute(
+                    "INSERT INTO metadata VALUES(?, 0, ?)", (root.name, store._project_id)
+                )
                 connection.execute(
                     "CREATE TABLE entity(id TEXT PRIMARY KEY, kind TEXT NOT NULL, "
                     "title TEXT NOT NULL, parent_id TEXT REFERENCES entity(id) "
@@ -194,7 +213,7 @@ class SQLiteProjectStore:
                 connection.execute(
                     "CREATE TABLE table_document(id TEXT PRIMARY KEY "
                     "REFERENCES entity(id) ON DELETE CASCADE, "
-                    "payload_version INTEGER NOT NULL)"
+                    "payload_version INTEGER NOT NULL, wallet TEXT NOT NULL)"
                 )
                 connection.executescript("""
                     CREATE TABLE card_actor(
@@ -225,6 +244,9 @@ class SQLiteProjectStore:
                       ruleset TEXT NOT NULL, rules_version INTEGER NOT NULL,
                       revision INTEGER NOT NULL, overrides TEXT NOT NULL);
                     INSERT INTO project_rules VALUES(1,1,'dnd_5e_2014',2,0,'[]');
+                    CREATE TABLE project_economy(
+                      id INTEGER PRIMARY KEY CHECK(id=1), payload_version INTEGER NOT NULL,
+                      state TEXT NOT NULL);
                     CREATE TABLE table_column(
                       id TEXT PRIMARY KEY, table_id TEXT NOT NULL REFERENCES table_document(id),
                       name TEXT NOT NULL, data_type TEXT NOT NULL, position INTEGER NOT NULL,
@@ -239,6 +261,10 @@ class SQLiteProjectStore:
                       FOREIGN KEY(table_id,row_id) REFERENCES table_row(table_id,id),
                       FOREIGN KEY(table_id,column_id) REFERENCES table_column(table_id,id));
                 """)
+                connection.execute(
+                    "INSERT INTO project_economy VALUES(1,?,?)",
+                    (ECONOMY_VERSION, encode_economy(CurrencySystem())),
+                )
                 connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             (root / "assets").mkdir()
         except sqlite3.Error as error:
@@ -266,6 +292,13 @@ class SQLiteProjectStore:
         if self._closed:
             raise ProjectError("Project has been closed")
 
+    @property
+    def project_id(self):
+        self._check_open()
+        if self._project_id is None:
+            self.load()
+        return self._project_id
+
     @project_operation
     def load(self) -> ProjectSnapshot:
         self._check_open()
@@ -278,9 +311,13 @@ class SQLiteProjectStore:
                     raise ProjectError("Project database is damaged; restore a backup")
                 if connection.execute("PRAGMA foreign_key_check").fetchall():
                     raise ProjectError("Project hierarchy contains missing parents")
-                metadata = connection.execute("SELECT revision FROM metadata").fetchall()
+                metadata = connection.execute("SELECT revision,project_id FROM metadata").fetchall()
                 if len(metadata) != 1 or type(metadata[0][0]) is not int or metadata[0][0] < 0:
                     raise ProjectError("Invalid project metadata")
+                project_id = metadata[0][1]
+                validate_id(project_id)
+                if self._project_id is not None and self._project_id != project_id:
+                    raise ProjectError("Project identity changed")
                 assets = tuple(
                     AssetRecord(*row)
                     for row in connection.execute(
@@ -320,6 +357,12 @@ class SQLiteProjectStore:
                     rules_revision,
                     tuple(tuple(pair) for pair in decoded_overrides),
                 )
+                economy_rows = connection.execute(
+                    "SELECT payload_version,state FROM project_economy"
+                ).fetchall()
+                if len(economy_rows) != 1:
+                    raise ProjectError("Некорректные настройки экономики")
+                currency, categories = decode_economy(*economy_rows[0])
                 cards = tuple(
                     decode_card(
                         title,
@@ -337,7 +380,8 @@ class SQLiteProjectStore:
                 )
                 maps, tables = self._load_modules(connection)
                 snapshot = ProjectSnapshot(
-                    tuple(cards), metadata[0][0], assets, maps, tables, envelopes, rules
+                    tuple(cards), metadata[0][0], assets, maps, tables, envelopes, rules,
+                    currency, categories,
                 )
                 collection = snapshot.entity_collection()
                 ordered_cards = CardCollection(entities=collection).all()
@@ -351,6 +395,7 @@ class SQLiteProjectStore:
                     ids = {row[0] for row in connection.execute(f"SELECT id FROM {table}")}
                     if ids != {e.id for e in envelopes if e.kind == kind}:
                         raise ProjectError("Entity payload inventory mismatch")
+                self._project_id = project_id
                 return ProjectSnapshot(
                     ordered_cards,
                     metadata[0][0],
@@ -359,6 +404,8 @@ class SQLiteProjectStore:
                     tables,
                     collection.summaries(),
                     rules,
+                    currency,
+                    categories,
                 )
         except sqlite3.Error as error:
             raise ProjectError(f"Cannot read project: {error}") from error
@@ -464,13 +511,16 @@ class SQLiteProjectStore:
                 rows.setdefault(table_id, []).append(
                     RowRecord(position, tuple(cells.get((table_id, key), ())), key)
                 )
-            for key, title, version in connection.execute(
-                "SELECT t.id,e.title,t.payload_version FROM table_document t "
+            for key, title, version, wallet in connection.execute(
+                "SELECT t.id,e.title,t.payload_version,t.wallet FROM table_document t "
                 "JOIN entity e ON e.id=t.id ORDER BY e.position,e.id"
             ):
-                SQLiteProjectStore._require_version(version, 3, "Table")
+                SQLiteProjectStore._require_version(version, 4, "Table")
                 tables.append(
-                    TableDocument(title, key, tuple(columns.get(key, ())), tuple(rows.get(key, ())))
+                    TableDocument(
+                        title, key, tuple(columns.get(key, ())), tuple(rows.get(key, ())),
+                        decode_wallet(wallet),
+                    )
                 )
         except (TypeError, KeyError, ValueError) as error:
             raise ProjectError(f"Cannot read module data: {error}") from error
@@ -564,8 +614,8 @@ class SQLiteProjectStore:
                 ],
             )
             connection.executemany(
-                "INSERT INTO table_document VALUES(?,?)",
-                [(t.id, 3) for t in snapshot.tables],
+                "INSERT INTO table_document VALUES(?,?,?)",
+                [(t.id, 4, encode_wallet(t.wallet)) for t in snapshot.tables],
             )
             connection.executemany(
                 "INSERT INTO card_actor VALUES(?,?,?,?,?)",
@@ -619,6 +669,10 @@ class SQLiteProjectStore:
                 ],
             )
             connection.execute("UPDATE metadata SET revision=?", (snapshot.revision,))
+            connection.execute(
+                "UPDATE project_economy SET state=? WHERE id=1",
+                (encode_economy(snapshot.currency, snapshot.custom_categories),),
+            )
             connection.execute(
                 "UPDATE project_rules SET ruleset=?,rules_version=?,revision=?,overrides=? "
                 "WHERE id=1",

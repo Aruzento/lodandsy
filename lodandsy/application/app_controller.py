@@ -10,18 +10,24 @@ from lodandsy.application.cards_controller import CardsController
 from lodandsy.application.cards_service import CardsService
 from lodandsy.application.clipboard import clipboard_writer
 from lodandsy.application.dice_controller import DiceController
+from lodandsy.application.economy_service import EconomyService
 from lodandsy.application.entity_queries import EntityQueries
 from lodandsy.application.entity_session import EntitySession
+from lodandsy.application.loot_controller import LootController
 from lodandsy.application.maps_controller import MapsController
 from lodandsy.application.maps_service import MapsService
 from lodandsy.application.media_service import MediaService
 from lodandsy.application.project_actions import ProjectActions
 from lodandsy.application.project_resources import ProjectResources
+from lodandsy.application.shop_controller import ShopController
 from lodandsy.application.tables_controller import TablesController
 from lodandsy.application.tables_service import TablesService
 from lodandsy.domain.actor_state import ActorRef
 from lodandsy.domain.card_collection import CardCollection
+from lodandsy.domain.treasure import CatalogItem
 from lodandsy.ui.card_search_dialog import CardSearchDialog
+from lodandsy.ui.currency_editor import CurrencyEditor
+from lodandsy.ui.icons import icon
 from lodandsy.ui.window_manager import WindowManager
 
 
@@ -49,13 +55,30 @@ class AppController:
         self.actions = ProjectActions(
             self.core, self.cards_service, self.tables_service, self.maps_service
         )
+        self.economy = EconomyService(self.core, self.actions.used_denominations, window)
+        self.economy.changed.connect(self.cards_service.economy_changed.emit)
         self.tables_service.cell_edit_command = self._table_cell_command
         self.tables_service.cell_caption = self.actions.inventory_activity_caption
         self.tables_service.reference_caption_fields = frozenset({"equipment_kind"})
         self.tables = TablesController(
             window, self.window_manager, self.tables_service, self.open_entity
         )
+        self.tables.inventory_owner = self.actions.inventory_owner
+        self.tables.set_wallet = self.actions.set_wallet
+        self.tables.paste_inventory = self._paste_inventory
+        self.economy.changed.connect(self.tables.refresh_economy)
         self.dice = DiceController(self.window_manager)
+        tool_dependencies = (
+            self.window_manager, lambda: self.resources.store, lambda: self.economy.settings,
+            self._tool_catalogue, self._tool_item, lambda key: self.open_entity("card", key),
+        )
+        self.loot = LootController(*tool_dependencies)
+        self.shop = ShopController(*tool_dependencies)
+        self.catalogue_tools = (self.loot, self.shop)
+        for tool in self.catalogue_tools:
+            self.economy.changed.connect(tool.refresh)
+            self.cards_service.card_changed.connect(tool.item_changed)
+            self.core.entities_deleted.connect(tool.items_deleted)
         self.card_views = CardsController(
             window,
             self.window_manager,
@@ -110,6 +133,12 @@ class AppController:
         self.rules_action.setEnabled(False)
         self.rules_action.triggered.connect(self.open_rules)
         window.right_rail.settings_menu.addAction(self.rules_action)
+        self._currency_editor = None
+        self.economy_action = QAction("Экономика проекта…", window)
+        self.economy_action.setIcon(icon("coins"))
+        self.economy_action.setEnabled(False)
+        self.economy_action.triggered.connect(self.open_economy)
+        window.right_rail.settings_menu.addAction(self.economy_action)
         window.right_rail.settings_menu.addSeparator()
         self.maps_service.map_changed.connect(self._placements_changed)
         self.maps_service.map_deleted.connect(self._placements_changed)
@@ -197,6 +226,36 @@ class AppController:
             key, row_id, value, replace_existing=bool(conflicts), expected=guard
         )
 
+    def _paste_inventory(self, key, transfer):
+        store = self.resources.store
+        if store is None:
+            raise ValueError("Сначала откройте проект")
+        guard = self.core.generation, self.core.serial
+        before, candidate, coins = self.actions.plan_inventory_paste(
+            key, transfer, store.project_id
+        )
+        if coins:
+            currency = self.economy.currency
+            caption = ", ".join(currency.price_text(coin) for coin in coins)
+            total = currency.total_text(sum(currency.value(coin) for coin in coins))
+            prompt = (
+                f"В инвентарь «{before.title}» будут добавлены монеты: {caption} ({total}).\n"
+                f"Новых строк предметов: {len(candidate.rows) - len(before.rows)}."
+            )
+            answer = QMessageBox.question(
+                self.window, "Добавить в инвентарь?", prompt,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return None
+            if store is not self.resources.store or guard != (
+                self.core.generation, self.core.serial
+            ):
+                raise ValueError("Проект изменился. Повторите вставку.")
+        self.tables_service.update_table(candidate, expected=before)
+        self.window.show_notice("Набор добавлен в инвентарь")
+
     def ensure_project(self):
         return self.resources.store is not None or (
             self.project_controller is not None and self.project_controller.save_current()
@@ -237,6 +296,36 @@ class AppController:
             return True
         return self._rules_editor.close()
 
+    def open_economy(self):
+        if self.resources.store is None:
+            return None
+        if self._currency_editor is None:
+            project = self.resources.store
+
+            def apply_economy(previous, currency, categories):
+                if project is not self.resources.store:
+                    raise ValueError("Проект изменился. Откройте его настройки заново.")
+                self.economy.apply_settings(previous, currency, categories)
+
+            self._currency_editor = CurrencyEditor(
+                self.economy.settings,
+                self.economy.used_denominations(),
+                apply_economy,
+                self.window,
+            )
+            self._currency_editor.finished.connect(
+                lambda result: setattr(self, "_currency_editor", None)
+            )
+            self._currency_editor.open()
+        else:
+            self._currency_editor.raise_()
+            self._currency_editor.activateWindow()
+        return self._currency_editor
+
+    def close_economy(self):
+        if self._currency_editor is not None:
+            self._currency_editor.reject()
+
     def _placements_changed(self, map_id):
         for key in self.card_views.opened_ids:
             self.card_views.refresh_relations(key)
@@ -259,10 +348,16 @@ class AppController:
         self.card_views.set_project_root(root)
 
     def replace_cards(self, cards):
+        self.close_economy()
+        self.reset_catalogue_tools()
         for key in self.window_manager.window_keys():
             if key != "tool:dice":
                 self.window_manager.close_window(key)
         self.cards_service.replace_cards(cards)
+
+    def reset_catalogue_tools(self):
+        for tool in self.catalogue_tools:
+            tool.reset()
 
     def request_create(self, kind, parent_id=None):
         if kind == "map":
@@ -303,6 +398,7 @@ class AppController:
 
     def shutdown_features(self):
         self.close_rules(force=True)
+        self.close_economy()
         self.maps.shutdown()
         self.media.shutdown()
 
@@ -368,7 +464,29 @@ class AppController:
             return self.tables.open_table(key[6:])
         if key == "tool:dice":
             return self.dice.open()
+        for tool in self.catalogue_tools:
+            if key == tool.key:
+                return tool.open()
         raise ValueError("Неподдерживаемый документ")
+
+    @staticmethod
+    def _catalogue_entry(card):
+        return CatalogItem(
+            card.id, card.title, card.value("item_category"), card.value("cost"),
+            card.value("weight"), card.value("loot_enabled"),
+        )
+
+    def _tool_catalogue(self):
+        return (
+            self._catalogue_entry(card) for card in self.cards.all() if card.card_type == "item"
+        )
+
+    def _tool_item(self, key):
+        try:
+            card = self.cards.get(key)
+        except ValueError:
+            return None
+        return self._catalogue_entry(card) if card.card_type == "item" else None
 
     def copy_card_link(self, entity_id):
         entity = self.core.entities.get(entity_id)

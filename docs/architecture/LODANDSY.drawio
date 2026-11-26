@@ -41,13 +41,13 @@
         <mxCell id="project" value="ProjectController / SaveCoordinator&#10;single snapshot writer / revision ACK&#10;Welcome + safe switching / backup" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#202020;strokeColor=#777777;fontColor=#e5e5e3;fontSize=14;" vertex="1" parent="1">
           <mxGeometry as="geometry" x="30" y="850" width="390" height="110" />
         </mxCell>
-        <mxCell id="sqlite" value="SQLite16 S3 + separate assets&#10;Card7 / Map9(fog+layers+shapes+portals+hide_label) / Table3&#10;UI state4 separate&#10;normalized Actors1 / tokens / default / Rules1" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#202020;strokeColor=#777777;fontColor=#e5e5e3;fontSize=14;" vertex="1" parent="1">
+        <mxCell id="sqlite" value="SQLite17 S3 + separate assets&#10;Card8 / Map9 / Table4 / Economy1&#10;UI state4 separate&#10;normalized Actors1 / tokens / default / Rules1" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#202020;strokeColor=#777777;fontColor=#e5e5e3;fontSize=14;" vertex="1" parent="1">
           <mxGeometry as="geometry" x="490" y="850" width="410" height="110" />
         </mxCell>
         <mxCell id="history" value="ProjectHistory / QSettings&#10;LODANDSY user MRU / last directory&#10;not world / backup content" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#202020;strokeColor=#777777;fontColor=#e5e5e3;fontSize=14;" vertex="1" parent="1">
           <mxGeometry as="geometry" x="950" y="850" width="400" height="110" />
         </mxCell>
-        <mxCell id="audit" value="Actual AST: 109 modules / 276 imports / 0 cycles&#10;Cards owns EquipmentFacts / profile2; Maps owns shapes/portals/measurements and ephemeral portrait session. Map9 reads Map7/8 without rewrite; portal hide_label=false by default. SQLite16 unchanged." style="rounded=1;whiteSpace=wrap;html=0;fillColor=#202020;strokeColor=#777777;fontColor=#e5e5e3;fontSize=14;" vertex="1" parent="1">
+        <mxCell id="audit" value="Actual AST: 121 modules / 327 imports / 0 cycles&#10;Tools T3 adds project currency, inventory wallets and Item catalogue tools. Map9 retains supported Map7/8 payload reads within the current database schema." style="rounded=1;whiteSpace=wrap;html=0;fillColor=#202020;strokeColor=#777777;fontColor=#e5e5e3;fontSize=14;" vertex="1" parent="1">
           <mxGeometry as="geometry" x="180" y="1010" width="1060" height="60" />
         </mxCell>
         <mxCell id="edge0" value="wires" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=0;endArrow=block;fontSize=12;labelBackgroundColor=#ffffff;" edge="1" source="root" target="cards" parent="1">
@@ -319,6 +319,41 @@
         <mxCell id="e5" edge="1" source="e" target="f" parent="1" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;html=0;">
           <mxGeometry as="geometry" relative="1" />
         </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="tools-t3" name="Tools T3 — экономика и инвентарь">
+    <mxGraphModel grid="1" gridSize="10" page="1" pageWidth="1200" pageHeight="800">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="item" value="CardsService / Item Card8&#10;UUID категории, cost с номиналом, weight, loot_enabled" vertex="1" parent="1" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#202020;fontColor=#eeeeee;strokeColor=#888888;">
+          <mxGeometry as="geometry" x="40" y="70" width="280" height="90" />
+        </mxCell>
+        <mxCell id="tools" value="LootController и ShopController&#10;WindowManager / Qt ADS / чтение Item по UUID" vertex="1" parent="1" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#202020;fontColor=#eeeeee;strokeColor=#888888;">
+          <mxGeometry as="geometry" x="450" y="70" width="300" height="90" />
+        </mxCell>
+        <mxCell id="layout" value="Раскладка v4&#10;параметры и последний результат&#10;с UUID мира" vertex="1" parent="1" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#202020;fontColor=#eeeeee;strokeColor=#888888;">
+          <mxGeometry as="geometry" x="875" y="70" width="250" height="90" />
+        </mxCell>
+        <mxCell id="settings" value="EconomyService / Economy1&#10;точные номиналы, категории, защита используемых валют" vertex="1" parent="1" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#202020;fontColor=#eeeeee;strokeColor=#888888;">
+          <mxGeometry as="geometry" x="40" y="265" width="280" height="90" />
+        </mxCell>
+        <mxCell id="insert" value="Clipboard MIME v1 → ProjectActions&#10;проверка UUID и подтверждение монет" vertex="1" parent="1" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#202020;fontColor=#eeeeee;strokeColor=#888888;">
+          <mxGeometry as="geometry" x="450" y="265" width="300" height="90" />
+        </mxCell>
+        <mxCell id="table" value="TablesService / Table4&#10;Item UUID + qty + активность + кошелёк&#10;шаблон → независимый Actor" vertex="1" parent="1" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#202020;fontColor=#eeeeee;strokeColor=#888888;">
+          <mxGeometry as="geometry" x="875" y="265" width="250" height="90" />
+        </mxCell>
+        <mxCell id="writer" value="Одна EntitySession / EntityCollection&#10;SaveCoordinator → SQLite17 + ACK после commit" vertex="1" parent="1" style="rounded=1;whiteSpace=wrap;html=0;fillColor=#202020;fontColor=#eeeeee;strokeColor=#888888;">
+          <mxGeometry as="geometry" x="450" y="470" width="300" height="90" />
+        </mxCell>
+        <mxCell id="e1" edge="1" source="item" target="tools" parent="1" style="endArrow=block;html=0;"><mxGeometry as="geometry" relative="1" /></mxCell>
+        <mxCell id="e2" edge="1" source="tools" target="layout" parent="1" style="endArrow=block;html=0;"><mxGeometry as="geometry" relative="1" /></mxCell>
+        <mxCell id="e3" edge="1" source="tools" target="insert" parent="1" style="endArrow=block;html=0;"><mxGeometry as="geometry" relative="1" /></mxCell>
+        <mxCell id="e4" edge="1" source="insert" target="table" parent="1" style="endArrow=block;html=0;"><mxGeometry as="geometry" relative="1" /></mxCell>
+        <mxCell id="e5" edge="1" source="settings" target="writer" parent="1" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;html=0;"><mxGeometry as="geometry" relative="1" /></mxCell>
+        <mxCell id="e6" edge="1" source="table" target="writer" parent="1" style="edgeStyle=orthogonalEdgeStyle;endArrow=block;html=0;"><mxGeometry as="geometry" relative="1" /></mxCell>
       </root>
     </mxGraphModel>
   </diagram>

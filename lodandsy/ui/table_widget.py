@@ -17,28 +17,39 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from lodandsy.application.clipboard import copy_text
+from lodandsy.application.clipboard import INVENTORY_MIME, copy_text, decode_inventory_transfer
 from lodandsy.domain.table_document import ColumnDefinition
 from lodandsy.ui.conflict_bar import ConflictBar
 from lodandsy.ui.entity_picker import EntityPicker
 from lodandsy.ui.table_headers import TableView
 from lodandsy.ui.table_model import SemanticCellDelegate, TableModel
+from lodandsy.ui.wallet_widget import WalletWidget
 
 
 class TableWidget(QWidget):
     document_changed = Signal(object)
     draft_changed = Signal()
 
-    def __init__(self, document, drafts=None, *, service=None, open_entity=None):
+    def __init__(
+        self, document, drafts=None, *, service=None, open_entity=None, set_wallet=None,
+        paste_inventory=None,
+    ):
         super().__init__()
         self.model = TableModel(document, drafts, self, service=service)
         self.references = service.references if service else None
         self.open_entity = open_entity or (lambda kind, key: None)
+        self.paste_inventory = paste_inventory
         self.model.document_changed.connect(self.document_changed)
         self.model.draft_changed.connect(self.draft_changed)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
+        self.wallet = None
+        if set_wallet is not None:
+            self.wallet = WalletWidget(
+                lambda: service.currency, lambda: self.model.document, set_wallet, self
+            )
+            layout.addWidget(self.wallet)
         self.table = TableView()
         self.table.setModel(self.model)
         self.table.setItemDelegate(SemanticCellDelegate(self.table))
@@ -80,7 +91,7 @@ class TableWidget(QWidget):
         self.update_draft_notice()
         for label, shortcut, callback in [
             ("Копировать ячейки", QKeySequence.StandardKey.Copy, self.copy_selection),
-            ("Вставить TSV", QKeySequence.StandardKey.Paste, self.paste_selection),
+            ("Вставить", QKeySequence.StandardKey.Paste, self.paste_selection),
         ]:
             action = QAction(label, self)
             action.setShortcut(shortcut)
@@ -89,7 +100,20 @@ class TableWidget(QWidget):
             self.table.addAction(action)
 
     def set_document(self, document):
+        wallet_changed = self.model.document.wallet != document.wallet
         self.model.set_document(document)
+        if self.wallet is not None and wallet_changed:
+            self.wallet.refresh()
+
+    def refresh_economy(self):
+        if self.wallet is not None:
+            self.wallet.refresh()
+        last = self.model.rowCount() - 1
+        for index, column in enumerate(self.model.document.columns):
+            if last >= 0 and column.data_type == "projection" and column.field_key == "cost":
+                self.model.dataChanged.emit(
+                    self.model.index(0, index), self.model.index(last, index)
+                )
 
     def refresh_references(self, cells):
         self.model.refresh_cells(cells)
@@ -154,6 +178,9 @@ class TableWidget(QWidget):
 
     def eventFilter(self, obj, event):
         if event.type() == QEvent.Type.KeyPress:
+            if event.matches(QKeySequence.StandardKey.Paste):
+                self.paste_selection()
+                return True
             index = self.table.currentIndex()
             if index.isValid() and self.model.column(index).data_type in {
                 "entity_ref",
@@ -500,8 +527,14 @@ class TableWidget(QWidget):
         copy_text(stream.getvalue().rstrip("\n"))
 
     def paste_selection(self):
+        clipboard = QApplication.clipboard()
+        data = clipboard.mimeData()
+        if self.paste_inventory is not None and data is not None and data.hasFormat(INVENTORY_MIME):
+            source = data.data(INVENTORY_MIME)
+            self._apply(lambda: self.paste_inventory(decode_inventory_transfer(bytes(source))))
+            return
         self._apply(
-            lambda: self.model.paste(self.table.currentIndex(), QApplication.clipboard().text())
+            lambda: self.model.paste(self.table.currentIndex(), clipboard.text())
         )
 
     def _apply(self, operation):

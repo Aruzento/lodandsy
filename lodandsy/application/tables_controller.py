@@ -14,6 +14,9 @@ class TablesController(QObject):
         super().__init__(window)
         self.window, self.windows, self.service = window, windows, service
         self.open_entity = open_entity
+        self.inventory_owner = lambda key: None
+        self.set_wallet = None
+        self.paste_inventory = None
         self._views = {}
         self._ui = {}
         service.table_changed.connect(self._refresh)
@@ -40,17 +43,37 @@ class TablesController(QObject):
         return window
 
     def table_view(self, key):
+        generation = self.service.core.generation
+
+        def wallet_edit(wallet, *, expected):
+            if self.service.core.generation != generation:
+                raise ValueError("Проект изменился. Откройте инвентарь заново.")
+            return self.set_wallet(key, wallet, expected=expected)
+
+        def paste(transfer):
+            if self.service.core.generation != generation:
+                raise ValueError("Проект изменился. Откройте инвентарь заново.")
+            return self.paste_inventory(key, transfer)
+
         widget = TableWidget(
             self.service.get_table(key),
             self.service.drafts(key),
             service=self.service,
             open_entity=self.open_entity,
+            set_wallet=wallet_edit if self.inventory_owner(key) is not None else None,
+            paste_inventory=paste if self.paste_inventory is not None else None,
         )
         self.service.track_references(key)
         widget.setProperty("table_id", key)
         self._views.setdefault(key, WeakSet()).add(widget)
         widget.draft_changed.connect(lambda: self.service.notify_drafts(key))
         return widget
+
+    def refresh_economy(self):
+        for views in tuple(self._views.values()):
+            for widget in tuple(views):
+                if isValid(widget):
+                    widget.refresh_economy()
 
     def _projections_changed(self, key, cells):
         for widget in tuple(self._views.get(key, ())):

@@ -80,7 +80,7 @@ Qt дизайн нейтральный graphite #191919/#202020. Private мак�
 item UUID, positive integer count, live description/cost без stored derived cells.
 Object Cards library, original alpha/aspect long-edge128; front layer сверху.
 Full snapshot writer/synchronous backup4GiB и libvips tiles сохраняются.
-Схема по факту: SQLite16/Card7/Map9/Actor1/Rules1(profile2)/Table3, UI state4; legacy/migration adapters нет.
+Схема по факту: SQLite17/Card8/Map9/Actor1/Rules1(profile2)/Table4/Economy1, UI state4.
 Targeted batches после блоков, общий gate/build после стабилизации; report/draw.io/checklist.
 Git-действия только в конце после проверки по последним указаниям владельца.
 
@@ -164,3 +164,12 @@ Map7/8 читаются без записи с hide_label=false. SQLite16/Card7/
 Подпись хранится при скрытии; навигация/иконка и Map Undo сохранены. Новая поставка:
 LODANDSY-Map-M5.5-Final-2026-11-26.zip; отчёт docs/validation/2026-11-26-map-m55-final.md.
 Обе задачи остаются In Progress до ручной приёмки; commit/push/merge не разрешены.
+
+Tools T3 / ARU-92–96, 26.11.2026. Владелец подтвердил новую версию тестовых миров
+без переноса. ADR-039: SQLite17/Card8/Table4/Economy1, Map9/Actor1/Rules1/UIstate4.
+EconomyService использует общие ProjectSettings и существующий SaveCoordinator.
+Cost хранит UUID номинала и целое количество. Кошелёк принадлежит Table инвентаря,
+наследуется из шаблона и проверяется на уровне канона. Clipboard UUID scoped,
+ProjectActions выполняет атомарный paste. Loot/Shop читают текущий Item catalogue,
+локальный результат хранится в раскладке с UUID проекта. Все ARU-92–96 остаются
+In Progress до ручной приёмки. Отчёт docs/validation/2026-11-26-tools-t3.md.

@@ -1,5 +1,7 @@
 """Cards mutations/queries/drafts. Core owns hierarchy and project selection."""
 
+from dataclasses import replace
+
 from PySide6.QtCore import QObject, Signal
 
 from lodandsy.application.entity_session import EntitySession
@@ -14,7 +16,9 @@ from lodandsy.domain.card_schema import (
     field_definition,
     permitted_fields,
 )
+from lodandsy.domain.currency import CoinAmount
 from lodandsy.domain.entity_reference import ReferenceInfo
+from lodandsy.domain.project_settings import ProjectSettings
 from lodandsy.domain.rules_5e14 import ProjectRules, calculate
 
 
@@ -27,6 +31,7 @@ class CardsService(QObject):
     cards_replaced = Signal()
     actor_changed = Signal(str, str, object)
     rules_changed = Signal()
+    economy_changed = Signal()
     base_effective_changed = Signal(str)
 
     def __init__(self, cards=None, parent=None, *, core=None):
@@ -112,8 +117,12 @@ class CardsService(QObject):
         return self.cards.get(key)
 
     @property
+    def settings(self):
+        return self.entities.settings or ProjectSettings()
+
+    @property
     def rules(self):
-        return self.entities.settings or ProjectRules()
+        return self.settings.rules or ProjectRules()
 
     def effective(self, reference, *, rules=None):
         card_id = reference.card_id if isinstance(reference, ActorRef) else reference
@@ -221,6 +230,8 @@ class CardsService(QObject):
 
         if key[1] == "modifiers":
             return json.dumps([asdict(modifier) for modifier in value], ensure_ascii=False)
+        if isinstance(value, CoinAmount):
+            return value.to_text()
         return value_text(value)
 
     def participant_info(self, card_id, actor_id):
@@ -268,7 +279,7 @@ class CardsService(QObject):
         if serial != self.core.serial or candidate.revision != self.rules.revision + 1:
             raise ValueError("Preview устарел; повторите проверку")
         with self.core.transaction():
-            self.entities.put_settings(candidate)
+            self.entities.put_settings(replace(self.settings, rules=candidate))
             self.core.after_commit(self.rules_changed.emit)
             self.core.mark_changed()
         return clamps

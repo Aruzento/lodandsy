@@ -11,6 +11,7 @@ from lodandsy.application.app_controller import AppController
 from lodandsy.application.project_controller import ProjectController
 from lodandsy.application.rich_html import sanitize_html
 from lodandsy.domain.card import Portrait
+from lodandsy.domain.currency import CoinAmount
 from lodandsy.ui.app_shell import AppShell
 from lodandsy.ui.theme import apply_theme
 
@@ -44,7 +45,10 @@ def main():
                 "speed": 30,
             },
         )
-        owner.cards_service.update_card_fields(item.id, {"summary": "Клинок из стали", "cost": 12})
+        owner.cards_service.update_card_fields(
+            item.id,
+            {"summary": "Клинок из стали", "cost": CoinAmount(owner.economy.currency.base_id, 12)},
+        )
         html = sanitize_html(
             "<h1>Легенда северных земель</h1><p>Путешествие начинается "
             "в городе у горных перевалов. Здесь можно готовить заметки, "

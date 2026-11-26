@@ -36,7 +36,7 @@ def test_fields_roundtrip_unset_false_zero_refs_and_type_change():
     changed = card
     assert changed.sections == card.sections and changed.values == card.values
     version, data = encode_card(changed)
-    assert version == 7 and decode_card(changed.title, card.id, None, version, data) == changed
+    assert version == 8 and decode_card(changed.title, card.id, None, version, data) == changed
 
 
 @pytest.mark.parametrize(

@@ -111,7 +111,7 @@ class CardPayload:
     values: tuple = ()
     actors: tuple = ()
     default_actor_id: str | None = None
-    version: int = field(default=7, init=False)
+    version: int = field(default=8, init=False)
 
     def validate_replacement(self, previous):
         if self.card_type != previous.card_type:

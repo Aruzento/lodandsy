@@ -151,3 +151,18 @@ DEX8 breastplate13/chain16. Попытка второго armor/shield — repla
 токенов, порталы/retarget того же fullscreen Player и original asset/синхронный close.
 Map7 читается без записи; Map8 сохраняет новые коллекции, SQLite16/Card7 неизменны.
 Проверка именно нового ZIP на двух мониторах и clean Windows без Python отдельно.
+
+## Приёмка Tools T3 / ARU-92–96
+
+Кандидат `LODANDSY-Tools-T3-2026-11-26.zip`. Использовать новый тестовый мир
+SQLite17. Проверки, снимки и ручной чек-лист находятся в
+[отчёте T3](../docs/validation/2026-11-26-tools-t3.md).
+
+```powershell
+python -m build_support.windows_smoke --self-test --report .prototype-deps/tools-t3-source-smoke.json
+powershell -File build_support/build_windows.ps1 -Python .venv/Scripts/python.exe -SkipPackage
+python -m build_support.package_windows --archive LODANDSY-Tools-T3-2026-11-26.zip
+```
+
+`LODANDSY.exe --self-test --report <путь>` проверяет инструменты также в собранном
+EXE. Для снимков запущенной программы добавьте `--screenshots <новая папка>`.

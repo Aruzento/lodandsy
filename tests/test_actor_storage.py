@@ -11,6 +11,7 @@ from lodandsy.application.card_payload_codec import (
     encode_card_aggregate,
 )
 from lodandsy.application.sqlite_project_store import ProjectError, SQLiteProjectStore
+from lodandsy.domain.currency import CoinAmount
 from lodandsy.domain.modifiers import Modifier
 
 pytest_plugins = ["tests.project_fixture"]
@@ -41,7 +42,7 @@ def test_aggregate_codec_and_normalized_backup_roundtrip(project, tmp_path):
         item.id,
         {
             "modifiers": (Modifier("ac", operand=2),),
-            "cost": 0,
+            "cost": CoinAmount(app.economy.currency.base_id, 0),
         },
     )
     preview = app.cards_service.preview_rules((("initiative", "dexterity_mod + 2"),))

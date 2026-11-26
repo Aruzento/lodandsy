@@ -19,6 +19,7 @@ class CardEditorBinding:
 
         self._disposed = False
         self._field_owners = {}
+        self.editor.item_page.settings = lambda: self.session.settings
         self.editor.field_active = lambda field: self.session.field_edits.has(
             self._field_owners.get(field)
         )
@@ -37,6 +38,7 @@ class CardEditorBinding:
         self.editor.discard_drafts_requested.connect(self._discard_drafts)
         self.session.field_draft_changed.connect(self._on_card_changed)
         self.session.cards_deleted.connect(self._on_cards_deleted)
+        self.session.economy_changed.connect(self._economy_changed)
 
         self.refresh()
 
@@ -118,6 +120,11 @@ class CardEditorBinding:
         self.editor.portrait_panel.changed.disconnect(self._on_portrait_changed)
         self.editor.discard_drafts_requested.disconnect(self._discard_drafts)
         self.session.field_draft_changed.disconnect(self._on_card_changed)
+        self.session.economy_changed.disconnect(self._economy_changed)
+
+    def _economy_changed(self):
+        if self.session.get_card(self.card_id).card_type == "item":
+            self.refresh(frozenset({"cost", "item_category"}))
 
     def _on_cards_deleted(self, card_ids: tuple[str, ...]) -> None:
         if self.card_id in card_ids:

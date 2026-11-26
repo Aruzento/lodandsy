@@ -16,6 +16,7 @@ from lodandsy.application.tables_controller import TablesController
 from lodandsy.application.tables_service import TablesService
 from lodandsy.domain.card import Card
 from lodandsy.domain.card_collection import CardCollection
+from lodandsy.domain.currency import CoinAmount
 from lodandsy.domain.table_document import RowRecord, inventory_columns
 from lodandsy.ui.entity_picker import EntityPicker
 
@@ -84,10 +85,13 @@ def main():
     for i in range(30):
         addressed.clear()
         start = time.perf_counter()
-        cards.update_card_fields(target.id, {"cost": i, "summary": f"Description {i}"})
+        cards.update_card_fields(
+            target.id,
+            {"cost": CoinAmount(service.currency.base_id, i), "summary": f"Description {i}"},
+        )
         update_samples.append(milliseconds(start))
         assert len(addressed) == 1500 and all(row % 2 == 0 for row, col in addressed)
-        assert second.model.data(second.model.index(0, 3)) == str(i)
+        assert second.model.data(second.model.index(0, 3)) == f"{i} зм"
     assert not resets and len(service.get_table(table.id).rows[0].cells) == 2
     result = dict(
         platform=platform.platform(),

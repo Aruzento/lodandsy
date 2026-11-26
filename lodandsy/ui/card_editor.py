@@ -209,6 +209,11 @@ class CardEditorWidget(QWidget):
         ):
             source.connect(target)
         self.item_page.properties.edited.connect(self._item_choices)
+        self.item_page.price_started.connect(lambda: self.field_edit_started.emit("cost"))
+        self.item_page.price_committed.connect(
+            lambda raw: self.field_commit_requested.emit("cost", raw)
+        )
+        self.item_page.price_cancelled.connect(lambda: self.field_cancel_requested.emit("cost"))
         self.item_page.modifiers.raw_changed.connect(
             lambda raw: self.field_buffer_changed.emit("modifiers", raw)
         )
