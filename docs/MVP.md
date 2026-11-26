@@ -149,7 +149,7 @@ shared tileLRU64MiB; rebuild/cancel/checksum/version/atomic publish сохран
 
 ## Хранение, проверка и поставка
 
-Один канон EntityCollection и SQLite16/Card7/Map8/Actor1/Rules1(profile2)/Table3 через sqlite3, assets отдельно
+Один канон EntityCollection и SQLite16/Card7/Map9/Actor1/Rules1(profile2)/Table3 через sqlite3, assets отдельно
 с относительными путями; UI state4 отдельно. FK на каждом connection, составные
 операции транзакционны. Autosave/Ctrl+S — SaveCoordinator с упорядоченными ревизиями
 и ACK после commit; pending/dirty/saving/error/draft видимы. Safe close/switch,
@@ -241,3 +241,24 @@ ARU-87–90 / ADR-036: расстояние при drag (сетка5e14 и ге�
 стрелки публикуются только при полностью открытом пути. Нет боя/LOS/Actor transfer.
 SQLite16/Card7, Map8 с безопасным чтением Map7 без записи на open. Критерии D/S/P/V/G,
 проверки и физические ограничения: docs/validation/2026-11-25-map-m5.md.
+
+
+Maps M5.5 / ARU-91 (25.11.2026): ADR-037, единый MapToolState на игровой MapView,
+native vertical QAction toolbar / last-shape menu / context / overflow. V/H/B/E/M
+только на canvas, Space временно включает руку, Escape отменяет локальный жест.
+Успешное создание shape/portal возвращает выбор; brush/eraser сохраняют режим.
+Формат SQLite16/Card7/Map8 и канон/Undo/презентация M5 сохранены. M5 e40a25d принят
+владельцем82/82, включая чистую Windows. Новая панель ждёт отдельной ручной приёмки;
+ARU-91 не закрывать. Отчёт: docs/validation/2026-11-25-map-m55.md. Commit/push/merge
+этим заданием не разрешены. Кандидат: LODANDSY-Map-M5.5-2026-11-25.zip.
+
+
+Дополнение 26.11.2026 — финальная полировка M5.5 / ARU-91, ARU-89:
+иконки18px/stroke1.15 при кнопках36px, выбор/вершины одной группой, измерения только
+в настройках сетки; новый map получает5ft/cell, старые калибровки не меняются.
+Редактор карты — справа с текстом, native flyout gap10 logical px с screen bounds,
+тонкие разделители групп. ADR-038: Map9 добавляет strict boolean portal.hide_label;
+Map7/8 читаются без записи с hide_label=false. SQLite16/Card7/UIstate4 прежние.
+Подпись хранится при скрытии; навигация/иконка и Map Undo сохранены. Новая поставка:
+LODANDSY-Map-M5.5-Final-2026-11-26.zip; отчёт docs/validation/2026-11-26-map-m55-final.md.
+Обе задачи остаются In Progress до ручной приёмки; commit/push/merge не разрешены.

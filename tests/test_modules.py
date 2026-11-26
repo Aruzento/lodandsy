@@ -8,6 +8,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication, QInputDialog, QLineEdit
 
+from lodandsy.application.clipboard import clipboard_writer
 from lodandsy.application.map_pyramid import ensure_pyramid
 from lodandsy.application.rich_html import html_text
 from lodandsy.application.sqlite_project_store import (
@@ -85,15 +86,19 @@ def test_real_map_table_card_workflow_and_project_roundtrip(project, tmp_path, q
     widget = table_window.widget()
     widget.model.apply(replace(table, rows=record_rows(table, ("Goblin", "Dragon"))))
     widget.table.selectRow(1)
-    widget.copy_selection()
+    with qtbot.waitSignal(clipboard_writer().message, timeout=5000) as copied:
+        widget.copy_selection()
+    assert copied.args == ["Скопировано"]
     assert QApplication.clipboard().text() == "Dragon"
     dice = app.dice.open().widget()
     dice.counts[20].setValue(0)
     dice.counts[4].setValue(1)
     dice.modifier.setValue(3)
     dice.roll.click()
-    dice.copy.click()
-    qtbot.waitUntil(lambda: QApplication.clipboard().text() == dice.result.toPlainText())
+    with qtbot.waitSignal(clipboard_writer().message, timeout=5000) as copied:
+        dice.copy.click()
+    assert copied.args == ["Скопировано"]
+    assert QApplication.clipboard().text() == dice.result.toPlainText()
     assert len(app.window_manager.window_keys()) == 5
     assert project.save_current()
     revision = project.store.load().revision
@@ -113,7 +118,8 @@ def test_real_map_table_card_workflow_and_project_roundtrip(project, tmp_path, q
     assert tuple(app.maps_service.maps.values()) == before.maps
     assert tuple(app.tables_service.tables.values()) == before.tables
     assert html_text(app.cards.get(second.id).content).strip() == "Second content"
-    qtbot.waitUntil(lambda: "Колесо" in app.maps.open_map(document.id).widget().message.text())
+    qtbot.waitUntil(lambda: app.maps.open_map(document.id).widget().view._background is not None)
+    assert app.maps.open_map(document.id).widget().tools.actions["token"].isEnabled()
     assert app.maps.open_map(document.id).widget().view.map_width == 400
     assert not project.saver.dirty
 
@@ -134,14 +140,16 @@ def test_live_table_editor_is_in_ctrl_s_snapshot(project, tmp_path, qtbot):
     assert text_values(project.store.load().tables[0]) == ("Live text",)
 
 
-def test_table_display_and_clipboard_preserve_literal_markup(project):
+def test_table_display_and_clipboard_preserve_literal_markup(project, qtbot):
     app, project = project
     table = app.tables_service.create_table("Literal text")
     app.tables_service.edit_table(table.id, rows=record_rows(table, ("<b>Text</b>",)))
     widget = app.tables.open_table(table.id).widget()
     assert widget.model.data(widget.model.index(0, 0)) == "<b>Text</b>"
     widget.table.selectRow(0)
-    widget.copy_selection()
+    with qtbot.waitSignal(clipboard_writer().message, timeout=5000) as copied:
+        widget.copy_selection()
+    assert copied.args == ["Скопировано"]
     assert QApplication.clipboard().text() == "<b>Text</b>"
 
 

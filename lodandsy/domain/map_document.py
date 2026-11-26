@@ -289,6 +289,7 @@ class MapPortal:
     y: float
     label: str = ""
     id: str = field(default_factory=lambda: str(uuid4()))
+    hide_label: bool = False
 
     def __post_init__(self):
         validate_id(self.id)
@@ -297,6 +298,8 @@ class MapPortal:
             _number(value, 0, 1e9, "координата портала")
         if not isinstance(self.label, str) or len(self.label) > 200:
             raise ValueError("Некорректная подпись портала")
+        if type(self.hide_label) is not bool:
+            raise ValueError("Некорректная видимость подписи портала")
 
 
 def validate_vectors(shapes, portals):
@@ -354,7 +357,7 @@ class MapPayload:
     fog: FogState = field(default_factory=FogState)
     shapes: tuple = ()
     portals: tuple = ()
-    version: int = field(default=8, init=False)
+    version: int = field(default=9, init=False)
 
     def __post_init__(self):
         validate_id(self.asset_id)

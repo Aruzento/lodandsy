@@ -219,7 +219,7 @@ def test_native_gesture_commit_escape_panel_and_selection(project, tmp_path, qtb
     app.window.show()
     document, viewer = open_map(app, project, tmp_path, qtbot)
     tools = viewer.fog_tools
-    tools.show()
+    tools.set_mode("hide")
     view = viewer.view
     point = view.mapFromScene(QPointF(250, 200))
     before = project.saver.revision
@@ -231,7 +231,7 @@ def test_native_gesture_commit_escape_panel_and_selection(project, tmp_path, qtb
     qtbot.mouseClick(view.viewport(), Qt.MouseButton.LeftButton, pos=point)
     state = app.maps_service.get_map(document.id).fog
     assert len(state.regions) == 1 and project.saver.revision == before + 1
-    tools.hide()
+    viewer.tool_state.activate("select")
     assert app.maps_service.get_map(document.id).fog == state
     tools.show()
     tools.set_mode("select")
@@ -269,5 +269,5 @@ def test_polygon_screen_snap_nodes_commit_undo(project, tmp_path, qtbot, zoom):
     assert not app.maps_service.get_map(document.id).fog.regions
     app.maps_service.undo_stack(document.id).redo()
     assert app.maps_service.get_map(document.id).fog.regions
-    tools.hide()
+    viewer.tool_state.activate("select")
     assert view.viewport().cursor().shape() != Qt.CursorShape.CrossCursor

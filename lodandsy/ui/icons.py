@@ -3,6 +3,13 @@ from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
 PATHS = {
+    "ruler": '<path d="m2 11 9-9 3 3-9 9zM5 8l2 2M8 5l2 2"/>',
+    "vertices": '<path d="m2 13 5-10 7 8z"/><rect x="1" y="12" width="2" height="2"/>'
+    '<rect x="6" y="2" width="2" height="2"/><rect x="13" y="10" width="2" height="2"/>',
+    "brush": '<path d="m7 9 6-7 2 2-7 6M7 9c-3-2-5 1-5 5 4 0 7-2 5-5z"/>',
+    "eraser": '<path d="m2 9 7-7 5 5-7 7H5zM6 5l5 5M7 14h8"/>',
+    "fog_polygon": '<path d="m2 5 6-3 6 5-3 7H4zM2 5l9 9"/>',
+    "fog_select": '<path d="M5 2H2v3M11 2h3v3M2 11v3h3M14 11v3h-3M6 6l6 3-3 1-1 3z"/>',
     "shape_circle": '<circle cx="8" cy="8" r="6"/>',
     "shape_triangle": '<path d="m8 2 6 12H2z"/>',
     "shape_rectangle": '<rect x="2" y="4" width="12" height="8"/>',
@@ -54,7 +61,7 @@ PATHS = {
 }
 
 
-def icon(name, size=16):
+def icon(name, size=16, *, stroke_width=1.5):
     result = QIcon()
     for mode, color in [
         (QIcon.Mode.Normal, "#e5e5e3"),
@@ -63,7 +70,7 @@ def icon(name, size=16):
     ]:
         svg = (
             f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" '
-            f'fill="none" stroke="{color}" stroke-width="1.5" stroke-linecap="round" '
+            f'fill="none" stroke="{color}" stroke-width="{stroke_width}" stroke-linecap="round" '
             f'stroke-linejoin="round">{PATHS[name]}</svg>'
         )
         renderer = QSvgRenderer(QByteArray(svg.encode()))

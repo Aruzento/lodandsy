@@ -414,7 +414,7 @@ class SQLiteProjectStore:
                 "m.grid,m.layers,m.objects,m.layers_initialized,m.fog "
                 "FROM map_document m JOIN entity e ON e.id=m.id ORDER BY e.position,e.id"
             ):
-                if version not in (7, 8):
+                if version not in (7, 8, 9):
                     raise ValueError("Unsupported Map version")
                 vector_data = json.loads(objects)
                 if version == 7:
@@ -546,7 +546,7 @@ class SQLiteProjectStore:
                     (
                         m.id,
                         m.asset_id,
-                        8,
+                        9,
                         json.dumps(asdict(m.grid)),
                         json.dumps([asdict(layer) for layer in m.layers], ensure_ascii=False),
                         json.dumps(

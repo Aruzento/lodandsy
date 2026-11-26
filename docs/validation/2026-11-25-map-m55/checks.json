@@ -1,0 +1,63 @@
+{
+  "baseline": "e40a25da2daf35f63e9e69454101a68659ffee6d",
+  "native": {
+    "tests": 554,
+    "passed": 553,
+    "skipped": 1,
+    "failures": 0,
+    "errors": 0,
+    "one_process": true,
+    "collection_exactly_covered_once": true,
+    "skip_details": [
+      {
+        "name": "test_symlink_image_cannot_escape_assets",
+        "reason": "Windows account cannot create symlinks"
+      }
+    ]
+  },
+  "offscreen": {
+    "tests": 554,
+    "passed": 552,
+    "skipped": 2,
+    "failures": 0,
+    "errors": 0,
+    "one_process": true,
+    "collection_exactly_covered_once": true,
+    "skip_details": [
+      {
+        "name": "test_symlink_image_cannot_escape_assets",
+        "reason": "Windows account cannot create symlinks"
+      },
+      {
+        "name": "test_closing_player_keeps_next_document_native_editor_alive",
+        "reason": "Native Windows activation is exercised by the Windows QPA CI gate"
+      }
+    ]
+  },
+  "targeted_maps": 84,
+  "targeted_clipboard_and_ui": 39,
+  "architecture": {
+    "modules": 109,
+    "edges": 276,
+    "cycles": []
+  },
+  "ruff_passed": true,
+  "pip_check_passed": true,
+  "diff_check_passed": true,
+  "clipboard_runtime_unchanged": true,
+  "clipboard_checks_wait_for_success_signal_and_verify_exact_payload": true,
+  "smokes": {
+    "source": {
+      "passed": true,
+      "large_map": "21600x10800 (233MP)"
+    },
+    "frozen": {
+      "passed": true,
+      "large_map": "21600x10800 (233MP)"
+    },
+    "portable": {
+      "passed": true,
+      "large_map": "21600x10800 (233MP)"
+    }
+  }
+}

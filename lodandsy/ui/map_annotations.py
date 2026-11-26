@@ -103,7 +103,11 @@ class TokenItem(QGraphicsItem):
         self.setZValue(10000 + token.z)
         self.setFlag(
             QGraphicsItem.GraphicsItemFlag.ItemIsMovable,
-            self.view._background is not None and self.view.role == "viewer",
+            self.view._background is not None and self.view.token_interaction_enabled,
+        )
+        self.setFlag(
+            QGraphicsItem.GraphicsItemFlag.ItemIsSelectable,
+            self.view.role != "player",
         )
         self.update()
 

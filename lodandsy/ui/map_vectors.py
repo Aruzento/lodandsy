@@ -7,21 +7,19 @@ from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap, QTransform
 from PySide6.QtWidgets import (
     QColorDialog,
-    QComboBox,
     QDoubleSpinBox,
     QFormLayout,
     QLabel,
     QLineEdit,
     QMenu,
     QPushButton,
-    QToolBar,
     QVBoxLayout,
     QWidget,
 )
+from shiboken6 import isValid
 
 from lodandsy.domain.map_document import MapShape
 from lodandsy.domain.map_measurements import distance
-from lodandsy.ui.icons import icon
 
 
 def mode_is_portal(gesture):
@@ -82,7 +80,7 @@ def paint_vectors(view, painter):
     painter.save()
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
     tools = getattr(view, "vector_tools", None) if view.role != "player" else None
-    if tools and not tools.isVisible():
+    if tools and not tools.enabled:
         tools = None
     shapes = view.vector_shapes
     if tools and tools.preview:
@@ -160,10 +158,11 @@ def paint_vectors(view, painter):
             painter.drawText(
                 QRectF(center.x() - 8, center.y() - 10, 16, 20), Qt.AlignmentFlag.AlignCenter, "↗"
             )
-            painter.drawText(
-                center + QPointF(17, 4),
-                getattr(view, "portal_labels", {}).get(portal.id, portal.label or "Портал"),
-            )
+            if not portal.hide_label:
+                painter.drawText(
+                    center + QPointF(17, 4),
+                    getattr(view, "portal_labels", {}).get(portal.id, portal.label or "Портал"),
+                )
             painter.restore()
     if tools:
         tools.paint_handles(painter)
@@ -182,41 +181,13 @@ class VectorTools(QWidget):
         super().__init__(parent)
         self.view = view
         view.vector_tools = self
-        self.mode = "select"
         self.points = []
         self.selected = None
         self.preview = None
         self.gesture = None
+        self.preview_cursor = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        bar = QToolBar()
-        layout.addWidget(bar)
-        self.choice = QComboBox()
-        for name, key in (
-            ("Выбор фигур", "select"),
-            ("Круг", "circle"),
-            ("Треугольник", "triangle"),
-            ("Прямоугольник", "rectangle"),
-            ("Четырёхугольник", "quadrilateral"),
-            ("Конус", "cone"),
-            ("Многоугольник", "polygon"),
-            ("Портал", "portal"),
-            ("Вершины", "vertices"),
-        ):
-            self.choice.addItem(
-                icon(
-                    "portal"
-                    if key == "portal"
-                    else "shape_" + key
-                    if key
-                    in {"circle", "triangle", "rectangle", "quadrilateral", "cone", "polygon"}
-                    else "vector"
-                ),
-                name,
-                key,
-            )
-        self.choice.currentIndexChanged.connect(self.change_mode)
-        bar.addWidget(self.choice)
         self.notice = QLabel("Фигуры видны игрокам поверх тумана. Escape — отмена")
         self.notice.setWordWrap(True)
         layout.addWidget(self.notice)
@@ -249,6 +220,8 @@ class VectorTools(QWidget):
         view.viewport().installEventFilter(self)
         view.installEventFilter(self)
         view.viewport().setMouseTracking(True)
+        view.tool_state.vectors = self
+        view.tool_state.prioritize()
 
     def choose_color(self):
         value = QColorDialog.getColor(QColor(self.color.text()), self.inspector, "Цвет фигуры")
@@ -258,25 +231,20 @@ class VectorTools(QWidget):
             pixmap.fill(value)
             self.color.setIcon(QIcon(pixmap))
 
-    def showEvent(self, event):
-        super().showEvent(event)
-        self.change_mode()
+    @property
+    def mode(self):
+        return self.view.tool_state.vector_mode
 
-    def hideEvent(self, event):
-        self.cancel()
-        self.view.viewport().unsetCursor()
-        super().hideEvent(event)
+    @property
+    def enabled(self):
+        return self.view.tool_state.vectors_enabled
 
-    def change_mode(self):
-        self.cancel()
-        self.mode = self.choice.currentData()
-        self.view.viewport().setCursor(
-            Qt.CursorShape.ArrowCursor
-            if self.mode in {"select", "vertices"}
-            else Qt.CursorShape.CrossCursor
-        )
+    def set_mode(self, mode):
+        self.view.tool_state.activate(mode)
 
     def cancel(self):
+        if getattr(self, "view", None) is None or not isValid(self.view):
+            return
         self.points.clear()
         self.preview = None
         self.gesture = None
@@ -367,8 +335,8 @@ class VectorTools(QWidget):
             path = QPainterPath(QPointF(*self.points[0]))
             for p in self.points[1:]:
                 path.lineTo(QPointF(*p))
-            if hasattr(self, "cursor"):
-                cursor = self.cursor
+            if self.preview_cursor is not None:
+                cursor = self.preview_cursor
                 snapped = len(self.points) >= 3 and self.near(cursor, QPointF(*self.points[0]))
                 path.lineTo(QPointF(*self.points[0]) if snapped else cursor)
             painter.setPen(QPen(QColor("#eeeeee"), 0))
@@ -381,7 +349,10 @@ class VectorTools(QWidget):
                 painter.setBrush(
                     QColor(
                         "#73d6b2"
-                        if i == 0 and len(self.points) >= 3 and self.near(self.cursor, QPointF(*p))
+                        if i == 0
+                        and len(self.points) >= 3
+                        and self.preview_cursor is not None
+                        and self.near(self.preview_cursor, QPointF(*p))
                         else "#303030"
                     )
                 )
@@ -389,7 +360,9 @@ class VectorTools(QWidget):
                 painter.restore()
 
     def eventFilter(self, watched, event):
-        if self.view.role != "viewer" or not self.isVisible():
+        if getattr(self, "view", None) is None or not isValid(self.view):
+            return False
+        if self.view.role != "viewer" or not self.enabled:
             return False
         kind = event.type()
         if kind == QEvent.Type.KeyPress:
@@ -412,7 +385,7 @@ class VectorTools(QWidget):
         }:
             return False
         point = self.view.mapToScene(event.position().toPoint())
-        self.cursor = point
+        self.preview_cursor = point
         if kind == QEvent.Type.MouseMove:
             if self.gesture:
                 self.update_gesture(point, event.modifiers())

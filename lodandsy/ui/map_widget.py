@@ -1,14 +1,14 @@
 import math
 
 from PySide6.QtCore import QEvent, QPointF, QRectF, QSettings, Qt, Signal
-from PySide6.QtGui import QAction, QColor, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QGraphicsItem,
     QGraphicsScene,
     QGraphicsView,
+    QHBoxLayout,
     QLabel,
     QMenu,
-    QToolBar,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -87,6 +87,7 @@ class MapView(QGraphicsView):
     token_selected = Signal(str)
     token_add_requested = Signal(float, float)
     tool_changed = Signal(str)
+    model_changed = Signal()
 
     def __init__(self, role="viewer"):
         super().__init__()
@@ -134,6 +135,32 @@ class MapView(QGraphicsView):
             self.setDragMode(QGraphicsView.DragMode.NoDrag)
             self.setInteractive(False)
             self.setFrameShape(QGraphicsView.Shape.NoFrame)
+        if role == "viewer":
+            from lodandsy.ui.map_tools import MapToolState
+
+            self.tool_state = MapToolState(self)
+            self.tool_state.activate("select")
+
+    @property
+    def tool(self):
+        return self.tool_state.active if hasattr(self, "tool_state") else self._editor_tool
+
+    @tool.setter
+    def tool(self, value):
+        self._editor_tool = value
+
+    @property
+    def token_interaction_enabled(self):
+        return self.role == "viewer" and self.tool_state.active == "select"
+
+    def cancel_token_drag(self):
+        self.measurement_changed.emit(None)
+        for item in self._tokens:
+            if getattr(item, "_dragging", False):
+                item._cancelled = True
+                item._dragging = False
+                item.setPos(item._drag_origin)
+                self.transient_changed.emit("token", item.token.id, item.x(), item.y())
 
     def paintEvent(self, event):
         if self.role == "player" and not self._display_ready:
@@ -356,7 +383,7 @@ class MapView(QGraphicsView):
                 or item.presentation != presentation
                 or item.cell_size != document.grid.cell_size
                 or bool(item.flags() & QGraphicsItem.GraphicsItemFlag.ItemIsMovable)
-                != (self._background is not None and self.role == "viewer")
+                != (self._background is not None and self.token_interaction_enabled)
             ):
                 item.set_value(token, presentation, root, path, provider)
             items.append(item)
@@ -367,7 +394,7 @@ class MapView(QGraphicsView):
             item.setVisible(item.token.layer_id is None or layers[item.token.layer_id].visible)
             item.setAcceptedMouseButtons(
                 Qt.MouseButton.NoButton
-                if self.role != "viewer"
+                if not self.token_interaction_enabled
                 else Qt.MouseButton.LeftButton | Qt.MouseButton.RightButton
             )
         ids = {o.id for o in document.objects}
@@ -385,6 +412,7 @@ class MapView(QGraphicsView):
                 self._objects[value.id] = item
 
         self._model_ready = True
+        self.model_changed.emit()
         if self.role == "player":
             self.follow_camera(self._source_rect)
         if self.role != "player":
@@ -462,6 +490,9 @@ class MapView(QGraphicsView):
             event.ignore()
 
     def set_tool(self, name):
+        if self.role == "viewer":
+            self.tool_state.activate(name)
+            return
         if self.role != "editor" or name not in {"select", "pan", "place"}:
             return
         self.tool = name
@@ -517,15 +548,6 @@ class MapView(QGraphicsView):
             if not event.isAutoRepeat() and self._previous_tool is None:
                 self._previous_tool = self.tool
                 self.set_tool("pan")
-            event.accept()
-            return
-        if self.role == "viewer" and event.key() == Qt.Key.Key_Escape:
-            self.measurement_changed.emit(None)
-            for item in self._tokens:
-                if getattr(item, "_dragging", False):
-                    item._cancelled = True
-                    item.setPos(item._drag_origin)
-                    self.transient_changed.emit("token", item.token.id, item.x(), item.y())
             event.accept()
             return
         if self.role == "editor" and event.key() == Qt.Key.Key_Escape:
@@ -624,6 +646,7 @@ class MapView(QGraphicsView):
 
 class MapWidget(QWidget):
     grid_requested = Signal()
+    grid_visibility_requested = Signal(bool)
     editor_requested = Signal()
     presentation_requested = Signal()
 
@@ -632,79 +655,56 @@ class MapWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
-        buttons = QToolBar(self)
-        buttons.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.token_add = QAction(icon("plus"), "Токен", self)
-        self.token_add.setEnabled(False)
-        grid = QAction(icon("table"), "Сетка", self)
-        grid.triggered.connect(self.grid_requested)
-        fit = QAction(icon("fit"), "Вся карта", self)
-        editor = QAction(icon("rename"), "Редактор", self)
-        editor.triggered.connect(self.editor_requested)
-        buttons.addActions([self.token_add, grid, fit, editor])
-        presentation = QAction(icon("monitor"), "Открыть презентацию", self)
-        presentation.triggered.connect(self.presentation_requested)
-        button = QToolButton(buttons)
-        button.setDefaultAction(presentation)
-        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        buttons.addWidget(button)
-        buttons.addSeparator()
-        self.add_undo_actions(buttons, undo_stack)
-        layout.addWidget(buttons)
         self.message = QLabel("Загрузка изображения…")
         self.message.setWordWrap(True)
         self.message.setObjectName("mapStatus")
-        layout.addWidget(self.message)
         self.view = MapView()
         from lodandsy.ui.fog_tools import FogTools
-
-        self.fog_tools = FogTools(self.view, self)
-        metric = QAction("Дистанция: геометрия", self)
-        metric.setCheckable(True)
-        metric.setChecked(self.view.measurement_mode == "geometry")
-        metric.setToolTip("Без snap используется непрерывная метрика; сетка — диагональ за клетку")
-
-        def set_metric(checked):
-            self.view.measurement_mode = "geometry" if checked else "grid"
-            QSettings().setValue("maps/measurement", self.view.measurement_mode)
-            self.view.viewport().update()
-
-        metric.toggled.connect(set_metric)
-        buttons.addAction(metric)
-        fog = QAction(icon("fog"), "Туман войны", self)
-        fog.setCheckable(True)
-        fog.toggled.connect(self.fog_tools.setVisible)
-        fog_button = QToolButton(buttons)
-        fog_button.setDefaultAction(fog)
-        fog_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        buttons.addWidget(fog_button)
+        from lodandsy.ui.map_tools import MapToolbars
         from lodandsy.ui.map_vectors import VectorTools
 
+        self.fog_tools = FogTools(self.view, self)
         self.vector_tools = VectorTools(self.view, self)
-        self.vector_tools.hide()
-        vectors = QAction(icon("vector"), "Фигуры и порталы", self)
-        vectors.setCheckable(True)
-        vectors.toggled.connect(self.vector_tools.setVisible)
-        vectors.toggled.connect(
-            lambda checked: self.fog_tools.hide() if checked else self.vector_tools.cancel()
-        )
-        fog.toggled.connect(lambda checked: self.vector_tools.hide() if checked else None)
-        buttons.addAction(vectors)
-        layout.addWidget(self.vector_tools)
-        layout.addWidget(self.fog_tools)
-        layout.addWidget(self.view, 1)
+        self.tools = MapToolbars(self.view, self.fog_tools, self.vector_tools, self)
+        self.tool_state = self.view.tool_state
+        self.token_add = self.tools.actions["token"]
+        self.add_undo_actions(self.tools.general, undo_stack, native=True)
+        self.tools.populate_general()
+        self.tools.grid_settings_requested.connect(self.grid_requested)
+        self.tools.grid_toggled.connect(self.grid_visibility_requested)
+        self.tools.editor_requested.connect(self.editor_requested)
+        self.tools.presentation_requested.connect(self.presentation_requested)
+        layout.addWidget(self.tools.general)
+        layout.addWidget(self.message)
+        body = QHBoxLayout()
+        body.setSpacing(6)
+        body.addWidget(self.tools.sidebar)
+        content = QVBoxLayout()
+        content.setSpacing(4)
+        content.addWidget(self.tools.context)
+        content.addWidget(self.view, 1)
+        body.addLayout(content, 1)
+        layout.addLayout(body, 1)
+        self.tool_state.activate("select")
         self.pending_camera = None
         self.project_root = None
-        fit.triggered.connect(
-            lambda: self.view.fitInView(self.view.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
-        )
 
-    def add_undo_actions(self, bar, stack):
+    def heightForWidth(self, width):
+        # ADS wraps documents in QScrollArea. A wrapped hint must not turn the
+        # map viewport's preferred height into a minimum and hide the toolbar.
+        return self.minimumSizeHint().height()
+
+    def hideEvent(self, event):
+        self.tool_state.cancel()
+        self.tool_state.restore_space()
+        super().hideEvent(event)
+
+    def add_undo_actions(self, bar, stack, *, native=False):
         for name, shortcut, action in [
             ("undo", "Ctrl+Z", stack.createUndoAction(self, "Отменить")),
             ("redo", "Ctrl+Y", stack.createRedoAction(self, "Повторить")),
         ]:
-            action.setIcon(icon(name))
+            action.setIcon(icon(name, 18, stroke_width=1.15) if native else icon(name))
             action.setShortcut(shortcut)
 
             def update_tip(a=action, key=shortcut):
@@ -716,11 +716,14 @@ class MapWidget(QWidget):
             update_tip()
             action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             self.addAction(action)
-            button = QToolButton(bar)
-            button.setDefaultAction(action)
-            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-            button.setAccessibleName("Отменить" if name == "undo" else "Повторить")
-            bar.addWidget(button)
+            if native:
+                bar.addAction(action)
+            else:
+                button = QToolButton(bar)
+                button.setDefaultAction(action)
+                button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+                button.setAccessibleName("Отменить" if name == "undo" else "Повторить")
+                bar.addWidget(button)
 
     def image_ready(self, root, _name):
         if root == self.project_root:

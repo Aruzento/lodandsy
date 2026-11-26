@@ -1,0 +1,23 @@
+{
+  "targeted": {
+    "tests": 98,
+    "failures": "0",
+    "errors": "0",
+    "skipped": "1",
+    "seconds": "17.153"
+  },
+  "full-native": {
+    "tests": 565,
+    "failures": "0",
+    "errors": "0",
+    "skipped": "1",
+    "seconds": "107.250"
+  },
+  "full-offscreen": {
+    "tests": 565,
+    "failures": "0",
+    "errors": "0",
+    "skipped": "2",
+    "seconds": "105.567"
+  }
+}

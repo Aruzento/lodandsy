@@ -204,8 +204,7 @@ def main():
             viewer.fog_tools.points = [(120, 120), (450, 140), (400, 350)]
             viewer.fog_tools._preview(QPointF(121, 121))
             capture(viewer, "16-polygon-snap")
-            viewer.fog_tools.cancel()
-            viewer.fog_tools.hide()
+            viewer.tool_state.activate("select")
             from PySide6.QtCore import QRectF
             from PySide6.QtGui import QPainterPath
 
@@ -235,9 +234,52 @@ def main():
             fog = QPainterPath()
             fog.addRect(QRectF(0, 0, 800, 600))
             controller.maps_service.edit_fog(document.id, fog)
-            viewer.vector_tools.show()
+            viewer.tool_state.activate("select")
             viewer.vector_tools.select(controller.maps_service.get_map(document.id).shapes[0])
             capture(window, "17-m5-gm-shapes")
+            capture(window, "24-m55-unified-wide")
+            from lodandsy.ui.map_settings_dialogs import MapGridDialog, MapPortalDialog
+
+            grid_dialog = MapGridDialog(
+                controller.maps_service.get_map(document.id).grid,
+                window,
+                measurement_mode=viewer.view.measurement_mode,
+            )
+            grid_dialog.show()
+            capture(grid_dialog, "25-m55-grid-measurement")
+            grid_dialog.close()
+            viewer.tool_state.activate("fog_hide")
+            capture(viewer, "26-m55-fog-brush")
+            viewer.tool_state.activate("fog_polygon")
+            viewer.fog_tools.points = [(100, 100), (300, 120), (260, 300)]
+            viewer.fog_tools._preview(QPointF(101, 101))
+            capture(viewer, "27-m55-fog-polygon")
+            viewer.tool_state.activate("select")
+            menu = viewer.tools.actions["shape"].menu()
+            menu.popup(viewer.tools.sidebar.mapToGlobal(viewer.tools.sidebar.rect().topRight()))
+            capture(menu, "28-m55-shape-menu")
+            capture(window, "34-m55-shape-menu-gap")
+            menu.close()
+            selection_menu = viewer.tools.actions["select"].menu()
+            selection_menu.popup(
+                viewer.tools.sidebar.mapToGlobal(viewer.tools.sidebar.rect().topRight())
+            )
+            capture(window, "35-m55-selection-menu")
+            selection_menu.close()
+            viewer.tool_state.activate("portal")
+            capture(viewer, "29-m55-portal")
+            portal = controller.maps_service.get_map(document.id).portals[0]
+            portal_dialog = MapPortalDialog(
+                replace(portal, label="Нижний уровень", hide_label=True), window
+            )
+            portal_dialog.show()
+            capture(portal_dialog, "36-m55-portal-hide-label-dialog")
+            portal_dialog.close()
+            controller.maps_service.put_vector(
+                document.id, replace(portal, label="Нижний уровень", hide_label=True)
+            )
+            capture(viewer, "37-m55-hidden-portal-label")
+            viewer.tool_state.activate("select")
             player = controller.maps.open_presentation(document.id)
             settle(1)
             capture(player, "18-m5-player-shapes-over-fog")
@@ -249,8 +291,25 @@ def main():
             controller.maps._measurement(document.id, None, "grid")
             map_window = controller.maps.open_map(document.id)
             map_window.dock.setFloating()
-            map_window.dock.floatingDockContainer().resize(650, 650)
+            map_floating = map_window.dock.floatingDockContainer()
+            map_floating.show()
+            map_floating.resize(650, 650)
             capture(viewer, "23-m5-map-narrow")
+            map_floating.resize(320, 300)
+            capture(viewer, "30-m55-overflow")
+            from PySide6.QtWidgets import QToolButton
+
+            extension = viewer.tools.sidebar.findChild(QToolButton, "qt_toolbar_ext_button")
+            overflow = extension.menu()
+            overflow.popup(extension.mapToGlobal(extension.rect().bottomRight()))
+            capture(overflow, "31-m55-overflow-menu")
+            overflow.close()
+            viewer.tool_state.activate("fog_hide")
+            capture(viewer, "32-m55-narrow-fog")
+            viewer.tool_state.activate("select")
+            capture(viewer, "33-m55-narrow-select")
+            viewer.tool_state.activate("select")
+            map_floating.resize(650, 650)
             portrait = QImage(1024, 400, QImage.Format.Format_RGB32)
             portrait.fill(0xFF416E8C)
             portrait_source = root / "portrait.png"

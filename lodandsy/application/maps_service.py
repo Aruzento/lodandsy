@@ -11,6 +11,7 @@ from shiboken6 import isValid
 from lodandsy.application.entity_session import EntitySession
 from lodandsy.domain.map_document import (
     MapDocument,
+    MapGrid,
     MapLayer,
     MapPayload,
     PlacedAssetObject,
@@ -237,7 +238,11 @@ class MapsService(QObject):
 
     def create_map(self, title, asset_id, parent_id=None):
         document = MapDocument(
-            title, asset_id, layers=(MapLayer("Слой 1"),), layers_initialized=True
+            title,
+            asset_id,
+            grid=MapGrid(feet_per_cell=5),
+            layers=(MapLayer("Слой 1"),),
+            layers_initialized=True,
         )
         with self.core.transaction():
             self.entities.create(

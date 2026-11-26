@@ -5,7 +5,7 @@ from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
 
-from PySide6.QtCore import QEventLoop, QObject, QRectF, Qt, Signal
+from PySide6.QtCore import QEventLoop, QObject, QRectF, QSettings, Qt, Signal
 from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox, QProgressDialog
 
 from lodandsy.application.background_tasks import BackgroundTasks
@@ -17,7 +17,7 @@ from lodandsy.ui.entity_picker import EntityPicker
 from lodandsy.ui.map_editor import MapEditorWidget
 from lodandsy.ui.map_portrait import MapPortrait
 from lodandsy.ui.map_presentation import MapPresentation
-from lodandsy.ui.map_settings_dialogs import MapGridDialog
+from lodandsy.ui.map_settings_dialogs import MapGridDialog, MapPortalDialog
 from lodandsy.ui.map_widget import MapWidget
 
 
@@ -282,16 +282,26 @@ class MapsController(QObject):
                     lambda key, action: self._editor_object_action(map_id, key, action)
                 )
             else:
-                widget.vector_tools.portal_requested.connect(
-                    lambda x, y: self._portal_choose(map_id, x, y)
-                )
+
+                def place_portal(x, y):
+                    if self._portal_choose(map_id, x, y):
+                        widget.tool_state.activate("select")
+
+                widget.vector_tools.portal_requested.connect(place_portal)
                 widget.vector_tools.portal_opened.connect(
                     lambda key: self._portal_open(map_id, key)
                 )
                 widget.vector_tools.portal_edited.connect(
                     lambda key: self._portal_edit(map_id, key)
                 )
-                widget.vector_tools.committed.connect(lambda value: self._put_vector(map_id, value))
+
+                def put_vector(value):
+                    document = self.service.get_map(map_id)
+                    created = all(v.id != value.id for v in (*document.shapes, *document.portals))
+                    if self._put_vector(map_id, value) and created:
+                        widget.tool_state.activate("select")
+
+                widget.vector_tools.committed.connect(put_vector)
                 widget.vector_tools.removed.connect(
                     lambda key: self.service.delete_vector(map_id, key)
                 )
@@ -308,6 +318,13 @@ class MapsController(QObject):
                 widget.view.camera_changed.connect(lambda rect: self._camera_changed(map_id, rect))
                 widget.editor_requested.connect(lambda: self.open_map_editor(map_id))
                 widget.grid_requested.connect(lambda: self._grid_settings(map_id))
+                widget.grid_visibility_requested.connect(
+                    lambda enabled: self.service.edit_map(
+                        map_id,
+                        grid=replace(self.service.get_map(map_id).grid, enabled=enabled),
+                        command="Показать / скрыть сетку",
+                    )
+                )
                 widget.view.token_moved.connect(
                     lambda token, x, y: self._move_token(map_id, token, x, y, widget.view)
                 )
@@ -326,11 +343,6 @@ class MapsController(QObject):
                     lambda card, x, y: self.service.add_token(map_id, card, x, y)
                 )
 
-                def add_token():
-                    center = widget.view.mapToScene(widget.view.viewport().rect().center())
-                    self._add_token(map_id, center.x(), center.y())
-
-                widget.token_add.triggered.connect(add_token)
             return widget
 
         window = self.windows.open_window(key, title, factory)
@@ -343,7 +355,9 @@ class MapsController(QObject):
         cancel = Event()
         self._decode_cancels.add(cancel)
         window.closed.connect(lambda closed: cancel.set())
+
         self.tiles.failed.connect(widget.message.setText)
+        self.tiles.failed.connect(widget.message.show)
 
         def loaded(pyramid, error):
             self._decode_cancels.discard(cancel)
@@ -351,6 +365,7 @@ class MapsController(QObject):
                 return
             if error:
                 widget.message.setText("Изображение недоступно: " + error)
+                widget.message.show()
             else:
                 widget.view.set_pyramid(pyramid, self.tiles)
                 presentation = self.presentations.get(map_id)
@@ -359,10 +374,9 @@ class MapsController(QObject):
                 if not editor:
                     widget.token_add.setEnabled(True)
                 widget.message.setText(
-                    "Выбор / панорама / размещение · Escape — отмена жеста"
-                    if editor
-                    else "Колесо — масштаб · фон — перемещение · двойной щелчок — карточка"
+                    "Выбор / панорама / размещение · Escape — отмена жеста" if editor else ""
                 )
+            widget.message.setVisible(bool(widget.message.text()))
             self._refresh_map(map_id)
             cameras = self._map_editor_ui if editor else self._map_ui
             camera = widget.pending_camera or cameras.get(map_id)
@@ -540,12 +554,10 @@ class MapsController(QObject):
         if target == map_id:
             self._error("Выберите другую карту")
             return
-        label, ok = QInputDialog.getText(
-            self.window,
-            "Портал",
-            "Подпись (пусто — название цели)",
-            text=previous.label if previous else "",
-        )
+        dialog = MapPortalDialog(previous, self.window)
+        ok = dialog.exec()
+        label, hide_label = dialog.label.text(), dialog.hide_label.isChecked()
+        dialog.deleteLater()
         if not ok or generation != self.service.core.generation:
             return
         try:
@@ -556,10 +568,11 @@ class MapsController(QObject):
                 )
                 if current != previous:
                     raise ValueError("Портал изменён другим представлением")
-                value = replace(previous, target_id=target, label=label)
+                value = replace(previous, target_id=target, label=label, hide_label=hide_label)
             else:
-                value = MapPortal(target, x, y, label)
+                value = MapPortal(target, x, y, label, hide_label=hide_label)
             self.service.put_vector(map_id, value)
+            return True
         except ValueError as error:
             self._error(str(error))
 
@@ -609,6 +622,7 @@ class MapsController(QObject):
     def _put_vector(self, map_id, value):
         try:
             self.service.put_vector(map_id, value)
+            return True
         except ValueError as error:
             self._error(str(error))
 
@@ -856,9 +870,20 @@ class MapsController(QObject):
             self.open_map_editor(map_id).widget().select_object(key)
 
     def _grid_settings(self, map_id):
-        dialog = MapGridDialog(self.service.get_map(map_id).grid, self.window)
-        if dialog.exec():
-            self.service.edit_map(map_id, grid=dialog.grid(), command="Изменить сетку")
+        generation = self.service.core.generation
+        before = self.service.get_map(map_id).grid
+        window = self.windows.find_window(f"map:{map_id}")
+        mode = window.widget().view.measurement_mode if window else "grid"
+        dialog = MapGridDialog(before, self.window, measurement_mode=mode)
+        if dialog.exec() and generation == self.service.core.generation:
+            if self.service.get_map(map_id).grid != before:
+                self._error("Сетка изменена другим представлением")
+            else:
+                self.service.edit_map(map_id, grid=dialog.grid(), command="Изменить сетку")
+                mode = dialog.measurement_mode_combo.currentData()
+                QSettings().setValue("maps/measurement", mode)
+                self._measurement(map_id, None, mode)
+        dialog.deleteLater()
 
     def _move_token(self, map_id, token_id, x, y, view):
         window = self.windows.find_window(f"map:{map_id}")

@@ -47,7 +47,7 @@ FEATURES = {
     | modules(
         "ui",
         "map_widget map_editor map_annotations map_settings_dialogs map_library "
-        "map_presentation fog_tools map_vectors map_portrait",
+        "map_presentation fog_tools map_vectors map_portrait map_tools",
     ),
     "dice": modules("domain", "dice")
     | modules("application", "dice_controller")

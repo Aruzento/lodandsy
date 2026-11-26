@@ -15,6 +15,7 @@ from PySide6.QtGui import QImage, QKeyEvent, QPainterPath
 from PySide6.QtWidgets import QApplication, QDialogButtonBox, QLineEdit
 
 from lodandsy.application.app_controller import AppController
+from lodandsy.application.clipboard import clipboard_writer
 from lodandsy.application.project_controller import ProjectController
 from lodandsy.application.project_history import ProjectHistory
 from lodandsy.application.sqlite_project_store import SQLiteProjectStore
@@ -36,6 +37,20 @@ def wait(app, predicate, timeout=15):
         if getattr(app, "smoke_errors", []):
             raise AssertionError("; ".join(app.smoke_errors))
         time.sleep(0.005)
+
+
+def copy_and_wait(app, action, expected):
+    messages = []
+    receiver = messages.append
+    writer = clipboard_writer()
+    writer.message.connect(receiver)
+    try:
+        action()
+        wait(app, lambda: bool(messages))
+        assert messages[-1] == "Скопировано", messages[-1]
+        assert QApplication.clipboard().text() == expected
+    finally:
+        writer.message.disconnect(receiver)
 
 
 def main():
@@ -122,6 +137,19 @@ def main():
             controller.actions.update_entity(document.id, parent_id=b.id)
             map_widget = controller.maps.open_map(document.id).widget()
             wait(app, lambda: map_widget.view._background is not None, timeout=120)
+            map_widget.tools.shape_actions["cone"].trigger()
+            assert map_widget.tool_state.active == "cone"
+            for kind in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+                QApplication.sendEvent(
+                    map_widget.view,
+                    QKeyEvent(kind, Qt.Key.Key_Space, Qt.KeyboardModifier.NoModifier),
+                )
+                assert map_widget.tool_state.active == (
+                    "pan" if kind == QEvent.Type.KeyPress else "cone"
+                )
+            map_widget.tools.actions["fog_erase"].trigger()
+            assert map_widget.fog_tools.mode == "erase" and not map_widget.vector_tools.enabled
+            map_widget.tools.actions["select"].trigger()
             fog_path = QPainterPath()
             fog_path.addRect(50, 50, 200, 200)
             controller.maps_service.edit_fog(document.id, fog_path)
@@ -313,8 +341,7 @@ def main():
             app.processEvents()
             assert table_widget.model.data(table_widget.model.index(0, 0)) == "Дракон"
             table_widget.table.selectRow(0)
-            table_widget.copy_selection()
-            assert QApplication.clipboard().text() == "Дракон\t0\tfalse"
+            copy_and_wait(app, table_widget.copy_selection, "Дракон\t0\tfalse")
             assert not table_widget.model.setData(table_widget.model.index(0, 1), "bad")
             assert project.draft_count == 1
             assert project.save_current()
@@ -333,8 +360,9 @@ def main():
             dice.throw()
             assert " = " in dice.result.toPlainText()
             assert "d100:" in dice.result.toPlainText()
+            copy_and_wait(app, dice.copy.click, dice.result.toPlainText())
             shape = MapShape("circle", ((64, 0),), x=300, y=300, name="Публичная область")
-            portal = MapPortal(other_map.id, 400, 400)
+            portal = MapPortal(other_map.id, 400, 400, "Скрытое имя", hide_label=True)
             controller.maps_service.put_vector(document.id, shape)
             controller.maps_service.put_vector(document.id, portal)
             presentation = controller.maps.open_presentation(document.id)
@@ -411,6 +439,9 @@ def main():
                 "native_qt_russian_translation": True,
                 "typed_inventory_equipment_ac_and_manual_final": True,
                 "map_m5_shapes_portal_original_image": True,
+                "map_m55_native_toolbar_and_space": True,
+                "map9_portal_hidden_label_backup_reopen": True,
+                "table_then_dice_native_clipboard": True,
                 "unicode_paths": True,
                 "uuid_sections_child_inventory_crop": True,
                 "reference_inventory_projections_no_copies": True,

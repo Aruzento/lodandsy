@@ -1,8 +1,18 @@
 """GM-only gesture buffer. Only a completed gesture reaches MapsService."""
 
 from PySide6.QtCore import QEvent, QPointF, Qt, Signal
-from PySide6.QtGui import QActionGroup, QPainterPath
-from PySide6.QtWidgets import QLabel, QSpinBox, QToolBar, QVBoxLayout, QWidget
+from PySide6.QtGui import QPainterPath
+from PySide6.QtWidgets import (
+    QBoxLayout,
+    QHBoxLayout,
+    QLabel,
+    QLayout,
+    QSizePolicy,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
+from shiboken6 import isValid
 
 from lodandsy.application.fog_geometry import polygon_path, region_path, stroke_path
 from lodandsy.domain.map_fog import MAX_GESTURE_POINTS
@@ -15,44 +25,42 @@ class FogTools(QWidget):
     def __init__(self, view, parent=None):
         super().__init__(parent)
         self.view = view
-        self.mode = "hide"
         self.points = []
         self.selected = None
-        self.panning = False
         self.snap_radius = 10.0
         view.viewport().setMouseTracking(True)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        bar = QToolBar()
-        group = QActionGroup(self)
-        for label, mode in [
-            ("Кисть", "hide"),
-            ("Ластик", "erase"),
-            ("Полигон", "polygon"),
-            ("Выбор", "select"),
-        ]:
-            action = bar.addAction(label)
-            action.setCheckable(True)
-            action.setChecked(mode == self.mode)
-            group.addAction(action)
-            action.triggered.connect(lambda checked=False, value=mode: self.set_mode(value))
-        bar.addSeparator()
-        bar.addWidget(QLabel("Размер:"))
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetNoConstraint)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Maximum)
+        row = self.parameter_row = QBoxLayout(QBoxLayout.Direction.LeftToRight)
+        self.brush_group = QWidget()
+        brush = QHBoxLayout(self.brush_group)
+        brush.setContentsMargins(0, 0, 0, 0)
+        brush.addWidget(QLabel("Размер"))
         self.size = QSpinBox()
         self.size.setRange(1, 100000)
         self.size.setValue(128)
         self.size.setSuffix(" px мира")
         self.size.setAccessibleName("Размер кисти тумана")
-        bar.addWidget(self.size)
-        bar.addSeparator()
-        bar.addWidget(QLabel("Видимость GM:"))
+        self.size.setMaximumWidth(132)
+        brush.addWidget(self.size)
+        row.addWidget(self.brush_group, 0, Qt.AlignmentFlag.AlignLeft)
+        opacity_group = QWidget()
+        opacity_row = QHBoxLayout(opacity_group)
+        opacity_row.setContentsMargins(0, 0, 0, 0)
+        opacity_row.addWidget(QLabel("Ведущий"))
         self.opacity = QSpinBox()
         self.opacity.setRange(0, 100)
         self.opacity.setValue(50)
         self.opacity.setSuffix("%")
         self.opacity.valueChanged.connect(self._opacity)
-        bar.addWidget(self.opacity)
-        layout.addWidget(bar)
+        self.opacity.setAccessibleName("Непрозрачность тумана для ведущего")
+        self.opacity.setMaximumWidth(76)
+        opacity_row.addWidget(self.opacity)
+        row.addWidget(opacity_group, 0, Qt.AlignmentFlag.AlignLeft)
+        row.addStretch(1)
+        layout.addLayout(row)
         self.notice = QLabel(
             "Enter — завершить полигон · Escape — отмена · "
             "Space — панорама · Delete — удалить область"
@@ -61,27 +69,30 @@ class FogTools(QWidget):
         layout.addWidget(self.notice)
         view.installEventFilter(self)
         view.viewport().installEventFilter(self)
+        view.tool_state.fog = self
+        view.tool_state.prioritize()
         self.hide()
+
+    def resizeEvent(self, event):
+        self.parameter_row.setDirection(
+            QBoxLayout.Direction.TopToBottom
+            if event.size().width() < 360
+            else QBoxLayout.Direction.LeftToRight
+        )
+        super().resizeEvent(event)
 
     def _opacity(self, value):
         self.view.fog_opacity = value / 100
         self.view.viewport().update()
 
+    @property
+    def mode(self):
+        from lodandsy.ui.map_tools import FOG
+
+        return FOG.get(self.view.tool_state.active, "select")
+
     def set_mode(self, mode):
-        self.cancel()
-        self.mode = mode
-        self._cursor()
-
-    def setVisible(self, visible):
-        self.cancel()
-        super().setVisible(visible)
-        self._cursor()
-
-    def _cursor(self):
-        if self.isVisible() and self.mode == "polygon" and not self.panning:
-            self.view.viewport().setCursor(Qt.CursorShape.CrossCursor)
-        else:
-            self.view.viewport().unsetCursor()
+        self.view.tool_state.activate("fog_" + mode)
 
     def _snaps(self, point):
         if len(self.points) < 3:
@@ -91,6 +102,8 @@ class FogTools(QWidget):
         return delta.x() ** 2 + delta.y() ** 2 <= self.snap_radius**2
 
     def cancel(self):
+        if getattr(self, "view", None) is None or not isValid(self.view):
+            return
         self.points.clear()
         self.view._fog_vertices = ()
         self.view._fog_snap = False
@@ -145,7 +158,9 @@ class FogTools(QWidget):
         self.cancel()
 
     def eventFilter(self, watched, event):
-        if not self.isVisible() or self.view.role == "player":
+        if getattr(self, "view", None) is None or not isValid(self.view):
+            return False
+        if self.view.role != "viewer" or not self.view.tool_state.active.startswith("fog_"):
             return False
         kind = event.type()
         if kind == QEvent.Type.KeyPress:
@@ -159,16 +174,7 @@ class FogTools(QWidget):
                 self.deleted.emit(self.selected)
                 self.cancel()
                 return True
-            if event.key() == Qt.Key.Key_Space and not event.isAutoRepeat():
-                self.cancel()
-                self.panning = True
-                self._cursor()
-                return False
-        if kind == QEvent.Type.KeyRelease and event.key() == Qt.Key.Key_Space:
-            self.panning = False
-            self._cursor()
-            return False
-        if self.panning or watched is not self.view.viewport() or self.view._background is None:
+        if watched is not self.view.viewport() or self.view._background is None:
             return False
         if kind not in {
             QEvent.Type.MouseButtonPress,

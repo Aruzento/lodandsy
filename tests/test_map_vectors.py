@@ -100,7 +100,7 @@ def test_shape_native_create_properties_and_cancel(project, tmp_path, qtbot):
     document, viewer = open_map(app, session, tmp_path, qtbot)
     tools = viewer.vector_tools
     tools.show()
-    tools.choice.setCurrentIndex(tools.choice.findData("circle"))
+    tools.set_mode("circle")
     start = viewer.view.mapFromScene(QPointF(200, 150))
     end = viewer.view.mapFromScene(QPointF(264, 150))
     qtbot.mousePress(viewer.view.viewport(), Qt.MouseButton.LeftButton, pos=start)
@@ -326,12 +326,12 @@ def test_polygon_cursor_restored_when_tools_reopen(qtbot):
     qtbot.addWidget(view)
     tools = VectorTools(view)
     qtbot.addWidget(tools)
-    tools.choice.setCurrentIndex(tools.choice.findData("polygon"))
+    tools.set_mode("polygon")
     tools.show()
     assert view.viewport().cursor().shape() == Qt.CursorShape.CrossCursor
-    tools.hide()
+    view.tool_state.activate("select")
     assert view.viewport().cursor().shape() != Qt.CursorShape.CrossCursor
-    tools.show()
+    tools.set_mode("polygon")
     assert view.viewport().cursor().shape() == Qt.CursorShape.CrossCursor
 
 
@@ -359,3 +359,87 @@ def test_portrait_source_change_during_confirmation_is_rejected(
     monkeypatch.setattr(app.maps, "_error", lambda message: None)
     app.maps._token_action(document.id, token.id, "portrait")
     assert app.maps._portrait is None
+
+
+@pytest.mark.parametrize("bad", [None, 0, 1, "false", [], {}])
+def test_portal_label_visibility_is_strict_boolean(bad):
+    from lodandsy.domain.map_document import MapPortal
+
+    with pytest.raises(ValueError, match="видимость"):
+        MapPortal(str(uuid4()), 1, 2, hide_label=bad)
+
+
+def test_map9_portal_reopen_backup_and_map8_read_without_rewrite(project, tmp_path):
+    import hashlib
+    import json
+    import sqlite3
+
+    from lodandsy.application.sqlite_project_store import SQLiteProjectStore
+    from lodandsy.domain.map_document import MapPortal
+    from tests.test_actor_storage import world
+
+    app, session, card, actor, document = world(project, tmp_path)
+    target = app.maps_service.create_map("Цель", document.asset_id)
+    portal = MapPortal(target.id, 40, 50, "Имя", hide_label=True)
+    app.maps_service.put_vector(document.id, portal)
+    assert session.save_current()
+    saved = next(v for v in session.store.load().maps if v.id == document.id)
+    assert saved.portals == (portal,)
+    with sqlite3.connect(session.store.path) as connection:
+        version, raw = connection.execute(
+            "SELECT payload_version,objects FROM map_document WHERE id=?", (document.id,)
+        ).fetchone()
+        assert version == 9 and json.loads(raw)["portals"][0]["hide_label"] is True
+    backup = tmp_path / "map9.lodbackup"
+    session.store.backup(backup)
+    restored = SQLiteProjectStore.restore(backup, tmp_path / "map9-restored")
+    assert next(v for v in restored.load().maps if v.id == document.id) == saved
+    restored.close()
+    with sqlite3.connect(session.store.path) as connection:
+        raw = json.loads(raw)
+        del raw["portals"][0]["hide_label"]
+        grid = json.loads(
+            connection.execute(
+                "SELECT grid FROM map_document WHERE id=?", (document.id,)
+            ).fetchone()[0]
+        )
+        grid.pop("feet_per_cell", None)
+        connection.execute(
+            "UPDATE map_document SET payload_version=8,objects=?,grid=? WHERE id=?",
+            (json.dumps(raw), json.dumps(grid), document.id),
+        )
+    digest = hashlib.sha256(session.store.path.read_bytes()).digest()
+    previous = session.store.load()
+    old = next(v for v in previous.maps if v.id == document.id)
+    assert old.portals == (replace(portal, hide_label=False),)
+    assert old.grid.feet_per_cell is None
+    assert next(v for v in previous.cards if v.id == card.id).actors[0].id == actor.id
+    assert hashlib.sha256(session.store.path.read_bytes()).digest() == digest
+
+
+def test_portal_hidden_label_changes_only_caption_pixels(qtbot):
+    from PySide6.QtCore import QPointF
+
+    from lodandsy.domain.map_document import MapPortal
+    from lodandsy.ui.map_widget import MapView
+
+    view = MapView()
+    qtbot.addWidget(view)
+    view.resize(500, 300)
+    view.setSceneRect(QRectF(0, 0, 500, 300))
+    portal = MapPortal(str(uuid4()), 100, 100, "Название портала")
+    view.vector_portals = (portal,)
+    view.show()
+    qtbot.waitExposed(view)
+    visible = view.viewport().grab().toImage()
+    view.vector_portals = (replace(portal, hide_label=True),)
+    hidden = view.viewport().grab().toImage()
+    center = view.mapFromScene(QPointF(100, 100))
+    assert visible.copy(center.x() - 12, center.y() - 12, 25, 25) == hidden.copy(
+        center.x() - 12, center.y() - 12, 25, 25
+    )
+    assert visible != hidden
+    view.role = "player"
+    without = view.viewport().grab().toImage()
+    view.vector_portals = (portal,)
+    assert view.viewport().grab().toImage() == without

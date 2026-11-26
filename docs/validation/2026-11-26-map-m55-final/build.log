@@ -1,0 +1,113 @@
+No broken requirements found.
+172 INFO: PyInstaller: 6.22.3, contrib hooks: 2026.10
+173 INFO: Python: 3.14.8
+178 INFO: Platform: Windows-10-10.0.19045-SP0
+178 INFO: Python environment: Z:\Мои проекты\Project 6. Local DND system LODSY\.prototype-deps\locked-venv
+181 INFO: Removing temporary files and cleaning cache in C:\Users\Aruko\AppData\Local\pyinstaller
+1131 INFO: Module search paths (PYTHONPATH):
+['Z:\\Мои проекты\\Project 6. Local DND system LODSY',
+ 'C:\\Users\\Aruko\\AppData\\Local\\Programs\\Python\\Python314\\python314.zip',
+ 'C:\\Users\\Aruko\\AppData\\Local\\Programs\\Python\\Python314\\DLLs',
+ 'C:\\Users\\Aruko\\AppData\\Local\\Programs\\Python\\Python314\\Lib',
+ 'C:\\Users\\Aruko\\AppData\\Local\\Programs\\Python\\Python314',
+ 'Z:\\Мои проекты\\Project 6. Local DND system '
+ 'LODSY\\.prototype-deps\\locked-venv',
+ 'Z:\\Мои проекты\\Project 6. Local DND system '
+ 'LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages',
+ 'Z:\\Мои проекты\\Project 6. Local DND system LODSY']
+1340 INFO: Appending 'datas' from .spec
+1343 INFO: checking Analysis
+1343 INFO: Building Analysis because Analysis-00.toc is non existent
+1343 INFO: Looking for Python shared library...
+1343 INFO: Using Python shared library: C:\Users\Aruko\AppData\Local\Programs\Python\Python314\python314.dll
+1343 INFO: Running Analysis Analysis-00.toc
+1343 INFO: Target bytecode optimization level: 0
+1343 INFO: Initializing module dependency graph...
+1345 INFO: Initializing module graph hook caches...
+1362 INFO: Analyzing modules for base_library.zip ...
+2687 INFO: Processing standard module hook 'hook-encodings.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks'
+3068 INFO: Processing standard module hook 'hook-pickle.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks'
+3305 INFO: Processing standard module hook 'hook-math.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks'
+3473 INFO: Processing standard module hook 'hook-difflib.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks'
+3485 INFO: Processing standard module hook 'hook-heapq.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks'
+6071 INFO: Caching module dependency graph...
+6108 INFO: Analyzing Z:\Мои проекты\Project 6. Local DND system LODSY\build_support\launcher.py
+6167 INFO: Processing standard module hook 'hook-sysconfig.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks'
+6261 INFO: Processing standard module hook 'hook-platform.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks'
+6291 INFO: Processing standard module hook 'hook-_ctypes.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks'
+6440 INFO: Processing standard module hook 'hook-pycparser.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\_pyinstaller_hooks_contrib\\stdhooks'
+6728 INFO: Processing standard module hook 'hook-setuptools.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks'
+6730 INFO: SetuptoolsInfo: initializing cached setuptools info...
+7175 INFO: Processing pre-safe-import-module hook 'hook-distutils.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+7219 INFO: Processing pre-safe-import-module hook 'hook-jaraco.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+7219 INFO: Setuptools: 'jaraco' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._vendor.jaraco'!
+7235 INFO: Processing pre-safe-import-module hook 'hook-more_itertools.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+7236 INFO: Setuptools: 'more_itertools' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.more_itertools'!
+7405 INFO: Processing standard module hook 'hook-_osx_support.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks'
+7409 INFO: Processing pre-safe-import-module hook 'hook-typing_extensions.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+7752 INFO: Processing standard module hook 'hook-multiprocessing.util.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks'
+7849 INFO: Processing standard module hook 'hook-xml.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks'
+8563 INFO: Processing pre-safe-import-module hook 'hook-packaging.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+8878 INFO: Processing standard module hook 'hook-setuptools._vendor.jaraco.text.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks'
+8880 INFO: Processing pre-safe-import-module hook 'hook-importlib_resources.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+8890 INFO: Processing pre-safe-import-module hook 'hook-backports.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+8890 INFO: Setuptools: 'backports' appears to be a full setuptools-vendored copy - creating alias to 'setuptools._vendor.backports'!
+9618 INFO: Processing pre-safe-import-module hook 'hook-tomli.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+9618 INFO: Setuptools: 'tomli' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.tomli'!
+10399 INFO: Processing pre-safe-import-module hook 'hook-wheel.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_safe_import_module'
+10399 INFO: Setuptools: 'wheel' appears to be a setuptools-vendored copy - creating alias to 'setuptools._vendor.wheel'!
+10779 INFO: Processing standard module hook 'hook-webbrowser.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks'
+11395 INFO: Processing standard module hook 'hook-PySide6.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks'
+11555 INFO: Processing standard module hook 'hook-shiboken6.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks'
+11894 INFO: Processing standard module hook 'hook-PySide6.QtNetwork.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks'
+15987 INFO: Processing standard module hook 'hook-PySide6.QtCore.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks'
+21979 INFO: Processing standard module hook 'hook-PySide6.QtGui.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks'
+46104 INFO: Processing standard module hook 'hook-PySide6.QtWidgets.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks'
+50635 INFO: Processing standard module hook 'hook-PySide6.QtSvg.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks'
+52089 INFO: Processing standard module hook 'hook-sqlite3.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks'
+52320 INFO: Analyzing hidden import 'pyvips.pyvips_build'
+52323 INFO: Processing module hooks (post-graph stage)...
+52323 WARNING: Hidden import "pycparser.lextab" not found!
+52323 WARNING: Hidden import "pycparser.yacctab" not found!
+52459 INFO: Performing binary vs. data reclassification (166 entries)
+52534 INFO: Looking for ctypes DLLs
+52562 INFO: Analyzing run-time hooks ...
+52565 INFO: Including run-time hook 'pyi_rth_inspect.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+52568 INFO: Including run-time hook 'pyi_rth_pkgutil.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+52570 INFO: Including run-time hook 'pyi_rth_multiprocessing.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+52572 INFO: Including run-time hook 'pyi_rth_setuptools.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+52574 INFO: Including run-time hook 'pyi_rth_pyside6.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks\\rthooks'
+52575 INFO: Processing pre-find-module-path hook 'hook-_pyi_rth_utils.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks\\pre_find_module_path'
+52577 INFO: Processing standard module hook 'hook-_pyi_rth_utils.py' from 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PyInstaller\\hooks'
+52588 INFO: Creating base_library.zip...
+52605 INFO: Looking for dynamic libraries
+53084 INFO: Extra DLL search directories (AddDllDirectory): ['Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\shiboken6', 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\PySide6', 'Z:\\Мои проекты\\Project 6. Local DND system LODSY\\.prototype-deps\\locked-venv\\Lib\\site-packages\\shiboken6']
+53084 INFO: Extra DLL search directories (PATH): []
+54495 INFO: Warnings written to Z:\Мои проекты\Project 6. Local DND system LODSY\.prototype-deps\mvp-build\windows\warn-windows.txt
+54544 INFO: Graph cross-reference written to Z:\Мои проекты\Project 6. Local DND system LODSY\.prototype-deps\mvp-build\windows\xref-windows.html
+54589 INFO: checking PYZ
+54589 INFO: Building PYZ because PYZ-00.toc is non existent
+54589 INFO: Building PYZ (ZlibArchive) Z:\Мои проекты\Project 6. Local DND system LODSY\.prototype-deps\mvp-build\windows\PYZ-00.pyz
+54913 INFO: Building PYZ (ZlibArchive) Z:\Мои проекты\Project 6. Local DND system LODSY\.prototype-deps\mvp-build\windows\PYZ-00.pyz completed successfully.
+54947 INFO: checking PKG
+54947 INFO: Building PKG because PKG-00.toc is non existent
+54947 INFO: Building PKG (CArchive) LODANDSY.pkg
+54959 INFO: Building PKG (CArchive) LODANDSY.pkg completed successfully.
+54960 INFO: Bootloader Z:\Мои проекты\Project 6. Local DND system LODSY\.prototype-deps\locked-venv\Lib\site-packages\PyInstaller\bootloader\Windows-64bit-intel\runw.exe
+54960 INFO: checking EXE
+54960 INFO: Building EXE because EXE-00.toc is non existent
+54960 INFO: Building EXE from EXE-00.toc
+54960 INFO: Copying bootloader EXE to Z:\Мои проекты\Project 6. Local DND system LODSY\.prototype-deps\mvp-build\windows\LODANDSY.exe
+54963 INFO: Copying icon to EXE
+54965 INFO: Copying 0 resources to EXE
+54965 INFO: Embedding manifest in EXE
+54966 INFO: Appending PKG archive to EXE
+54970 INFO: Fixing EXE headers
+55032 INFO: Building EXE from EXE-00.toc completed successfully.
+55035 INFO: checking COLLECT
+55035 INFO: Building COLLECT because COLLECT-00.toc is non existent
+55035 INFO: Removing dir Z:\Мои проекты\Project 6. Local DND system LODSY\.prototype-deps\mvp-dist\LODANDSY
+55165 INFO: Building COLLECT COLLECT-00.toc
+55506 INFO: Building COLLECT COLLECT-00.toc completed successfully.
+55517 INFO: Build complete! The results are available in: Z:\Мои проекты\Project 6. Local DND system LODSY\.prototype-deps\mvp-dist
+{"compiled_modules_compared": 111, "mismatches": [], "missing_runtime_modules": [], "obsolete_modules": [], "passed": true}

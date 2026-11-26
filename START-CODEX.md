@@ -9,7 +9,7 @@
 3. Каждый runtime-файл, включая helpers/presentation/fog, явно классифицирован в
    test_module_boundaries.py. Изменения ownership/существенных контрактов фиксировать
    в ADR и согласовывать, если они не утверждены текущей задачей. Архитектуру не
-   перестраивать ради каталогов. SQLite16/Card7/Map8/Actor1/Rules1(profile2)/Table3/UIstate4; legacy нет.
+   перестраивать ради каталогов. SQLite16/Card7/Map9/Actor1/Rules1(profile2)/Table3/UIstate4; legacy нет.
 4. Structured drafts: cancel старого owner не меняет чужое новое поколение;
    raw/base/observed/error согласованы, None baseline сохраняется. Autosave/Ctrl+S
    сохраняют только валидный канон, конфликт разрешается явно.
@@ -46,3 +46,24 @@ Maps M5: ADR-036 и docs/validation/2026-11-25-map-m5.md. Предыдущая �
 полировка сохранена в текущем checkout; Git-интеграция/CI проверяются по фактическим
 refs. Map8 добавляет shapes/portals, Map7 читается без записи. Не возвращать hidden
 transient coordinates в Player ради старых тестовых ожиданий.
+
+
+Maps M5.5 / ARU-91 (25.11.2026): ADR-037, единый MapToolState на игровой MapView,
+native vertical QAction toolbar / last-shape menu / context / overflow. V/H/B/E/M
+только на canvas, Space временно включает руку, Escape отменяет локальный жест.
+Успешное создание shape/portal возвращает выбор; brush/eraser сохраняют режим.
+Формат SQLite16/Card7/Map8 и канон/Undo/презентация M5 сохранены. M5 e40a25d принят
+владельцем82/82, включая чистую Windows. Новая панель ждёт отдельной ручной приёмки;
+ARU-91 не закрывать. Отчёт: docs/validation/2026-11-25-map-m55.md. Commit/push/merge
+этим заданием не разрешены. Кандидат: LODANDSY-Map-M5.5-2026-11-25.zip.
+
+
+Дополнение 26.11.2026 — финальная полировка M5.5 / ARU-91, ARU-89:
+иконки18px/stroke1.15 при кнопках36px, выбор/вершины одной группой, измерения только
+в настройках сетки; новый map получает5ft/cell, старые калибровки не меняются.
+Редактор карты — справа с текстом, native flyout gap10 logical px с screen bounds,
+тонкие разделители групп. ADR-038: Map9 добавляет strict boolean portal.hide_label;
+Map7/8 читаются без записи с hide_label=false. SQLite16/Card7/UIstate4 прежние.
+Подпись хранится при скрытии; навигация/иконка и Map Undo сохранены. Новая поставка:
+LODANDSY-Map-M5.5-Final-2026-11-26.zip; отчёт docs/validation/2026-11-26-map-m55-final.md.
+Обе задачи остаются In Progress до ручной приёмки; commit/push/merge не разрешены.
