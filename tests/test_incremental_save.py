@@ -11,6 +11,7 @@ from uuid import uuid4
 import pytest
 from PySide6.QtCore import QRectF, QTimer
 from PySide6.QtGui import QPainterPath
+from PySide6.QtWidgets import QMessageBox
 
 from lodandsy.application import sqlite_project_store
 from lodandsy.application.sqlite_project_store import (
@@ -252,12 +253,19 @@ def test_unexpected_base_is_refused_without_rewrite(tmp_path, mutation):
         assert store.path.read_bytes() == before
 
 
-def test_shutdown_waits_for_the_writer_and_releases_project_lease(project, tmp_path, qtbot):
+def test_shutdown_waits_for_the_writer_and_releases_project_lease(
+    project, tmp_path, qtbot, monkeypatch,
+):
     app, controller = project
     root = tmp_path / "world"
     assert controller.create_project(root)
     original = controller.store.save
     entered, release = Event(), Event()
+
+    def unexpected_dialog(*args):
+        pytest.fail(f"Unexpected close dialog: {controller.saver.last_error}")
+
+    monkeypatch.setattr(QMessageBox, "warning", unexpected_dialog)
 
     def delayed(snapshot, base):
         entered.set()
