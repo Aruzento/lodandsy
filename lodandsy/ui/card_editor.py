@@ -48,13 +48,11 @@ class RichTextEdit(QTextEdit):
             return
         if source.hasImage():
             self.image_requested.emit(source.imageData())
-        elif source.hasUrls():
-            urls = source.urls()
-            if len(urls) == 1 and urls[0].isLocalFile():
-                self.image_requested.emit(Path(urls[0].toLocalFile()))
+        elif len(urls := source.urls()) == 1 and urls[0].isLocalFile():
+            self.image_requested.emit(Path(urls[0].toLocalFile()))
         elif source.hasHtml():
             try:
-                html, warnings = sanitize_html(source.html())
+                html, warnings = sanitize_html(source.html(), clipboard=True)
                 self.textCursor().insertHtml(html)
                 if warnings:
                     self.notice.emit("Некоторые объекты вставки заблокированы: " + warnings[0])

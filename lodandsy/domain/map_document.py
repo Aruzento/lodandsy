@@ -61,6 +61,8 @@ class TokenInstance:
     layer_id: str | None = None
     actor_id: str | None = None
     rotation: float = 0
+    hidden: bool = False
+    dead: bool = False
 
     def __post_init__(self):
         for value in (self.id, self.card_id):
@@ -80,6 +82,10 @@ class TokenInstance:
                 if value <= 0:
                     raise ValueError("Размер токена должен быть положительным")
         _number(self.rotation, -360, 360, "поворот токена")
+        if type(self.hidden) is not bool or type(self.dead) is not bool:
+            raise ValueError("Некорректное состояние токена")
+        if self.dead and self.actor_id is None:
+            raise ValueError("Отметка смерти доступна размещению участника")
         if type(self.z) is not int or not 0 <= self.z <= 10000:
             raise ValueError("Некорректный порядок токена")
 
@@ -322,15 +328,35 @@ class MapPortal:
             raise ValueError("Некорректная видимость подписи портала")
 
 
-def validate_vectors(shapes, portals):
-    for values, kind in ((shapes, MapShape), (portals, MapPortal)):
+@dataclass(frozen=True, slots=True)
+class MapNote:
+    target_id: str
+    target_kind: str
+    x: float
+    y: float
+    label: str = ""
+    id: str = field(default_factory=lambda: str(uuid4()))
+
+    def __post_init__(self):
+        validate_id(self.id)
+        validate_id(self.target_id)
+        if self.target_kind not in {"note", "inventory"}:
+            raise ValueError("Некорректный тип заметки карты")
+        _number(self.x, 0, 1e9, "координата заметки")
+        _number(self.y, 0, 1e9, "координата заметки")
+        if not isinstance(self.label, str) or len(self.label) > 200:
+            raise ValueError("Некорректная подпись заметки")
+
+
+def validate_vectors(shapes, portals, notes):
+    for values, kind in ((shapes, MapShape), (portals, MapPortal), (notes, MapNote)):
         if (
             not isinstance(values, tuple)
             or len(values) > 10000
             or not all(isinstance(v, kind) for v in values)
         ):
             raise ValueError("Некорректные инструменты карты")
-    ids = [v.id for v in (*shapes, *portals)]
+    ids = [v.id for v in (*shapes, *portals, *notes)]
     if len(set(ids)) != len(ids):
         raise ValueError("Повторяющийся UUID фигуры/портала")
 
@@ -348,6 +374,7 @@ class MapDocument:
     fog: FogState = field(default_factory=FogState)
     shapes: tuple = ()
     portals: tuple = ()
+    notes: tuple[MapNote, ...] = ()
 
     def __post_init__(self):
         validate_id(self.id)
@@ -358,9 +385,11 @@ class MapDocument:
         if type(self.layers_initialized) is not bool:
             raise ValueError("Invalid layer initialization state")
         validate_map_contents(self.tokens, self.grid, self.layers, self.objects)
-        validate_vectors(self.shapes, self.portals)
+        validate_vectors(self.shapes, self.portals, self.notes)
         identifiers = [
-            v.id for v in (*self.tokens, *self.layers, *self.objects, *self.shapes, *self.portals)
+            v.id for v in (
+                *self.tokens, *self.layers, *self.objects, *self.shapes, *self.portals, *self.notes
+            )
         ]
         if len(set(identifiers)) != len(identifiers):
             raise ValueError("Повторяющийся UUID объекта карты")
@@ -377,7 +406,8 @@ class MapPayload:
     fog: FogState = field(default_factory=FogState)
     shapes: tuple = ()
     portals: tuple = ()
-    version: int = field(default=10, init=False)
+    notes: tuple[MapNote, ...] = ()
+    version: int = field(default=11, init=False)
 
     def __post_init__(self):
         validate_id(self.asset_id)
@@ -386,9 +416,11 @@ class MapPayload:
         if type(self.layers_initialized) is not bool:
             raise ValueError("Invalid layer initialization state")
         validate_map_contents(self.tokens, self.grid, self.layers, self.objects)
-        validate_vectors(self.shapes, self.portals)
+        validate_vectors(self.shapes, self.portals, self.notes)
         identifiers = [
-            v.id for v in (*self.tokens, *self.layers, *self.objects, *self.shapes, *self.portals)
+            v.id for v in (
+                *self.tokens, *self.layers, *self.objects, *self.shapes, *self.portals, *self.notes
+            )
         ]
         if len(set(identifiers)) != len(identifiers):
             raise ValueError("Повторяющийся UUID объекта карты")

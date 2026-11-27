@@ -261,7 +261,6 @@ class GameSheet(QWidget):
                 tile.commit_requested.connect(lambda raw, k=key: self.commit_requested.emit(k, raw))
                 tile.cancel_requested.connect(lambda k=key: self.cancel_requested.emit(k))
                 tile.values_changed.connect(self.values_changed)
-                tile.disclosure.toggled.connect(self._size_ability_tiles)
                 self.tiles[key] = tile
             assigned.update(ABILITIES)
             assigned.update(a + "_save_proficient" for a in ABILITIES)
@@ -453,17 +452,6 @@ class GameSheet(QWidget):
             self._reflow()
         return super().eventFilter(watched, event)
 
-    def _size_ability_tiles(self):
-        expanded_height = max(
-            (tile.minimumSizeHint().height() for tile in self.tiles.values()
-             if tile.disclosure.isChecked()),
-            default=0,
-        )
-        for tile in self.tiles.values():
-            tile.setFixedHeight(
-                expanded_height if tile.disclosure.isChecked() else tile.minimumSizeHint().height()
-            )
-
     def _reflow(self):
         width = self.scroll.viewport().width()
         for widget in (self.context, self.base_button, self.inventory):
@@ -489,7 +477,6 @@ class GameSheet(QWidget):
                 )
             for col in range(6):
                 self.ability_grid.setColumnStretch(col, 1 if col < columns else 0)
-        self._size_ability_tiles()
         self.header.reflow(width)
         resource_cols = 6 if width >= 810 else 3 if width >= 460 else 2
         visible = [

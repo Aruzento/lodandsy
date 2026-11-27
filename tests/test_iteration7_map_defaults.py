@@ -60,6 +60,7 @@ def test_token_context_without_actor_keeps_inventory_action_disabled(
         ("Открыть инвентарь", False),
         ("Копировать токен", True),
         ("Показать картинку", True),
+        ("Скрыть токен", True),
         ("Удалить токен", True),
     ]
     assert app.cards.get(card.id)

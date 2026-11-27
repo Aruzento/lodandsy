@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMenu,
     QProxyStyle,
+    QPushButton,
     QSizePolicy,
     QStyle,
     QToolBar,
@@ -34,6 +35,7 @@ LABELS = {
     "select": "Выбор",
     "pan": "Рука",
     "token": "Добавить токен",
+    "note": "Заметка",
     "vertices": "Редактировать вершины",
     "portal": "Портал",
     "fog_hide": "Кисть тумана",
@@ -46,6 +48,7 @@ HINTS = {
     "select": "Выбор · V. Двойной щелчок по порталу — перейти на карту.",
     "pan": "Рука · H. Перетащите карту. Space — временная панорама.",
     "token": "Щёлкните по карте, чтобы выбрать и добавить токен.",
+    "note": "Щёлкните по карте, чтобы привязать заметку или инвентарь. Маркер виден ведущему.",
     "vertices": "Выберите фигуру и перетащите вершину. Escape — отмена.",
     "portal": "Щёлкните по карте и выберите назначение портала.",
     "figure": "Фигуры видны игрокам поверх тумана. Enter — завершить, Escape — отмена.",
@@ -186,7 +189,7 @@ class MapToolState(QObject):
         if (
             watched is self.view.viewport()
             and kind == QEvent.Type.MouseButtonPress
-            and self.active == "token"
+            and self.active in {"token", "note"}
             and event.button() == Qt.MouseButton.LeftButton
         ):
             point = self.view.mapToScene(event.position().toPoint())
@@ -196,7 +199,9 @@ class MapToolState(QObject):
                 and 0 <= point.y() <= self.view.map_height
             ):
                 self.view.setFocus()
-                self.view.token_add_requested.emit(point.x(), point.y())
+                requested = (self.view.token_add_requested if self.active == "token"
+                             else self.view.note_add_requested)
+                requested.emit(point.x(), point.y())
             return True
         return False
 
@@ -247,6 +252,7 @@ class MapToolbars(QObject):
     grid_toggled = Signal(bool)
     editor_requested = Signal()
     presentation_requested = Signal()
+    show_token_requested = Signal()
 
     def __init__(self, view, fog, vectors, parent):
         super().__init__(parent)
@@ -262,7 +268,7 @@ class MapToolbars(QObject):
         groups = (
             ("select", "pan"),
             ("token",),
-            ("shape", "portal"),
+            ("shape", "portal", "note"),
             ("fog_hide", "fog_erase", "fog_polygon", "fog_select"),
         )
         icons = {
@@ -271,6 +277,7 @@ class MapToolbars(QObject):
             "token": "plus",
             "shape": "shape_circle",
             "portal": "portal",
+            "note": "card_note",
             "fog_hide": "brush",
             "fog_erase": "eraser",
             "fog_polygon": "fog_polygon",
@@ -313,6 +320,15 @@ class MapToolbars(QObject):
         measure_layout.addWidget(QLabel("Измерение расстояний"))
         self.measurement_mode = measurement_picker(self.measurement, self.view.measurement_mode)
         measure_layout.addWidget(self.measurement_mode)
+        self.hidden_token = QWidget(parent)
+        self.hidden_token.hide()
+        hidden_layout = QVBoxLayout(self.hidden_token)
+        hidden_layout.setContentsMargins(12, 8, 12, 8)
+        hidden_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        hidden_layout.addWidget(QLabel("Токен скрыт от игроков"))
+        show = QPushButton(icon("eye"), "Показать токен")
+        show.clicked.connect(self.show_token_requested)
+        hidden_layout.addWidget(show)
         layout = QVBoxLayout(self.context)
         layout.setContentsMargins(12, 8, 12, 8)
         layout.setSpacing(6)
@@ -410,7 +426,7 @@ class MapToolbars(QObject):
         self.actions["shape"].setToolTip(SHAPES[last] + " · M · Меню — другие фигуры")
         self.fog.setVisible(active in FOG)
         self.vectors.setVisible(self.state.vectors_enabled)
-        self.help.setVisible(active in {"pan", "token"})
+        self.help.setVisible(active in {"pan", "token", "note"})
         self.help.setText(HINTS.get(active, ""))
         self.vectors.notice.setText(HINTS.get(active, HINTS["figure"]))
         self.fog.brush_group.setVisible(active in {"fog_hide", "fog_erase"})

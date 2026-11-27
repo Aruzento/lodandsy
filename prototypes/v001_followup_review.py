@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from PySide6.QtCore import QPoint, QSettings, Qt
+from PySide6.QtCore import QSettings, Qt
 from PySide6.QtGui import QImage, QPainter, QPen, QTextCursor
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QLineEdit
@@ -61,10 +61,7 @@ def run(app, output, root):
         QTest.keyClick(picker.query, Qt.Key.Key_Return)
         assert "lodandsy://entity/" in edit.toHtml()
         controller.window_manager.focus_window(note_window.key, floating=True)
-        popup = editor.format_toolbar.format_menu
-        popup.popup(editor.format_toolbar.mapToGlobal(QPoint(0, editor.format_toolbar.height())))
-        capture(app, popup, output, "03-format-menu")
-        popup.close()
+        capture(app, editor.format_toolbar, output, "03-text-toolbar")
         capture(app, note_window.dock.floatingDockContainer(), output, "04-floating-note")
         note_window.close()
 

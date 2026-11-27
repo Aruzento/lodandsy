@@ -82,6 +82,7 @@ def main():
                             "docs/validation/2026-11-26-ui-system",
                             "docs/validation/2026-11-26-managed-projects",
                             "docs/validation/v001-followup",
+                            "docs/validation/v001-followup-r2",
                         )
                     )
                 )

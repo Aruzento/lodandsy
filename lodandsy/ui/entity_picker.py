@@ -3,7 +3,15 @@
 from html import escape
 
 from PySide6.QtCore import QAbstractListModel, QEvent, QModelIndex, Qt
-from PySide6.QtWidgets import QDialog, QLabel, QLineEdit, QListView, QVBoxLayout
+from PySide6.QtWidgets import (
+    QComboBox,
+    QDialog,
+    QLabel,
+    QLineEdit,
+    QListView,
+    QPushButton,
+    QVBoxLayout,
+)
 
 from lodandsy.ui.icons import icon, tree_card_icon
 
@@ -68,8 +76,11 @@ class ReferenceListModel(QAbstractListModel):
 
 
 class EntityPicker(QDialog):
+    CREATE = 2
+
     def __init__(
         self, queries, column=None, parent=None, current=None, *, predicate=None, click=False,
+        card_types=(), create_label=None,
     ):
         super().__init__(parent, Qt.WindowType.Popup)
         self.setObjectName("entityPicker")
@@ -96,8 +107,21 @@ class EntityPicker(QDialog):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
         layout.addWidget(self.query)
+        if card_types:
+            self.types = QComboBox()
+            self.types.setAccessibleName("Тип карточки")
+            self.types.addItem("Все типы", None)
+            for key, title in card_types:
+                self.types.addItem(tree_card_icon(key), title, key)
+            self.types.currentIndexChanged.connect(self._change_type)
+            layout.addWidget(self.types)
         layout.addWidget(self.list, 1)
         layout.addWidget(self.notice)
+        if create_label:
+            create = QPushButton(icon("plus"), create_label)
+            create.setAutoDefault(False)
+            create.clicked.connect(lambda: self.done(self.CREATE))
+            layout.addWidget(create)
         self.query.textChanged.connect(self._search)
         self.query.returnPressed.connect(self._accept_current)
         self.list.activated.connect(lambda index: self._accept_current())
@@ -121,6 +145,10 @@ class EntityPicker(QDialog):
         current = self.list.currentIndex().data(Qt.ItemDataRole.UserRole)
         self.model.filter(text)
         self._select(current)
+
+    def _change_type(self):
+        self.model.card_type = self.types.currentData()
+        self._search(self.query.text())
 
     def _remember_selection(self):
         self._selection_id = self.list.currentIndex().data(Qt.ItemDataRole.UserRole)

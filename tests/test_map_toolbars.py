@@ -1,6 +1,6 @@
 from PySide6.QtCore import QEvent, QPointF, QRect, Qt
 from PySide6.QtGui import QMouseEvent
-from PySide6.QtWidgets import QApplication, QComboBox, QInputDialog, QToolButton
+from PySide6.QtWidgets import QApplication, QComboBox, QToolButton
 
 from lodandsy.domain.map_document import MapPortal, MapShape
 from tests.test_map_tokens_grid import open_map
@@ -210,9 +210,16 @@ def test_brush_eraser_sticky_switch_cancels_and_space_pans(project, tmp_path, qt
 
 
 def test_token_tool_uses_clicked_world_position(project, tmp_path, qtbot, monkeypatch):
+    from lodandsy.ui.entity_picker import EntityPicker
+
     app, session, document, widget = ready(project, tmp_path, qtbot)
     card = app.create_card("Участник")
-    monkeypatch.setattr(QInputDialog, "getItem", lambda *args, **kwargs: (args[3][1], True))
+    def choose(picker):
+        picker.chosen_id = card.id
+        assert card.id in picker.model.ids
+        return 1
+
+    monkeypatch.setattr(EntityPicker, "exec", choose)
     widget.tools.actions["token"].trigger()
     point = widget.view.mapFromScene(QPointF(150, 160))
     expected = widget.view.mapToScene(point)

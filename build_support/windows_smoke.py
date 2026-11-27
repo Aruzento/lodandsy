@@ -28,7 +28,7 @@ from lodandsy.application.sqlite_project_store import SQLiteProjectStore
 from lodandsy.application.workspace_state import capture_workspace
 from lodandsy.domain.currency import CUSTOM, RATE_SCALE, CoinAmount
 from lodandsy.domain.item_categories import STANDARD_CATEGORIES
-from lodandsy.domain.map_document import MapGrid, MapPortal, MapShape
+from lodandsy.domain.map_document import MapGrid, MapNote, MapPortal, MapShape
 from lodandsy.domain.table_document import ColumnDefinition, RowRecord
 from lodandsy.ui.app_shell import AppShell
 from lodandsy.ui.game_labels import ATTRIBUTES_PAGE, MODIFIERS_PAGE
@@ -572,6 +572,18 @@ def main():
             app.processEvents()
             assert second.dock.floatingDockContainer().isWindow()
             assert project.save_current()
+            marker = controller.create_card("Заметка для ведущего", card_type="note")
+            controller.maps_service.put_vector(
+                document.id, MapNote(marker.id, "note", 180, 190),
+            )
+            controller.maps_service.edit_token(document.id, item_token.id, hidden=True, dead=True)
+            presentation = controller.maps.open_presentation(document.id)
+            wait(app, lambda: presentation.view._display_ready)
+            assert not presentation.view.vector_notes
+            assert item_token.id not in {item.token.id for item in presentation.view._tokens}
+            controller.maps.close_presentation(document.id)
+            assert project.save_current()
+            assert list(project.store.root.parent.glob("LODANDSY-before-Map11-*.lodbackup"))
             expected = project.store.load()
             print("Smoke: snapshot saved", flush=True)
             project._save_ui_state()
@@ -600,6 +612,7 @@ def main():
             economy_smoke(app, controller, project, root, args.screenshots)
             managed_projects_smoke(app, project, root, args.project_screenshots)
             result = {
+                "map11_hidden_tokens_and_gm_notes": True,
                 "player_presentation_shared_tiles_vector_fog": True,
                 "passed": True,
                 "frozen": bool(getattr(sys, "frozen", False)),

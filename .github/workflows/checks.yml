@@ -34,3 +34,4 @@ jobs:
           tests/test_incremental_save.py tests/test_save_coordinator.py
           tests/test_project_catalogue.py tests/test_project_migrations.py
           tests/test_v001_followup.py
+          tests/test_followup_r2.py tests/test_map_token_resize.py

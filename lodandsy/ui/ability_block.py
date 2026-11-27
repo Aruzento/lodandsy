@@ -51,6 +51,7 @@ class ProficiencyRow(QFrame):
         row.addWidget(self.toggle)
         self.caption = QLabel(title)
         self.caption.setMinimumWidth(0)
+        self.caption.setWordWrap(True)
         row.addWidget(self.caption, 1)
         self.result = QLabel("—")
         self.result.setMinimumWidth(30)
@@ -86,7 +87,7 @@ class AbilityBlock(QFrame):
         super().__init__()
         self.key = key
         self.setObjectName("abilityTile")
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 8, 10, 8)
         layout.setSpacing(2)
@@ -95,7 +96,7 @@ class AbilityBlock(QFrame):
         detail_layout = QVBoxLayout(details)
         detail_layout.setContentsMargins(0, 0, 0, 0)
         detail_layout.setSpacing(2)
-        self.disclosure = SheetDisclosure(ABILITY_NAMES[key], details, opened=True)
+        self.disclosure = SheetDisclosure(ABILITY_NAMES[key], details)
         heading.addWidget(self.disclosure, 1)
         self.result = QLabel("—")
         font = QFont(self.font())
@@ -133,7 +134,6 @@ class AbilityBlock(QFrame):
             self.rows[target] = row
             detail_layout.addWidget(row)
         layout.addWidget(details)
-        layout.addStretch(1)
 
     def render(self, card, actor, effective, drafts, active):
         score, modifier = effective.get(self.key), effective.get(self.key + "_mod")

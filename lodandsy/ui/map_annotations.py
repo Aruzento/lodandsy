@@ -1,8 +1,8 @@
 import math
 from html import escape
 
-from PySide6.QtCore import QEvent, QLineF, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PySide6.QtCore import QEvent, QLineF, QRect, QRectF, Qt, QTimer
+from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QGraphicsItem, QMenu
 from shiboken6 import isValid
 
@@ -74,6 +74,8 @@ class TokenItem(QGraphicsItem):
         self.object_card = False
         self.has_inventory = False
         self.transform_preview = None
+        self._muted_image = None
+        self._muted_key = None
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, view.role != "player")
         self.set_value(token, presentation, root, asset_path, provider)
 
@@ -142,11 +144,13 @@ class TokenItem(QGraphicsItem):
         self.update()
 
     def boundingRect(self):
-        size = self.transform_preview or self.presentation
-        width, height = (
-            size.cells_w * self.cell_size,
-            size.cells_h * self.cell_size,
-        )
+        preview = self.transform_preview
+        width, height = self.presentation.cells_w, self.presentation.cells_h
+        if preview is not None:
+            width = width if preview.cells_w is None else preview.cells_w
+            height = height if preview.cells_h is None else preview.cells_h
+        width *= self.cell_size
+        height *= self.cell_size
         return QRectF(-width / 2, -height / 2, width, height)
 
     def shape(self):
@@ -163,6 +167,8 @@ class TokenItem(QGraphicsItem):
         return QRectF(-size / 2, -size / 2, size, size)
 
     def paint(self, painter, option, widget=None):
+        if self.token.hidden and self.view.role == "player":
+            return
         rect = self.boundingRect()
         character = self.presentation.kind == "character"
         if character:
@@ -173,6 +179,8 @@ class TokenItem(QGraphicsItem):
             painter.setClipPath(self.shape())
         image = self.provider(self.root, self.asset_path) if self.asset_path else None
         if image is not None and not image.isNull():
+            if self.token.hidden or self.token.dead:
+                image = self._grayscale(image)
             x, y, w, h = self.presentation.crop
             source = QRectF(
                 x * image.width(), y * image.height(), w * image.width(), h * image.height()
@@ -193,6 +201,7 @@ class TokenItem(QGraphicsItem):
             painter.drawLine(rect.topLeft(), rect.bottomRight())
             painter.drawLine(rect.bottomLeft(), rect.topRight())
         painter.restore()
+        self._paint_status(painter, rect)
         selected = self.isSelected()
         tools = getattr(self.view, "vector_tools", None)
         if not character and (not selected or (tools and tools.selected_transform_item() is self)):
@@ -207,6 +216,40 @@ class TokenItem(QGraphicsItem):
             painter.drawEllipse(rect)
         else:
             painter.drawRect(rect)
+
+    def _grayscale(self, image):
+        key = image.cacheKey()
+        if key != self._muted_key:
+            gray = image.convertToFormat(QImage.Format.Format_Grayscale8).convertToFormat(
+                QImage.Format.Format_ARGB32_Premultiplied
+            )
+            if image.hasAlphaChannel():
+                painter = QPainter(gray)
+                painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+                painter.drawImage(0, 0, image)
+                painter.end()
+            self._muted_image, self._muted_key = gray, key
+        return self._muted_image
+
+    def _paint_status(self, painter, rect):
+        if not (self.token.hidden or self.token.dead):
+            return
+        transform = painter.worldTransform()
+        painter.save()
+        painter.resetTransform()
+        if self.token.dead:
+            center = transform.map(rect.center()).toPoint()
+            icon("token_dead", 24, stroke_width=2, tint="#f47778").paint(
+                painter, QRect(center.x() - 12, center.y() - 12, 24, 24)
+            )
+        if self.token.hidden:
+            edge = transform.map(rect.topRight()).toPoint()
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#202020"))
+            painter.drawEllipse(edge, 10, 10)
+            icon("eye_off").paint(painter, QRect(edge.x() - 8, edge.y() - 8, 16, 16))
+        painter.restore()
 
     def mousePressEvent(self, event):
         self._drag_origin = self.pos()
@@ -268,13 +311,24 @@ class TokenItem(QGraphicsItem):
             ("Открыть инвентарь", "inventory"),
             ("Копировать токен", "copy"),
             ("Показать картинку", "portrait"),
+            ("Показать токен" if self.token.hidden else "Скрыть токен",
+             "show" if self.token.hidden else "hide"),
+            ("Оживить" if self.token.dead else "Убить", "revive" if self.token.dead else "kill"),
             ("Удалить токен", "delete"),
         ]:
+            if name in {"kill", "revive"} and self.token.actor_id is None:
+                continue
             action = menu.addAction(label)
             action.setData(name)
             if name == "inventory":
                 action.setIcon(icon("inventory"))
                 action.setEnabled(self.has_inventory)
+            elif name == "portrait":
+                action.setEnabled(not self.token.hidden)
+            elif name in {"hide", "show"}:
+                action.setIcon(icon("eye_off" if name == "hide" else "eye"))
+            elif name in {"kill", "revive"}:
+                action.setIcon(icon("token_dead"))
         token_id = self.token.id
         event.accept()
         chosen = menu.exec(event.screenPos())

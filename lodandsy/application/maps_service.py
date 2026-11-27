@@ -30,6 +30,7 @@ def map_payload(document):
         document.fog,
         document.shapes,
         document.portals,
+        document.notes,
     )
 
 
@@ -229,6 +230,7 @@ class MapsService(QObject):
                 p.fog,
                 p.shapes,
                 p.portals,
+                p.notes,
             ),
         )
 
@@ -349,6 +351,7 @@ class MapsService(QObject):
             "fog",
             "shapes",
             "portals",
+            "notes",
         }:
             raise ValueError("Изменять ID или источник карты этой командой нельзя")
         before = self.get_map(map_id)
@@ -360,11 +363,16 @@ class MapsService(QObject):
             self._put_map(after, record=operation)
 
     def put_vector(self, map_id, value):
-        from lodandsy.domain.map_document import MapPortal, MapShape
+        from lodandsy.domain.map_document import MapNote, MapPortal, MapShape
 
-        if not isinstance(value, (MapShape, MapPortal)):
-            raise ValueError("Ожидается фигура или портал")
-        field = "shapes" if isinstance(value, MapShape) else "portals"
+        kinds = {
+            MapShape: ("shapes", "Изменить фигуру"),
+            MapPortal: ("portals", "Изменить портал"),
+            MapNote: ("notes", "Изменить заметку карты"),
+        }
+        if type(value) not in kinds:
+            raise ValueError("Ожидается фигура, портал или заметка")
+        field, command = kinds[type(value)]
         document = self.get_map(map_id)
         values = getattr(document, field)
         updated = tuple(value if v.id == value.id else v for v in values)
@@ -372,7 +380,7 @@ class MapsService(QObject):
             updated += (value,)
         self.edit_map(
             map_id,
-            command="Изменить фигуру" if field == "shapes" else "Изменить портал",
+            command=command,
             **{field: updated},
         )
 
@@ -380,9 +388,9 @@ class MapsService(QObject):
         document = self.get_map(map_id)
         changes = {
             field: tuple(v for v in getattr(document, field) if v.id != key)
-            for field in ("shapes", "portals")
+            for field in ("shapes", "portals", "notes")
         }
-        self.edit_map(map_id, command="Удалить фигуру или портал", **changes)
+        self.edit_map(map_id, command="Удалить отметку карты", **changes)
 
     def edit_fog(self, map_id, path, *, erase=False):
         from lodandsy.application.fog_geometry import apply_fog
@@ -421,6 +429,8 @@ class MapsService(QObject):
             "label_override",
             "image_override",
             "layer_id",
+            "hidden",
+            "dead",
         }:
             raise ValueError("Неподдерживаемые поля размещения")
         document = self.get_map(map_id)

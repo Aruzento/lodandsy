@@ -248,6 +248,40 @@ def test_rotate_from_center_and_resize_rotated_token_without_jumping(
     assert item.boundingRect().height() == height * reopened.view.grid.cell_size
 
 
+def test_rotate_new_object_with_inherited_dimensions(project, tmp_path, qtbot):
+    app, projects = project
+    document, viewer = open_map(app, projects, tmp_path, qtbot)
+    card = app.create_card("Ящик", card_type="object")
+    app.cards_service.update_card_fields(card.id, {"token_cells_w": 2})
+    token = app.actions.place_card(document.id, card.id, 200, 160)
+    other = app.actions.place_card(document.id, card.id, 380, 260)
+    assert token.cells_w is None and token.cells_h is None
+    view = viewer.view
+    view.select_token(token.id)
+    item, neighbor = view._tokens
+    shape = item.boundingRect()
+    center = item.scenePos()
+    start = rotation_handle(view, item.sceneTransform(), shape)
+    end = center + QTransform().rotate(42).map(start - center)
+    stack = app.maps_service.undo_stack(document.id)
+    index = stack.index()
+    world_mouse(view, QEvent.Type.MouseButtonPress, start)
+    world_mouse(view, QEvent.Type.MouseMove, end)
+    assert item.boundingRect() == shape and neighbor.isVisible() and item.isSelected()
+    assert item.rotation() == pytest.approx(42)
+    assert app.maps_service.get_map(document.id).tokens == (token, other)
+    world_mouse(view, QEvent.Type.MouseButtonRelease, end)
+    turned, unchanged = app.maps_service.get_map(document.id).tokens
+    assert turned.rotation == pytest.approx(42) and unchanged == other
+    assert (turned.cells_w, turned.cells_h) == (None, None)
+    assert stack.index() == index + 1
+    stack.undo()
+    assert app.maps_service.get_map(document.id).tokens == (token, other)
+    stack.redo()
+    assert projects.save_current()
+    assert projects.store.load().maps[0].tokens == (turned, other)
+
+
 def test_rotated_token_moves_and_its_swept_footprint_respects_fog(project, tmp_path, qtbot):
     app, projects = project
     app.window.show()

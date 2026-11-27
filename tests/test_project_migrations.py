@@ -18,6 +18,7 @@ from lodandsy.application.sqlite_project_store import (
     SQLiteProjectStore,
     connect_database,
 )
+from lodandsy.domain.map_document import MapNote
 from tests.test_map_tokens_grid import open_map
 
 pytest_plugins = ["tests.project_fixture"]
@@ -93,6 +94,61 @@ def test_map10_upgrade_backs_up_existing_world_and_reopens_without_rewriting(
                 "SELECT payload_version FROM map_document WHERE id=?", (key,),
             ).fetchone() == (10,)
     assert tuple(tmp_path.glob("LODANDSY-before-Map10-*.lodbackup")) == (backup,)
+
+
+@pytest.mark.parametrize("version", [9, 10])
+@pytest.mark.parametrize("fail", [False, True])
+def test_map11_upgrade_checks_backup_and_preserves_older_world(
+    project, tmp_path, qtbot, monkeypatch, version, fail,
+):
+    app, projects = project
+    document, _ = open_map(app, projects, tmp_path, qtbot)
+    card = app.create_card("Заслон", card_type="object")
+    note = app.create_card("Маршрут", card_type="note")
+    token = app.actions.place_card(
+        document.id, card.id, 171, 128, rotation=23.125 if version == 10 else 0,
+    )
+    other = app.maps_service.create_map("Вторая карта", document.asset_id)
+    assert projects.save_current()
+    store = projects.store
+    original = store.load()
+    flags = replace(token, hidden=True, dead=True)
+    marker = MapNote(note.id, "note", 90.25, 91.5, "Опасность")
+    upgraded = replace(original, revision=original.revision + 1, maps=tuple(
+        replace(m, tokens=(flags,), notes=(marker,)) if m.id == document.id else m
+        for m in original.maps
+    ))
+    before = hashlib.sha256(store.path.read_bytes()).hexdigest()
+    if fail:
+        def refuse_restore(*args, **kwargs):
+            raise OSError("injected restore failure")
+
+        monkeypatch.setattr(store, "restore_with_snapshot", refuse_restore)
+        with pytest.raises(OSError, match="injected restore failure"):
+            store.save(upgraded)
+        assert hashlib.sha256(store.path.read_bytes()).hexdigest() == before
+        assert store.load() == original
+        return
+    assert store.load() == original
+    assert hashlib.sha256(store.path.read_bytes()).hexdigest() == before
+    store.save(upgraded)
+    with closing(connect_database(store.path, readonly=True)) as connection:
+        versions = dict(connection.execute("SELECT id,payload_version FROM map_document"))
+        assert versions == {document.id: 11, other.id: 9}
+        payload, = connection.execute(
+            "SELECT placement FROM map_token WHERE id=?", (token.id,),
+        ).fetchone()
+        assert json.loads(payload)["hidden"] is True
+        assert json.loads(payload)["dead"] is True
+    archived, = tmp_path.glob("LODANDSY-before-Map11-*.lodbackup")
+    with closing(SQLiteProjectStore.restore(archived, tmp_path / "pre-R2")) as restored:
+        assert restored.project_id == store.project_id and restored.load() == original
+    world = store.root
+    store.close()
+    with closing(SQLiteProjectStore.open(world)) as reopened:
+        assert reopened.load() == upgraded
+        reopened.save(replace(upgraded, revision=upgraded.revision + 1))
+    assert tuple(tmp_path.glob("LODANDSY-before-Map11-*.lodbackup")) == (archived,)
 
 
 @pytest.mark.parametrize("stage", ["backup", "verification"])

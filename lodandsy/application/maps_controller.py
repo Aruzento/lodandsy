@@ -13,7 +13,7 @@ from lodandsy.application.background_tasks import BackgroundTasks
 from lodandsy.application.fog_geometry import state_path
 from lodandsy.application.map_pyramid import MAX_SOURCE_BYTES, ensure_pyramid
 from lodandsy.application.map_tiles import MapTiles
-from lodandsy.domain.map_document import MapPortal, resolve_token
+from lodandsy.domain.map_document import MapNote, MapPortal, resolve_token
 from lodandsy.ui.entity_picker import EntityPicker
 from lodandsy.ui.map_editor import MapEditorWidget
 from lodandsy.ui.map_portrait import MapPortrait
@@ -51,6 +51,11 @@ class MapsController(QObject):
         self.tasks = BackgroundTasks(self, workers=2, name="map-images")
         self.request_card_creation = request_card_creation
         self.queries = queries
+        self.choose_note_target = lambda map_id, previous: None
+        self.open_note_target = lambda kind, key: None
+        self.note_target_info = lambda kind, key: None
+        self.token_card_types = ()
+        self.choose_token_actor = lambda card: (None, True)
         self.tiles = MapTiles(self)
         self._cancel = Event()
         self._decode_cancels = set()
@@ -76,6 +81,7 @@ class MapsController(QObject):
         service.map_deleted.connect(lambda key: self.windows.close_window(f"map:{key}"))
         service.map_deleted.connect(lambda key: self.windows.close_window(f"map-editor:{key}"))
         service.core.replaced.connect(self.reset)
+        queries.changed.connect(self._note_references_changed)
         cards.card_created.connect(self.card_changed)
         cards.card_changed.connect(self.card_changed)
         cards.actor_changed.connect(self._actor_changed)
@@ -303,11 +309,23 @@ class MapsController(QObject):
 
                 def put_vector(value):
                     document = self.service.get_map(map_id)
-                    created = all(v.id != value.id for v in (*document.shapes, *document.portals))
+                    created = all(
+                        v.id != value.id
+                        for v in (*document.shapes, *document.portals, *document.notes)
+                    )
                     if self._put_vector(map_id, value) and created:
                         widget.tool_state.activate("select")
 
                 widget.vector_tools.committed.connect(put_vector)
+                widget.vector_tools.note_action.connect(
+                    lambda key, action: self._note_action(map_id, key, action)
+                )
+                widget.view.note_add_requested.connect(
+                    lambda x, y: self._place_note(map_id, x, y, widget)
+                )
+                widget.tools.show_token_requested.connect(
+                    lambda: self._token_action(map_id, widget.view.selected_token_id(), "show")
+                )
                 widget.vector_tools.token_transformed.connect(
                     lambda before, after: self._transform_token(map_id, before, after)
                 )
@@ -474,6 +492,9 @@ class MapsController(QObject):
             overlay.close()
 
     def _show_portrait(self, map_id, token):
+        if token.hidden:
+            self.window.show_notice("Сначала покажите токен игрокам")
+            return
         window = self.windows.find_window("map:" + map_id)
         if not window:
             return
@@ -537,6 +558,7 @@ class MapsController(QObject):
         try:
             valid = (
                 token is not None
+                and not token.hidden
                 and resolve_token(token, self.cards.get_card(token.card_id)).asset_id == asset_id
                 and asset_id in self.resources.assets
             )
@@ -751,6 +773,7 @@ class MapsController(QObject):
             if not window:
                 continue
             widget = window.widget()
+            selected_before = self._selected_token(widget.view)
             widget.view.portal_labels = portal_labels.copy()
             editor = isinstance(widget, MapEditorWidget)
             window.setWindowTitle(("Редактор карты · " if editor else "") + document.title)
@@ -765,9 +788,14 @@ class MapsController(QObject):
             )
             if editor:
                 widget.set_document(document)
+            else:
+                self._update_note_labels(widget.view)
             selected = widget.view.selected_token_id()
             if selected:
                 token = next((t for t in document.tokens if t.id == selected), None)
+                if (not editor and token and selected_before
+                        and token.hidden != selected_before.hidden):
+                    self.inspector_context_changed.emit(key)
                 if token and token.actor_id:
                     self.update_actor_scale(
                         token.card_id, token.actor_id, document.grid.feet_per_cell
@@ -779,12 +807,86 @@ class MapsController(QObject):
             self._measurement(key, view.measurement, view.measurement_mode)
 
     @staticmethod
+    def _selected_token(view):
+        token_id = view.selected_token_id()
+        return next((item.token for item in view._tokens if item.token.id == token_id), None)
+
+    def _update_note_labels(self, view):
+        labels = {}
+        for note in view.vector_notes:
+            target = self.note_target_info(note.target_kind, note.target_id)
+            label = note.label or (target.title if target else "Документ недоступен")
+            if target is None and note.label:
+                label += " · документ недоступен"
+            labels[note.id] = (label, target is not None)
+        view.note_labels = labels
+
+    def _note_references_changed(self, keys, fields):
+        if not fields & {"title", "deleted", "created"}:
+            return
+        for key in self.windows.window_keys():
+            if key.startswith("map:") and (window := self.windows.find_window(key)):
+                view = window.widget().view
+                if any(note.target_id in keys for note in view.vector_notes):
+                    self._update_note_labels(view)
+                    view.viewport().update()
+
+    def _place_note(self, map_id, x, y, widget):
+        generation = self.service.core.generation
+        try:
+            target = self.choose_note_target(map_id, None)
+            if (target is None or generation != self.service.core.generation
+                    or self.service.find_map(map_id) is None):
+                return
+            kind, key = target
+            note = MapNote(key, kind, x, y)
+            if self._put_vector(map_id, note):
+                window = self.windows.find_window("map:" + map_id)
+                if window and window.widget() is widget:
+                    widget.tool_state.activate("select")
+                    widget.vector_tools.select(note)
+        except ValueError as error:
+            self._error(str(error))
+
+    def _note_action(self, map_id, key, action):
+        document = self.service.find_map(map_id)
+        note = next((v for v in document.notes if v.id == key), None) if document else None
+        if note is None:
+            return
+        if action == "open":
+            return self.open_note_target(note.target_kind, note.target_id)
+        if action == "delete":
+            self.service.delete_vector(map_id, key)
+            return
+        generation = self.service.core.generation
+        changes = {}
+        try:
+            if action == "rebind" and (target := self.choose_note_target(map_id, note)):
+                changes.update(target_kind=target[0], target_id=target[1])
+            elif action == "rename":
+                title, accepted = QInputDialog.getText(
+                    self.window, "Переименовать маркер", "Подпись", text=note.label,
+                )
+                if accepted:
+                    changes["label"] = title.strip()
+            if changes and generation == self.service.core.generation:
+                current = self.service.find_map(map_id)
+                if current and note in current.notes:
+                    self._put_vector(map_id, replace(note, **changes))
+                else:
+                    self._error("Маркер изменён. Повторите действие.")
+        except ValueError as error:
+            self._error(str(error))
+
+    @staticmethod
     def _release_inspector_pages(widget):
         for page in (
             widget.tools.context,
             widget.vector_tools.inspector,
             widget.vector_tools.portal_inspector,
+            widget.vector_tools.note_inspector,
             widget.tools.measurement,
+            widget.tools.hidden_token,
         ):
             page.hide()
             page.setParent(widget)
@@ -798,20 +900,22 @@ class MapsController(QObject):
             self.show_inspector_control(None)
             return False
         widget = window.widget()
-        token_id = widget.view.selected_token_id() if widget.tool_state.active == "select" else None
-        self.show_inspector_control(widget.tools.measurement if token_id else None)
+        token = self._selected_token(widget.view) if widget.tool_state.active == "select" else None
+        self.show_inspector_control(
+            widget.tools.measurement if token and not token.hidden else None
+        )
         if widget.tool_state.active != "select":
             self.show_inspector_page(widget.tools.context)
             return True
         if page := widget.vector_tools.inspector_page():
             self.show_inspector_page(page)
             return True
-        document = self.service.find_map(window_key[4:]) if token_id else None
-        if document is not None:
-            token = next((token for token in document.tokens if token.id == token_id), None)
-            if token and token.actor_id:
-                self.show_actor(token.card_id, token.actor_id, document.grid.feet_per_cell)
-                return True
+        if token and token.hidden:
+            self.show_inspector_page(widget.tools.hidden_token)
+            return True
+        if token and token.actor_id:
+            self.show_actor(token.card_id, token.actor_id, widget.view.grid.feet_per_cell)
+            return True
         return False
 
     def focus_token(self, map_id, token_id):
@@ -985,24 +1089,37 @@ class MapsController(QObject):
                 self._refresh_map(map_id)
 
     def _add_token(self, map_id, x, y):
-        choices = ["Новая карточка…"]
-        cards = self.cards.all()
-        choices += [f"{c.title} · {c.id[:8]}" for c in cards]
-        choice, ok = QInputDialog.getItem(
-            self.window, "Разместить карточку", "Карточка:", choices, 0, False
+        generation = self.service.core.generation
+        picker = EntityPicker(
+            self.queries, SimpleNamespace(ref_kind="card"), self.window, click=True,
+            card_types=self.token_card_types,
+            create_label="Новая карточка…",
         )
-        if not ok:
+        picker.setWindowTitle("Добавить токен")
+        result, key = picker.exec(), picker.chosen_id
+        picker.deleteLater()
+        if not result or generation != self.service.core.generation:
             return
-        if choices.index(choice):
-            self.service.add_token(
-                map_id, cards[choices.index(choice) - 1].id, max(0, x), max(0, y)
-            )
-        else:
-            title, kind, player, ok = self.request_card_creation(self.window)
-            if ok:
-                self.create_card_token(
-                    map_id, None, title, max(0, x), max(0, y), card_type=kind, player=player
-                )
+        try:
+            x, y = max(0, x), max(0, y)
+            if result == EntityPicker.CREATE:
+                title, kind, player, ok = self.request_card_creation(self.window)
+                if ok and generation == self.service.core.generation:
+                    self.create_card_token(map_id, None, title, x, y, card_type=kind, player=player)
+                return
+            card = self.cards.get_card(key)
+            actor_id, accepted = self.choose_token_actor(card)
+            if not accepted or generation != self.service.core.generation:
+                return
+            if self.service.find_map(map_id) is not None:
+                token = self.service.add_token(map_id, key, x, y, actor_id=actor_id)
+                window = self.windows.find_window("map:" + map_id)
+                if window:
+                    viewer = window.widget()
+                    viewer.tool_state.activate("select")
+                    viewer.view.select_token(token.id)
+        except ValueError as error:
+            self._error(str(error))
 
     def create_card_token(
         self, map_id, source, title, x, y, *, card_type="character", player=False
@@ -1027,7 +1144,10 @@ class MapsController(QObject):
             )
             window = self.windows.find_window(f"map:{map_id}")
             if window:
-                for item in window.widget().view._tokens:
+                viewer = window.widget()
+                if viewer.tool_state.active == "token":
+                    viewer.tool_state.activate("select")
+                for item in viewer.view._tokens:
                     item.setSelected(item.token.id == token.id)
             return True
 
@@ -1048,6 +1168,16 @@ class MapsController(QObject):
             self.service.delete_token(map_id, token_id)
         elif action == "portrait":
             self._show_portrait(map_id, token)
+        elif action in {"hide", "show", "kill", "revive"}:
+            changes = {
+                "hide": ("Скрыть токен", {"hidden": True}),
+                "show": ("Показать токен", {"hidden": False}),
+                "kill": ("Убить", {"dead": True}),
+                "revive": ("Оживить", {"dead": False}),
+            }
+            title, fields = changes[action]
+            if "dead" not in fields or token.actor_id:
+                self.service.edit_token(map_id, token.id, command=title, **fields)
         elif action == "copy":
             try:
                 self.actions.copy_token(map_id, token_id)

@@ -25,6 +25,7 @@ from lodandsy.application.tables_controller import TablesController
 from lodandsy.application.tables_service import TablesService
 from lodandsy.domain.actor_state import ActorRef
 from lodandsy.domain.card_collection import CardCollection
+from lodandsy.domain.card_schema import ACTOR_TYPES, CARD_TYPES
 from lodandsy.domain.treasure import CatalogItem
 from lodandsy.ui.card_search_dialog import CardSearchDialog
 from lodandsy.ui.currency_editor import CurrencyEditor
@@ -130,6 +131,11 @@ class AppController:
 
         self.maps.show_inspector_page = show_map_panel
         self.maps.show_inspector_control = window.inspector_panel.show_context_control
+        self.maps.choose_note_target = self._choose_map_note_target
+        self.maps.open_note_target = self._open_map_note_target
+        self.maps.note_target_info = self._map_note_target_info
+        self.maps.token_card_types = tuple((kind, info.title) for kind, info in CARD_TYPES.items())
+        self.maps.choose_token_actor = self._choose_token_actor
         self.maps.show_actor = lambda card, actor, scale=None: self.inspector_binding.show_actor(
             ActorRef(card, actor), feet_per_cell=scale
         )
@@ -298,41 +304,65 @@ class AppController:
         self.window.tree_panel.edit_folder(folder.id)
         return folder
 
-    def open_note_tool(self, action):
-        if self.resources.store is None:
-            self.window.show_notice("Сначала создайте или откройте проект")
-            return None
+    def _choose_map_note_target(self, map_id, previous=None):
         generation = self.core.generation
-        if action == "new":
+        choices = ("Текстовая заметка", "Инвентарь")
+        choice, accepted = QInputDialog.getItem(
+            self.window, "Заметка на карте", "Содержимое", choices,
+            int(previous is not None and previous.target_kind == "inventory"), False,
+        )
+        if not accepted or generation != self.core.generation:
+            return None
+        inventory = choice == choices[1]
+        kind = "inventory" if inventory else "note"
+        picker = EntityPicker(
+            self.references,
+            SimpleNamespace(ref_kind="table" if inventory else "card",
+                            ref_card_type=None if inventory else "note"),
+            self.window,
+            current=previous.target_id if previous and previous.target_kind == kind else None,
+            predicate=self.actions.inventory_owner if inventory else None,
+            click=True,
+            create_label=None if inventory else "Создать заметку…",
+        )
+        picker.setWindowTitle("Выбрать инвентарь" if inventory else "Выбрать заметку")
+        result = picker.exec()
+        key = picker.chosen_id
+        picker.deleteLater()
+        if not result or generation != self.core.generation:
+            return None
+        if result == EntityPicker.CREATE and not inventory:
             title, accepted = QInputDialog.getText(self.window, "Новая заметка", "Название")
-            if not accepted or not title.strip() or generation != self.core.generation:
+            if (not accepted or not title.strip() or generation != self.core.generation
+                    or self.maps_service.find_map(map_id) is None):
                 return None
-            try:
-                key = self.create_card(title, card_type="note").id
-            except ValueError as error:
-                self.window.show_notice(str(error))
-                return None
-        else:
-            inventory = action == "inventory"
-            picker = EntityPicker(
-                self.references,
-                SimpleNamespace(ref_kind="table" if inventory else "card",
-                                ref_card_type=None if inventory else "note"),
-                self.window,
-                predicate=self.actions.inventory_owner if inventory else None,
-            )
-            picker.setWindowTitle("Выбрать инвентарь" if inventory else "Выбрать заметку")
-            accepted = picker.exec()
-            key = picker.chosen_id
-            picker.deleteLater()
-            if not accepted or generation != self.core.generation or key is None:
-                return None
-            if inventory:
-                if self.actions.inventory_owner(key) is not None:
-                    return self.tables.open_table(key, floating=True)
-                return None
-            if self.references.resolve(key, kind="card", card_type="note") is None:
-                return None
+            key = self.create_card(title, card_type="note").id
+        return (kind, key) if self._map_note_target_info(kind, key) is not None else None
+
+    def _choose_token_actor(self, card):
+        if card.card_type not in ACTOR_TYPES or not card.actors or card.default_actor_id:
+            return None, True
+        actors = [(actor.id, f"{actor.name} · {actor.id[:8]}") for actor in card.actors]
+        if not card.value("player"):
+            actors.insert(0, (None, "Новый участник"))
+        labels = [label for _, label in actors]
+        label, accepted = QInputDialog.getItem(
+            self.window, "Участник", "Кого разместить", labels, 0, False,
+        )
+        return (actors[labels.index(label)][0], True) if accepted else (None, False)
+
+    def _map_note_target_info(self, kind, key):
+        if kind == "inventory":
+            target = self.references.resolve(key, kind="table")
+            return target if target and self.actions.inventory_owner(key) is not None else None
+        return self.references.resolve(key, kind="card", card_type="note")
+
+    def _open_map_note_target(self, kind, key):
+        if self._map_note_target_info(kind, key) is None:
+            self.window.show_notice("Документ заметки удалён или недоступен. Измените привязку.")
+            return None
+        if kind == "inventory":
+            return self.tables.open_table(key, floating=True)
         self.open_card_editor(key)
         return self.window_manager.focus_window(self.card_editor_window_key(key), floating=True)
 

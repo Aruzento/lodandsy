@@ -97,7 +97,9 @@ def test_compact_header_responsive_layout_and_inspector_has_no_rich_fields(proje
     assert not hasattr(preview, "header_scroll")
     assert preview.minimumSizeHint().width() <= 400
     assert not hasattr(preview.portrait_panel, "caption")
-    assert editor.format_toolbar.format_menu.actions()
+    assert {"clear", "strike", "bullet", "numbered", "quote", "code"} <= set(
+        editor.format_toolbar.actions_by_name
+    )
     app.cards_service.select_card(card.id)
     assert not set(app.window.inspector_panel.field_form.controls) & {
         "notes",

@@ -128,6 +128,7 @@ def module_payload(document):
             document.fog,
             document.shapes,
             document.portals,
+            document.notes,
         )
     if isinstance(document, TableDocument):
         return TablePayload(document.columns, document.rows, document.wallet)
@@ -153,6 +154,7 @@ def _module_document(entity, payload):
             payload.fog,
             payload.shapes,
             payload.portals,
+            payload.notes,
         )
     if entity.kind == "table":
         return TableDocument(entity.title, key, payload.columns, payload.rows, payload.wallet)

@@ -34,6 +34,7 @@ from lodandsy.domain.map_document import (
     MapDocument,
     MapGrid,
     MapLayer,
+    MapNote,
     MapPortal,
     MapShape,
     PlacedAssetObject,
@@ -53,6 +54,7 @@ ARCHIVE_STAGE = "Создание резервного архива"
 RESTORE_STAGE = "Восстановление резервной копии"
 VERIFY_STAGE = "Пробное восстановление Map10"
 TRANSFORM_MAP_VERSION = 10
+ANNOTATION_MAP_VERSION = 11
 TOKEN_FIELDS = {
     "x", "y", "cells_w", "cells_h", "z", "label_override", "image_override", "kind_override",
     "layer_id",
@@ -320,11 +322,23 @@ def _entity_delta(before, after, rewrite_all):
 def _map_write_version(document, previous, changed):
     if not changed and previous is not None:
         return previous
+    if previous == ANNOTATION_MAP_VERSION or document.notes or any(
+        token.hidden or token.dead for token in document.tokens
+    ):
+        return ANNOTATION_MAP_VERSION
     if previous == TRANSFORM_MAP_VERSION or any(
         token.uses_object_transform for token in document.tokens
     ):
         return TRANSFORM_MAP_VERSION
     return 9
+
+
+def _map_token_fields(version):
+    if version == ANNOTATION_MAP_VERSION:
+        return TOKEN_FIELDS | {"rotation", "hidden", "dead"}
+    if version == TRANSFORM_MAP_VERSION:
+        return TOKEN_FIELDS | {"rotation"}
+    return TOKEN_FIELDS
 
 
 def _write_cards(connection, cards):
@@ -343,6 +357,13 @@ def _write_cards(connection, cards):
 def _write_maps(connection, maps, versions):
     for document in maps:
         version = versions[document.id]
+        vector_data = {
+            "objects": [asdict(o) for o in document.objects],
+            "shapes": [asdict(v) for v in document.shapes],
+            "portals": [asdict(v) for v in document.portals],
+        }
+        if version == ANNOTATION_MAP_VERSION:
+            vector_data["notes"] = [asdict(v) for v in document.notes]
         connection.execute(
             "INSERT INTO map_document VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
             "asset_id=excluded.asset_id,payload_version=excluded.payload_version,"
@@ -352,19 +373,12 @@ def _write_maps(connection, maps, versions):
                 document.id, document.asset_id, version,
                 json.dumps(asdict(document.grid)),
                 json.dumps([asdict(layer) for layer in document.layers], ensure_ascii=False),
-                json.dumps(
-                    {
-                        "objects": [asdict(o) for o in document.objects],
-                        "shapes": [asdict(v) for v in document.shapes],
-                        "portals": [asdict(v) for v in document.portals],
-                    },
-                    ensure_ascii=False,
-                ),
+                json.dumps(vector_data, ensure_ascii=False),
                 int(document.layers_initialized),
                 json.dumps([asdict(r) for r in document.fog.regions]),
             ),
         )
-        fields = TOKEN_FIELDS | {"rotation"} if version == TRANSFORM_MAP_VERSION else TOKEN_FIELDS
+        fields = _map_token_fields(version)
         connection.executemany(
             "INSERT INTO map_token VALUES(?,?,?,?,?,?)",
             (
@@ -784,7 +798,7 @@ class SQLiteProjectStore:
         maps, tables = [], []
         try:
             versions = dict(connection.execute("SELECT id,payload_version FROM map_document"))
-            if any(v not in (7, 8, 9, TRANSFORM_MAP_VERSION) for v in versions.values()):
+            if any(v not in (7, 8, 9, 10, ANNOTATION_MAP_VERSION) for v in versions.values()):
                 raise ValueError("Unsupported Map version")
             token_rows = {}
             for key, map_id, ordinal, card_id, actor_id, placement in connection.execute(
@@ -795,8 +809,8 @@ class SQLiteProjectStore:
                 if ordinal != len(entries):
                     raise ValueError("Non-contiguous token order")
                 values = json.loads(placement)
-                extended = versions[map_id] == TRANSFORM_MAP_VERSION
-                fields = TOKEN_FIELDS | {"rotation"} if extended else TOKEN_FIELDS
+                extended = versions[map_id] >= TRANSFORM_MAP_VERSION
+                fields = _map_token_fields(versions[map_id])
                 if not isinstance(values, dict) or values.keys() != fields:
                     raise ValueError("Invalid Token placement fields")
                 token = TokenInstance(card_id, id=key, actor_id=actor_id, **values)
@@ -821,11 +835,10 @@ class SQLiteProjectStore:
                 vector_data = json.loads(objects)
                 if version == 7:
                     vector_data = {"objects": vector_data, "shapes": [], "portals": []}
-                if not isinstance(vector_data, dict) or set(vector_data) != {
-                    "objects",
-                    "shapes",
-                    "portals",
-                }:
+                fields = {"objects", "shapes", "portals"}
+                if version == ANNOTATION_MAP_VERSION:
+                    fields.add("notes")
+                if not isinstance(vector_data, dict) or vector_data.keys() != fields:
                     raise ValueError("Invalid map vectors")
                 grid = json.loads(grid)
                 if not isinstance(grid, dict):
@@ -846,6 +859,7 @@ class SQLiteProjectStore:
                             for v in vector_data["shapes"]
                         ),
                         tuple(MapPortal(**v) for v in vector_data["portals"]),
+                        tuple(MapNote(**v) for v in vector_data.get("notes", ())),
                     )
                 )
             columns, rows, cells = {}, {}, {}
@@ -932,14 +946,15 @@ class SQLiteProjectStore:
                 for document in snapshot.maps
             }
             old_versions = previous.map_versions
-            first_extended = current > 0 and TRANSFORM_MAP_VERSION not in old_versions.values()
-            upgrading = any(
-                version == TRANSFORM_MAP_VERSION
-                and (first_extended or old_versions.get(key, version) < version)
-                for key, version in versions.items()
+            previous_max = max(old_versions.values(), default=9)
+            upgrade_version = max(
+                (version for key, version in versions.items()
+                 if current > 0 and version >= TRANSFORM_MAP_VERSION
+                 and version > old_versions.get(key, previous_max)),
+                default=0,
             )
-            if upgrading:
-                self._backup_before_map_upgrade(previous)
+            if upgrade_version:
+                self._backup_before_map_upgrade(previous, upgrade_version)
 
             prior_assets = {asset.id: asset for asset in previous.snapshot.assets}
             for asset in snapshot.assets:
@@ -949,7 +964,7 @@ class SQLiteProjectStore:
             self._write_delta(
                 connection, previous, snapshot, removed, changed, versions, _rewrite_all,
             )
-            if upgrading:
+            if upgrade_version:
                 written, _ = self._load_modules(connection)
                 if (
                     {document.id: document for document in written}
@@ -957,7 +972,7 @@ class SQLiteProjectStore:
                     or connection.execute("PRAGMA quick_check").fetchone() != ("ok",)
                     or connection.execute("PRAGMA foreign_key_check").fetchone() is not None
                 ):
-                    raise ProjectError("Проверка перехода на Map10 не пройдена")
+                    raise ProjectError(f"Проверка перехода на Map{upgrade_version} не пройдена")
             updated = connection.execute(
                 "UPDATE metadata SET revision=? WHERE project_id=? AND revision=?",
                 (snapshot.revision, self.project_id, current),
@@ -1062,14 +1077,15 @@ class SQLiteProjectStore:
                 ),
             )
 
-    def _backup_before_map_upgrade(self, previous):
-        archive = self.root.parent / f"LODANDSY-before-Map10-{uuid4().hex[:12]}.lodbackup"
+    def _backup_before_map_upgrade(self, previous, version):
+        archive = self.root.parent / f"LODANDSY-before-Map{version}-{uuid4().hex[:12]}.lodbackup"
+        verify_stage = VERIFY_STAGE if version == 10 else f"Пробное восстановление Map{version}"
         temporary_root = Path(tempfile.gettempdir()).resolve()
         size = self.backup(archive, verification_root=temporary_root)
         with ExitStack() as staging:
-            with _disk_stage(temporary_root, VERIFY_STAGE, size):
+            with _disk_stage(temporary_root, verify_stage, size):
                 temporary = staging.enter_context(tempfile.TemporaryDirectory(
-                    prefix="lodandsy-verify-map10-", dir=temporary_root,
+                    prefix=f"lodandsy-verify-map{version}-", dir=temporary_root,
                 ))
             target = Path(temporary) / "world"
             restored, verified = self.restore_with_snapshot(archive, target, verification=True)
@@ -1077,7 +1093,7 @@ class SQLiteProjectStore:
                 if restored.project_id != self.project_id or not previous.matches(
                     verified.snapshot, verified.map_versions,
                 ):
-                    raise ProjectError("Не прошла проверка резервной копии перед Map10")
+                    raise ProjectError(f"Не прошла проверка резервной копии перед Map{version}")
 
     @project_operation
     def import_asset(

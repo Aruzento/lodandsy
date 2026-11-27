@@ -86,6 +86,7 @@ class MapView(QGraphicsView):
     token_action = Signal(str, str)
     token_selected = Signal(str)
     token_add_requested = Signal(float, float)
+    note_add_requested = Signal(float, float)
     tool_changed = Signal(str)
     model_changed = Signal()
 
@@ -105,6 +106,7 @@ class MapView(QGraphicsView):
         self._fog_snap = False
         self.vector_shapes = ()
         self.vector_portals = ()
+        self.vector_notes = ()
         self.measurement = None
         self.measurement_mode = QSettings().value("maps/measurement", "grid")
         if self.measurement_mode not in {"grid", "geometry"}:
@@ -186,9 +188,11 @@ class MapView(QGraphicsView):
             painter.setPen(QPen(QColor("#dededb"), 0))
             painter.setBrush(QColor(180, 180, 180, 50))
             painter.drawPath(self._fog_preview)
+            fog_tools = self.tool_state.fog if self.role == "viewer" else None
+            if fog_tools is not None:
+                painter.drawPath(fog_tools.brush_preview(rect))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(self._fog_selection)
-            fog_tools = self.tool_state.fog if self.role == "viewer" else None
             outline = fog_tools.brush_outline() if fog_tools is not None else None
             if outline is not None:
                 painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -370,9 +374,12 @@ class MapView(QGraphicsView):
             self._fog_state = document.fog
         self.vector_shapes = document.shapes
         self.vector_portals = document.portals if self.role != "player" else ()
+        self.vector_notes = document.notes if self.role == "viewer" else ()
         self.grid = document.grid
         previous = {item.token.id: item for item in self._tokens}
-        current_ids = {token.id for token in document.tokens}
+        tokens = (tuple(token for token in document.tokens if not token.hidden)
+                  if self.role == "player" else document.tokens)
+        current_ids = {token.id for token in tokens}
         for key in previous.keys() - current_ids:
             self.scene().removeItem(previous[key])
         rect = QRectF(0, 0, self.map_width, self.map_height)
@@ -382,7 +389,7 @@ class MapView(QGraphicsView):
             self._grid = GridLayer(document.grid, self)
             self.scene().addItem(self._grid)
         items = []
-        for token in document.tokens:
+        for token in tokens:
             try:
                 card = card_resolver(token.card_id)
             except ValueError:

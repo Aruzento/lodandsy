@@ -3,7 +3,7 @@
 import math
 from dataclasses import dataclass, replace
 
-from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRect, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QIcon,
@@ -27,8 +27,15 @@ from PySide6.QtWidgets import (
 )
 from shiboken6 import isValid
 
-from lodandsy.domain.map_document import MAX_TOKEN_EXTENT, MapShape, TokenInstance
+from lodandsy.domain.map_document import (
+    MAX_TOKEN_EXTENT,
+    MapNote,
+    MapPortal,
+    MapShape,
+    TokenInstance,
+)
 from lodandsy.domain.map_measurements import distance
+from lodandsy.ui.icons import icon
 from lodandsy.ui.map_annotations import TokenItem
 
 TOKEN_TRANSFORMS = {"resize_token", "rotate_token"}
@@ -36,10 +43,6 @@ TRANSFORM_KEYS = {
     Qt.Key.Key_Alt: Qt.KeyboardModifier.AltModifier,
     Qt.Key.Key_Shift: Qt.KeyboardModifier.ShiftModifier,
 }
-
-
-def mode_is_portal(gesture):
-    return gesture[0] == "portal"
 
 
 def local_path(value):
@@ -274,7 +277,7 @@ def paint_vectors(view, painter):
         view._vector_render_cache = {key: v for key, v in cache.items() if key in keep}
     if view.role != "player":
         for portal in view.vector_portals:
-            if tools and tools.preview and mode_is_portal(tools.gesture):
+            if tools and isinstance(tools.preview, MapPortal):
                 if tools.preview.id == portal.id:
                     portal = tools.preview
             painter.save()
@@ -292,6 +295,25 @@ def paint_vectors(view, painter):
                     getattr(view, "portal_labels", {}).get(portal.id, portal.label or "Портал"),
                 )
             painter.restore()
+        for note in view.vector_notes:
+            if tools and isinstance(tools.preview, MapNote) and tools.preview.id == note.id:
+                note = tools.preview
+            if not exposed.adjusted(-20, -20, 20, 20).contains(QPointF(note.x, note.y)):
+                continue
+            painter.save()
+            center = painter.worldTransform().map(QPointF(note.x, note.y)).toPoint()
+            painter.resetTransform()
+            labels = getattr(view, "note_labels", {})
+            label, valid = labels.get(note.id, (note.label, True))
+            color = "#a4b7c8" if valid else "#f19a9a"
+            painter.setPen(QPen(QColor(color), 2 if tools and tools.selected == note.id else 1))
+            painter.setBrush(QColor("#202020"))
+            painter.drawRoundedRect(QRect(center.x() - 11, center.y() - 11, 22, 22), 4, 4)
+            glyph = "inventory" if note.target_kind == "inventory" else "card_note"
+            icon(glyph, tint=color).paint(painter, QRect(center.x() - 8, center.y() - 8, 16, 16))
+            if note.label or not valid:
+                painter.drawText(QPointF(center.x() + 16, center.y() + 4), label)
+            painter.restore()
     if tools:
         tools.paint_handles(painter)
     painter.restore()
@@ -304,6 +326,7 @@ class VectorTools(QWidget):
     portal_requested = Signal(float, float)
     portal_opened = Signal(str)
     portal_edited = Signal(str)
+    note_action = Signal(str, str)
     inspector_requested = Signal(object)
 
     def __init__(self, view, parent=None):
@@ -353,6 +376,12 @@ class VectorTools(QWidget):
         edit_portal = QPushButton("Свойства портала…")
         edit_portal.clicked.connect(self.edit_selected_portal)
         portal_form.addRow(edit_portal)
+        self.note_inspector = QWidget()
+        self.destroyed.connect(self.note_inspector.deleteLater)
+        note_form = QFormLayout(self.note_inspector)
+        open_note = QPushButton(icon("card_note"), "Открыть заметку")
+        open_note.clicked.connect(lambda: self.note_action.emit(self.selected, "open"))
+        note_form.addRow(open_note)
         view.viewport().installEventFilter(self)
         view.installEventFilter(self)
         view.viewport().setMouseTracking(True)
@@ -398,6 +427,9 @@ class VectorTools(QWidget):
     def selected_portal(self):
         return next((v for v in self.view.vector_portals if v.id == self.selected), None)
 
+    def selected_note(self):
+        return next((v for v in self.view.vector_notes if v.id == self.selected), None)
+
     def edit_selected_portal(self):
         if portal := self.selected_portal():
             self.portal_edited.emit(portal.id)
@@ -408,6 +440,8 @@ class VectorTools(QWidget):
                 return self.inspector
             if self.selected_portal() is not None:
                 return self.portal_inspector
+            if self.selected_note() is not None:
+                return self.note_inspector
         return None
 
     def selected_transform_item(self):
@@ -439,14 +473,15 @@ class VectorTools(QWidget):
         self.selected = value.id if value else None
         self.inspected = value
         if value:
-            item = self.selected_transform_item()
-            if item is not None:
-                item.setSelected(False)
-            self.name.setText(value.name)
-            self.color.setText(value.color)
-            self.opacity.setValue(value.opacity * 100)
-            self.rotation.setValue(value.rotation)
-        self.inspector_requested.emit(self.inspector if value else None)
+            for item in self.view.scene().selectedItems():
+                if isinstance(item, TokenItem):
+                    item.setSelected(False)
+            if isinstance(value, MapShape):
+                self.name.setText(value.name)
+                self.color.setText(value.color)
+                self.opacity.setValue(value.opacity * 100)
+                self.rotation.setValue(value.rotation)
+        self.inspector_requested.emit(self.inspector_page())
         self.view.viewport().update()
 
     def apply_properties(self):
@@ -605,6 +640,21 @@ class VectorTools(QWidget):
             self.view.viewport().update()
             return bool(self.gesture or self.points or self.mode not in {"select", "vertices"})
         if event.button() == Qt.MouseButton.RightButton and kind == QEvent.Type.MouseButtonPress:
+            note = next((v for v in reversed(self.view.vector_notes)
+                         if self.near(point, QPointF(v.x, v.y), 14)), None)
+            if note is not None:
+                self.select(note)
+                menu = QMenu(self)
+                for action, label in (
+                    ("open", "Открыть"), ("rebind", "Изменить привязку…"),
+                    ("rename", "Переименовать маркер…"), ("delete", "Удалить маркер"),
+                ):
+                    menu.addAction(label).setData(action)
+                chosen = menu.exec(event.globalPosition().toPoint())
+                if chosen:
+                    self.note_action.emit(note.id, chosen.data())
+                menu.deleteLater()
+                return True
             portal = next(
                 (p for p in self.view.vector_portals if self.near(point, QPointF(p.x, p.y), 16)),
                 None,
@@ -630,19 +680,21 @@ class VectorTools(QWidget):
                 if candidate is not None and candidate != edit.token:
                     self.token_transformed.emit(edit.token, candidate)
                 return True
+            mode = self.gesture[0]
+            if mode in {"note", "portal"}:
+                self.update_gesture(point, event.modifiers())
             value = self.preview
             previous = self.gesture[1]
             current = (
-                next((v for v in self.view.vector_portals if v.id == previous.id), None)
-                if previous and mode_is_portal(self.gesture)
-                else self.value()
+                self.selected_note() if mode == "note" else
+                self.selected_portal() if mode == "portal" else self.value()
             )
             if previous and current != previous:
                 self.notice.setText("Фигура изменена другим представлением. Повторите жест.")
                 self.cancel()
                 return True
             self.cancel()
-            if value:
+            if value and value != previous:
                 self.committed.emit(value)
                 self.select(value)
             return True
@@ -663,13 +715,20 @@ class VectorTools(QWidget):
                     )
                     self.gesture = (handle[0], edit, point, handle[1])
                     return True
+            for note in reversed(self.view.vector_notes):
+                if self.near(point, QPointF(note.x, note.y), 14):
+                    self.select(note)
+                    if kind == QEvent.Type.MouseButtonDblClick:
+                        self.cancel()
+                        self.note_action.emit(note.id, "open")
+                    else:
+                        self.gesture = ("note", note, point, 0)
+                    return True
             for portal in reversed(self.view.vector_portals):
                 if self.near(point, QPointF(portal.x, portal.y), 16):
                     if item is not None:
                         item.setSelected(False)
-                    self.selected = portal.id
-                    self.inspected = None
-                    self.inspector_requested.emit(self.portal_inspector)
+                    self.select(portal)
                     if kind == QEvent.Type.MouseButtonDblClick:
                         self.portal_opened.emit(portal.id)
                     else:
@@ -762,9 +821,13 @@ class VectorTools(QWidget):
                         y=start.y(),
                         rotation=math.degrees(math.atan2(dy, dx)) if self.mode == "cone" else 0,
                     )
-            elif mode in {"move", "portal"}:
+            elif mode in {"move", "portal", "note"}:
                 delta = point - start
-                value = replace(value, x=value.x + delta.x(), y=value.y + delta.y())
+                x, y = value.x + delta.x(), value.y + delta.y()
+                if mode != "move":
+                    x = max(0, min(self.view.map_width, x))
+                    y = max(0, min(self.view.map_height, y))
+                value = replace(value, x=x, y=y)
             elif mode == "rotate":
                 angle = rotation_for_drag(
                     value.rotation, QPointF(value.x, value.y), start, point, modifiers,

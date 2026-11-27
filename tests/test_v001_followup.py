@@ -1,4 +1,5 @@
-from PySide6.QtCore import Qt
+import pytest
+from PySide6.QtCore import QEvent, QPointF, Qt
 from PySide6.QtGui import QTextCursor, QTextListFormat
 from PySide6.QtWidgets import QInputDialog, QLineEdit
 
@@ -6,6 +7,7 @@ from lodandsy.application.project_catalogue import ProjectCatalogue
 from lodandsy.application.sqlite_project_store import DATABASE_NAME
 from lodandsy.domain.actor_state import ActorRef
 from lodandsy.ui.entity_picker import EntityPicker
+from tests.test_map_token_resize import world_mouse
 from tests.test_map_tokens_grid import open_map
 
 pytest_plugins = ["tests.project_fixture"]
@@ -167,10 +169,13 @@ def test_collapsible_ability_retains_canonical_values_and_draft(qtbot, project):
     tile = actor.tiles["strength"]
     score, modifier = tile.edit.text(), tile.result.text()
     original = app.cards.get(card.id).payload()
+    assert not tile.disclosure.isChecked()
+    tile.disclosure.setChecked(True)
+    qtbot.waitUntil(lambda: tile.height() >= tile.sizeHint().height())
     expanded_height = tile.height()
     tile.disclosure.click()
     assert tile.disclosure.body.isHidden() and not tile.edit.isHidden()
-    assert tile.height() < expanded_height
+    qtbot.waitUntil(lambda: tile.height() < expanded_height)
     assert (tile.edit.text(), tile.result.text()) == (score, modifier)
     assert app.cards.get(card.id).payload() == original
     tile.disclosure.click()
@@ -184,32 +189,69 @@ def test_collapsible_ability_retains_canonical_values_and_draft(qtbot, project):
     assert base.edit.text() == draft
 
 
-def test_notes_tool_reuses_windows_and_restores_them(project, tmp_path, monkeypatch):
+def test_map_note_tool_reuses_windows_and_restores_them(project, tmp_path, qtbot, monkeypatch):
     app, projects = project
-    world = tmp_path / "world"
-    assert app.open_note_tool("new") is None
-    assert projects.create_project(world)
-    monkeypatch.setattr(QInputDialog, "getText", lambda *args: ("Дневник", True))
-    created = app.open_note_tool("new")
-    note = next(card for card in app.cards.all() if card.title == "Дневник")
-    assert note.card_type == "note" and created.dock.isInFloatingContainer()
+    document, viewer = open_map(app, projects, tmp_path, qtbot)
+    world = projects.store.root
+    monkeypatch.setattr(QInputDialog, "getText", lambda *args, **kwargs: ("Дневник", True))
     card = app.create_card("Воин", card_type="character")
     ref = app.cards_service.create_actor(card.id)
     inventory_id = app.cards_service.get_actor(ref).inventory_id
+    modes = iter((0, 0, 1))
+    monkeypatch.setattr(QInputDialog, "getItem", lambda *args: (args[3][next(modes)], True))
 
     def exec_picker(picker):
-        wanted = inventory_id if "инвентарь" in picker.windowTitle() else note.id
+        if "инвентарь" in picker.windowTitle():
+            wanted = inventory_id
+        elif not picker.model.ids:
+            return EntityPicker.CREATE
+        else:
+            wanted = next(c.id for c in app.cards.all() if c.title == "Дневник")
         assert wanted in picker.model.ids
         picker.chosen_id = wanted
         return 1
 
     monkeypatch.setattr(EntityPicker, "exec", exec_picker)
-    note_window = app.open_note_tool("existing")
-    assert app.open_note_tool("existing") is note_window is created
+    for x in (90, 175, 315):
+        viewer.tools.actions["note"].trigger()
+        qtbot.mouseClick(viewer.view.viewport(), Qt.MouseButton.LeftButton,
+                         pos=viewer.view.mapFromScene(QPointF(x, 100)))
+    saved = app.maps_service.get_map(document.id)
+    first, second, third = saved.notes
+    assert first.id != second.id and first.target_id == second.target_id
+    assert third.target_kind == "inventory" and third.target_id == inventory_id
+    player = app.maps.open_presentation(document.id)
+    qtbot.waitUntil(lambda: player.view._display_ready)
+    assert not player.view.vector_notes
+    qtbot.mouseDClick(viewer.view.viewport(), Qt.MouseButton.LeftButton,
+                     pos=viewer.view.mapFromScene(QPointF(first.x, first.y)))
+    key = app.card_editor_window_key(first.target_id)
+    note_window = app.window_manager.find_window(key)
     assert note_window.dock.isInFloatingContainer()
-    inventory = app.open_note_tool("inventory")
-    assert app.open_note_tool("inventory") is app.tables.open_table(inventory_id) is inventory
+    assert app.maps._note_action(document.id, second.id, "open") is note_window
+    inventory = app.maps._note_action(document.id, third.id, "open")
+    assert app.tables.open_table(inventory_id) is inventory
     assert inventory.dock.isInFloatingContainer()
+    app.maps.open_map(document.id)
+    start = QPointF(first.x, first.y)
+    end = start + QPointF(28, 30)
+    world_mouse(viewer.view, QEvent.Type.MouseButtonPress, start)
+    world_mouse(viewer.view, QEvent.Type.MouseMove, end)
+    assert app.maps_service.get_map(document.id) == saved
+    world_mouse(viewer.view, QEvent.Type.MouseButtonRelease, end)
+    assert app.maps_service.get_map(document.id).notes[0].x == pytest.approx(end.x())
+    stack = app.maps_service.undo_stack(document.id)
+    stack.undo()
+    assert app.maps_service.get_map(document.id) == saved
+    stack.redo()
+    app.maps._note_action(document.id, second.id, "rename")
+    assert app.maps_service.get_map(document.id).notes[1].label == "Дневник"
+    monkeypatch.setattr(QInputDialog, "getItem", lambda *args: (args[3][1], True))
+    app.maps._note_action(document.id, second.id, "rebind")
+    assert app.maps_service.get_map(document.id).notes[1].target_id == inventory_id
+    app.maps._note_action(document.id, second.id, "delete")
+    assert app.tables_service.get_table(inventory_id).id == inventory_id
+    assert app.cards.get(first.target_id).card_type == "note"
     assert projects.save_current()
     assert projects.create_project(tmp_path / "another", preserve_current=False)
     assert not app.window_manager.window_keys()
@@ -218,6 +260,10 @@ def test_notes_tool_reuses_windows_and_restores_them(project, tmp_path, monkeypa
         assert app.window_manager.find_window(key).dock.isInFloatingContainer()
     app.actions.delete_actor(ref, confirmed=True)
     assert app.window_manager.find_window(inventory.key) is None
+    assert app.maps_service.get_map(document.id).notes[-1] == third
+    restored = app.maps.open_map(document.id).widget()
+    assert restored.view.note_labels[third.id][1] is False
+    assert app.maps._note_action(document.id, third.id, "open") is None
 
 
 def test_inspector_tracks_active_map_and_temporary_pan(qtbot, project, tmp_path):

@@ -7,6 +7,8 @@ from PySide6.QtGui import QPainterPath, QPainterPathStroker, QPolygonF
 
 from lodandsy.domain.map_fog import MAX_GESTURE_POINTS, FogRegion, FogState
 
+MAX_BRUSH_POINTS = 4096
+
 
 def region_path(region):
     path = QPainterPath()
@@ -61,12 +63,12 @@ def brush_stamp(center, diameter):
 
 def stroke_path(points, diameter):
     _validate_points(points)
-    if (
-        not points
-        or len(points) > MAX_GESTURE_POINTS
-        or not math.isfinite(diameter)
-        or not 1 <= diameter <= 100000
-    ):
+    return brush_stroke_path(points, diameter)
+
+
+def brush_stroke_path(points, diameter):
+    _validate_points(points, MAX_BRUSH_POINTS)
+    if not points or not math.isfinite(diameter) or not 1 <= diameter <= 100000:
         raise ValueError("Слишком длинный жест или некорректный размер кисти")
     if len(points) == 1:
         return brush_stamp(QPointF(*points[0]), diameter)
@@ -108,8 +110,8 @@ def polygon_path(points):
     return region_path(region)
 
 
-def _validate_points(points):
-    if len(points) > MAX_GESTURE_POINTS or any(
+def _validate_points(points, limit=MAX_GESTURE_POINTS):
+    if len(points) > limit or any(
         not isinstance(p, (tuple, list))
         or len(p) != 2
         or any(type(v) not in (int, float) or not math.isfinite(v) or abs(v) > 1e9 for v in p)

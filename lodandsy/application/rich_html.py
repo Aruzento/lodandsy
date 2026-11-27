@@ -126,9 +126,12 @@ def _style(name, value):
 
 
 class RichSubset(HTMLParser):
-    def __init__(self):
+    def __init__(self, *, clipboard=False):
         super().__init__(convert_charrefs=True)
+        self.clipboard = clipboard
+        self.wrapped_body = False
         self.output, self.warnings, self.stack = [], [], []
+        self.preserve_space = []
         self.suppressed, self.nodes = 0, 0
 
     def handle_starttag(self, tag, attrs):
@@ -145,12 +148,17 @@ class RichSubset(HTMLParser):
             if tag not in VOID:
                 self.suppressed = 1
             return
-        if tag in {"html", "body"}:
+        if tag == "body" and self.clipboard and any(key == "style" for key, _ in attrs):
+            tag = "div"
+            attrs = [(key, value) for key, value in attrs if key == "style"]
+            self.wrapped_body = True
+        elif tag in {"html", "body"}:
             return
         if tag not in TAGS:
             self.warnings.append(f"Неподдерживаемый элемент: {tag}")
             return
         clean = {}
+        whitespace = None
         for key, value in attrs:
             value = value or ""
             if key == "style":
@@ -159,12 +167,15 @@ class RichSubset(HTMLParser):
                     if ":" not in entry:
                         continue
                     name, val = (p.strip() for p in entry.split(":", 1))
+                    if self.clipboard:
+                        name, val = _clipboard_style(name, val)
                     if _style(name, val):
                         styles[name] = val
                     else:
                         self.warnings.append(f"Удалено оформление: {name}")
                 if styles:
                     clean[key] = ";".join(f"{k}:{v}" for k, v in sorted(styles.items()))
+                    whitespace = styles.get("white-space")
             elif tag == "a" and key == "href" and allowed_link(value):
                 clean[key] = value
             elif tag == "img" and key == "src" and allowed_asset(value):
@@ -202,32 +213,65 @@ class RichSubset(HTMLParser):
         self.output.append(f"<{tag}{attributes}>")
         if tag not in VOID:
             self.stack.append(tag)
+            if self.clipboard:
+                inherited = self.preserve_space[-1] if self.preserve_space else False
+                self.preserve_space.append(
+                    (tag == "pre" or inherited) if whitespace is None else whitespace != "normal"
+                )
             if len(self.stack) > MAX_DEPTH:
                 raise ValueError("Слишком глубокая вложенность документа")
 
     def handle_endtag(self, tag):
+        if tag == "body" and self.wrapped_body and not self.suppressed:
+            self.wrapped_body = False
+            while self.stack:
+                self.output.append(f"</{self.stack.pop()}>")
+            self.preserve_space.clear()
+            return
         if self.suppressed:
             self.suppressed -= 1
         elif tag in self.stack:
             while self.stack:
                 current = self.stack.pop()
+                if self.clipboard:
+                    self.preserve_space.pop()
                 self.output.append(f"</{current}>")
                 if current == tag:
                     break
 
     def handle_data(self, value):
         if not self.suppressed:
+            if self.clipboard and ("\n" in value or "\r" in value):
+                if self.preserve_space and self.preserve_space[-1]:
+                    lines = value.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+                    self.output.append("<br>".join(map(escape, lines)))
+                    return
+                # CF_HTML from Word can wrap an inline run at a source newline.
+                value = re.sub(r"[ \t\r\n\f]+", " ", value)
             self.output.append(escape(value))
 
 
-def sanitize_html(source):
+def _clipboard_style(name, value):
+    name = name.lower()
+    if name == "text-decoration-line":
+        name = "text-decoration"
+    if name in {"color", "background-color", "border-color"}:
+        match = re.fullmatch(r"rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)", value)
+        if match:
+            channels = tuple(map(int, match.groups()))
+            if max(channels) <= 255:
+                value = "#" + "".join(f"{channel:02x}" for channel in channels)
+    return name, value
+
+
+def sanitize_html(source, *, clipboard=False):
     if (
         not isinstance(source, str)
         or "\0" in source
         or len(source.encode("utf-8")) > MAX_HTML_BYTES
     ):
         raise ValueError("Документ повреждён или превышает 2 MiB")
-    parser = RichSubset()
+    parser = RichSubset(clipboard=clipboard)
     parser.feed(source)
     parser.close()
     while parser.stack:

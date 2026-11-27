@@ -14,8 +14,16 @@ from PySide6.QtWidgets import (
 )
 from shiboken6 import isValid
 
-from lodandsy.application.fog_geometry import brush_stamp, polygon_path, region_path, stroke_path
+from lodandsy.application.fog_geometry import (
+    MAX_BRUSH_POINTS,
+    brush_stamp,
+    brush_stroke_path,
+    polygon_path,
+    region_path,
+)
 from lodandsy.domain.map_fog import MAX_GESTURE_POINTS
+
+PREVIEW_SEGMENT_POINTS = 24
 
 
 class FogTools(QWidget):
@@ -26,6 +34,9 @@ class FogTools(QWidget):
         super().__init__(parent)
         self.view = view
         self.points = []
+        self._brush_segments = []
+        self._brush_tail = QPainterPath()
+        self._brush_start = 0
         self._cursor = None
         self.selected = None
         self.snap_radius = 10.0
@@ -110,9 +121,9 @@ class FogTools(QWidget):
 
     def _brush_size_changed(self):
         if self.points and self.mode in {"hide", "erase"}:
+            self._clear_brush_preview()
             self._preview()
-        else:
-            self.view.viewport().update()
+        self.view.viewport().update()
 
     def _snaps(self, point):
         if len(self.points) < 3:
@@ -125,12 +136,28 @@ class FogTools(QWidget):
         if getattr(self, "view", None) is None or not isValid(self.view):
             return
         self.points.clear()
+        self._clear_brush_preview()
         self.view._fog_vertices = ()
         self.view._fog_snap = False
         self.selected = None
         self.view._fog_preview = QPainterPath()
         self.view._fog_selection = QPainterPath()
         self.view.viewport().update()
+
+    def _clear_brush_preview(self):
+        self._brush_segments.clear()
+        self._brush_tail = QPainterPath()
+        self._brush_start = 0
+
+    def brush_preview(self, exposed):
+        path = QPainterPath()
+        path.setFillRule(Qt.FillRule.WindingFill)
+        for bounds, segment in self._brush_segments:
+            if exposed.intersects(bounds):
+                path.addPath(segment)
+        if exposed.intersects(self._brush_tail.controlPointRect()):
+            path.addPath(self._brush_tail)
+        return path
 
     def _preview(self, cursor=None):
         try:
@@ -146,7 +173,20 @@ class FogTools(QWidget):
                     if cursor is not None:
                         path.lineTo(QPointF(*self.points[0]) if snapped else cursor)
             else:
-                path = stroke_path(self.points, self.size.value())
+                previous = self._brush_tail.controlPointRect()
+                while len(self.points) - self._brush_start > PREVIEW_SEGMENT_POINTS:
+                    end = self._brush_start + PREVIEW_SEGMENT_POINTS
+                    segment = brush_stroke_path(
+                        self.points[self._brush_start:end + 1], self.size.value()
+                    )
+                    self._brush_segments.append((segment.controlPointRect(), segment))
+                    previous = previous.united(segment.controlPointRect())
+                    self._brush_start = end
+                self._brush_tail = brush_stroke_path(
+                    self.points[self._brush_start:], self.size.value()
+                )
+                self._update_world(previous.united(self._brush_tail.controlPointRect()))
+                return
             self.view._fog_preview = path
             self.view.viewport().update()
         except ValueError as error:
@@ -154,6 +194,12 @@ class FogTools(QWidget):
             self.cancel()
 
     def _append(self, point):
+        if self.mode in {"hide", "erase"}:
+            if len(self.points) == MAX_BRUSH_POINTS:
+                self.notice.setText("Предел длины жеста. Отпустите кнопку, чтобы применить мазок.")
+                return False
+            self.points.append((point.x(), point.y()))
+            return True
         if len(self.points) >= MAX_GESTURE_POINTS:
             self.notice.setText(
                 "Жест превышает512 точек. Используйте несколько более коротких жестов."
@@ -170,18 +216,23 @@ class FogTools(QWidget):
             path = (
                 polygon_path(tuple(self.points))
                 if self.mode == "polygon"
-                else stroke_path(self.points, self.size.value())
+                else brush_stroke_path(self.points, self.size.value()).simplified()
             )
             self.edited.emit(path, self.mode == "erase")
         except ValueError as error:
             self.notice.setText(str(error))
         self.cancel()
 
+    def _update_world(self, bounds):
+        pixel = self.view.viewportTransform().mapRect(bounds).toAlignedRect()
+        self.view.viewport().update(pixel.adjusted(-3, -3, 3, 3))
+
     def eventFilter(self, watched, event):
         if getattr(self, "view", None) is None or not isValid(self.view):
             return False
         kind = event.type()
         if watched is self.view.viewport():
+            old_outline = self.brush_outline()
             if kind in {
                 QEvent.Type.Enter, QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress,
                 QEvent.Type.MouseButtonRelease, QEvent.Type.Wheel,
@@ -192,7 +243,9 @@ class FogTools(QWidget):
             if self.mode in {"hide", "erase"} and kind in {
                 QEvent.Type.Enter, QEvent.Type.Leave, QEvent.Type.MouseMove,
             }:
-                self.view.viewport().update()
+                for outline in (old_outline, self.brush_outline()):
+                    if outline is not None:
+                        self._update_world(outline.controlPointRect())
         if not self.view.tool_state.active.startswith("fog_"):
             return False
         if kind == QEvent.Type.KeyPress:
@@ -258,6 +311,6 @@ class FogTools(QWidget):
             and self.mode in {"hide", "erase"}
             and self.points
         ):
-            if self._append(point):
-                self.finish()
+            self._append(point)
+            self.finish()
         return True
