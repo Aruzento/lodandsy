@@ -83,7 +83,9 @@ Qt дизайн нейтральный graphite #191919/#202020. Private мак�
 только в .prototype-deps, не repo/production/release. Inventory — обычная Table:
 item UUID, positive integer count, live description/cost без stored derived cells.
 Object Cards library, original alpha/aspect long-edge128; front layer сверху.
-Full snapshot writer/synchronous backup4GiB и libvips tiles сохраняются.
+SaveCoordinator формирует полный неизменяемый снимок. SQLite writer пишет изменённые
+агрегаты после проверки сохранённой ревизии по ADR-004. Backup синхронный с пределом
+4 ГиБ. Libvips tiles сохраняются.
 Схема по факту: SQLite17/Card8/Map9–10/Actor1/Rules1(profile2)/Table4/Economy1, UI state4.
 Map10 хранит дробный размер и поворот токена «Объект». Map7–9 читаются без записи,
 переход при сохранении проверяет backup и целостность в транзакции. ADR-036/040.

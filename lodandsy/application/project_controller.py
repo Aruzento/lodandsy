@@ -319,10 +319,10 @@ class ProjectController(QObject):
         self._save_ui_state()
         with self.catalogue.reserve(name) as destination:
             try:
-                store = SQLiteProjectStore.restore(archive, destination)
+                store, verified = SQLiteProjectStore.restore_with_snapshot(archive, destination)
             except zipfile.BadZipFile as error:
                 raise ProjectError(f"Повреждена резервная копия: {error}") from error
-        self._activate_store(store, save_previous_layout=False)
+        self._activate_store(store, verified=verified, save_previous_layout=False)
         return True
 
     def _activate_store(self, store, *, verified=None, save_previous_layout=True):

@@ -23,7 +23,7 @@ class SaveCoordinator(QObject):
     def __init__(self, snapshot: Callable[[int], ProjectSnapshot], parent=None, debounce_ms=750):
         super().__init__(parent)
         self._snapshot = snapshot
-        self._persist: Callable[[ProjectSnapshot], None] | None = None
+        self._persist: Callable[[ProjectSnapshot, int], None] | None = None
         self.revision = 0
         self.saved_revision = 0
         self.state = SaveState.CLEAN
@@ -38,6 +38,9 @@ class SaveCoordinator(QObject):
         self._timer.setSingleShot(True)
         self._timer.setInterval(debounce_ms)
         self._timer.timeout.connect(self.request_save)
+        self._completion_timer = QTimer(self)
+        self._completion_timer.setInterval(50)
+        self._completion_timer.timeout.connect(self._observe_completed)
 
     @property
     def dirty(self):
@@ -47,7 +50,7 @@ class SaveCoordinator(QObject):
     def saving(self):
         return self._saving
 
-    def reset(self, revision: int, persist: Callable[[ProjectSnapshot], None] | None):
+    def reset(self, revision: int, persist: Callable[[ProjectSnapshot, int], None] | None):
         if self._saving:
             raise RuntimeError("Wait for the current save before switching projects")
         self._timer.stop()
@@ -83,10 +86,12 @@ class SaveCoordinator(QObject):
                 raise ValueError("Create or open a project before saving")
             self._job_revision = self.revision
             snapshot = self._snapshot(self._job_revision)
+            future = self._executor.submit(self._persist, snapshot, self.saved_revision)
             self._saving = True
+            self._future = future
+            future.add_done_callback(self._completed)
+            self._completion_timer.start()
             self._set_state(SaveState.SAVING)
-            self._future = self._executor.submit(self._persist, snapshot)
-            self._future.add_done_callback(self._completed)
             return True
         except Exception as error:
             self._saving = False
@@ -97,53 +102,49 @@ class SaveCoordinator(QObject):
 
     def _completed(self, future):
         # Runs on the writer thread. No widget/session access here.
-        try:
-            future.result()
-            error = None
-        except Exception as failure:
-            error = str(failure)
-        self._result_ready.emit((future, error))
+        self._result_ready.emit(future)
 
     @Slot(object)
-    def _on_result(self, result):
-        future, error = result
+    def _on_result(self, future):
         if future is not self._future:
             return
+        failure = future.exception()
+        error = str(failure) if failure is not None else None
+        revision = self._job_revision
+        self._completion_timer.stop()
         self._future = None
         self._saving = False
         self.last_error = error
         if error is not None:
             self._set_state(SaveState.ERROR)
         else:
-            self.saved_revision = self._job_revision
+            self.saved_revision = revision
             self._set_state(SaveState.DIRTY if self.dirty else SaveState.CLEAN)
-            self.saved.emit(self.saved_revision)
-            if self.dirty:
+            self.saved.emit(revision)
+            if self.dirty and not self._saving and self.last_error is None:
                 self._timer.start()
         self._finished.emit()
+
+    def _observe_completed(self):
+        future = self._future
+        if future is not None and future.done():
+            self._on_result(future)
 
     def wait_current(self):
         if self._saving:
             loop = QEventLoop()
-            # Synchronous close also observes the future from the GUI thread;
-            # completion does not depend solely on a queued signal during teardown.
-            observer = QTimer()
-            observer.setInterval(10)
-            def observe():
-                future = self._future
-                if future is not None and future.done():
-                    error = future.exception()
-                    self._on_result((future, str(error) if error is not None else None))
-            observer.timeout.connect(observe)
-            self._finished.connect(loop.quit)
+
+            def quit_when_idle():
+                if not self._saving:
+                    loop.quit()
+
+            self._finished.connect(quit_when_idle)
             try:
-                observe()
+                self._observe_completed()
                 if self._saving:
-                    observer.start()
                     loop.exec()
             finally:
-                observer.stop()
-                self._finished.disconnect(loop.quit)
+                self._finished.disconnect(quit_when_idle)
         return self.last_error is None
 
     def save(self) -> bool:
@@ -164,5 +165,7 @@ class SaveCoordinator(QObject):
     def shutdown(self):
         self._timer.stop()
         self.wait_current()
-        self._timer.stop()
         self._executor.shutdown(wait=True)
+        self._observe_completed()
+        self._timer.stop()
+        self._completion_timer.stop()

@@ -73,7 +73,7 @@ def test_failed_write_is_visible_retry_works_and_close_can_be_cancelled(
     project.create_project(tmp_path / "world")
     persist = project.store.save
 
-    def fail(snapshot):
+    def fail(snapshot, base):
         raise OSError("disk full")
 
     project.saver._persist = fail

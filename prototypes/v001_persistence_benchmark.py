@@ -79,7 +79,10 @@ class Phases:
         self.elapsed.clear()
         self.calls.clear()
         self.counts.clear()
-        for key in ("validated_aggregates", "reconciled_contexts", "full_validations"):
+        for key in (
+            "validated_aggregates", "reconciled_contexts", "full_validations",
+            "decoded_snapshots", "decoded_module_batches", "changed_sql_rows",
+        ):
             self.counts[key] = 0
 
 
@@ -221,19 +224,47 @@ def instrument(stack, phases, controller, project):
             atomic_step(nested.__exit__, None, None, None)
 
     stack.enter_context(patch.object(EntityCollection, "atomic", observed_atomic))
-    read = phases.wrap("read_snapshot", SQLiteProjectStore._read_snapshot)
-    stack.enter_context(patch.object(SQLiteProjectStore, "_read_snapshot", staticmethod(read)))
+    def count_decodes(name, counter, phase=None):
+        original = getattr(SQLiteProjectStore, name)
+
+        def counted(*args, **kwargs):
+            phases.counts[counter] += 1
+            if phase is None:
+                return original(*args, **kwargs)
+            with phases.measure(phase):
+                return original(*args, **kwargs)
+
+        stack.enter_context(patch.object(SQLiteProjectStore, name, staticmethod(counted)))
+
+    read = (
+        "_decode_snapshot" if hasattr(SQLiteProjectStore, "_decode_snapshot") else "_read_snapshot"
+    )
+    count_decodes(read, "decoded_snapshots", "read_snapshot")
+    count_decodes("_load_modules", "decoded_module_batches", "decode_modules")
     connect = sqlite3.connect
 
     class TimedCursor(sqlite3.Cursor):
-        execute = phases.wrap("sqlite", sqlite3.Cursor.execute)
-        executemany = phases.wrap("sqlite", sqlite3.Cursor.executemany)
+        def execute(self, *args, **kwargs):
+            with phases.measure("sqlite"):
+                result = super().execute(*args, **kwargs)
+            if get_ident() != phases.main and self.rowcount > 0:
+                phases.counts["changed_sql_rows"] += self.rowcount
+            return result
+
+        def executemany(self, *args, **kwargs):
+            with phases.measure("sqlite"):
+                result = super().executemany(*args, **kwargs)
+            if get_ident() != phases.main and self.rowcount > 0:
+                phases.counts["changed_sql_rows"] += self.rowcount
+            return result
+
         fetchone = phases.wrap("sqlite", sqlite3.Cursor.fetchone)
         fetchall = phases.wrap("sqlite", sqlite3.Cursor.fetchall)
         __next__ = phases.wrap("sqlite", sqlite3.Cursor.__next__)
 
     class TimedConnection(sqlite3.Connection):
         __exit__ = phases.wrap("sqlite", sqlite3.Connection.__exit__)
+        commit = phases.wrap("sqlite", sqlite3.Connection.commit)
 
         def execute(self, *args, **kwargs):
             return self.cursor(TimedCursor).execute(*args, **kwargs)
@@ -247,9 +278,9 @@ def instrument(stack, phases, controller, project):
 
     stack.enter_context(patch.object(sqlite3, "connect", timed_connect))
 
-    def persist(snapshot):
+    def persist(snapshot, *base):
         with phases.measure("write"):
-            project.store.save(snapshot)
+            project.store.save(snapshot, *base)
         phases.worker_finished = perf_counter()
 
     stack.enter_context(patch.object(project.saver, "_persist", persist))
@@ -301,7 +332,7 @@ def p95(values):
     return sorted(values)[ceil(0.95 * len(values)) - 1]
 
 
-def measure_series(app, controller, project, phases, snapshot, document, series_size):
+def measure_series(app, controller, project, phases, snapshot, document, series_size, acks):
     refs = [
         ActorRef(card.id, actor.id) for card in snapshot.cards for actor in card.actors
     ]
@@ -328,10 +359,11 @@ def measure_series(app, controller, project, phases, snapshot, document, series_
         prior_io = io_written()
         started = perf_counter()
         assert project.saver.save(), project.saver.last_error
-        results[name] = {
+        results[name] = phases.readings() | {
             "samples": records,
             "save_wall_ms": round((perf_counter() - started) * 1000, 4),
             "write_bytes": io_written() - prior_io,
+            "worker_to_ack_ms": round(acks.pop(), 4),
         }
     return results
 
@@ -369,6 +401,20 @@ def benchmark(profile, sample_count, root, *, series_size=40, full_validation=Fa
         table = snapshot.tables[0]
         actor_ref = ActorRef(card.id, card.actors[0].id)
         token = document.tokens[0]
+        npc_card = snapshot.cards[4]
+        structural_actor = None
+
+        def edit_structure(step):
+            nonlocal structural_actor
+            with controller.core.transaction():
+                if step:
+                    controller.actions.delete_actor(structural_actor, confirmed=True)
+                    controller.actions.update_entity(snapshot.cards[-1].id, parent_id=None)
+                else:
+                    controller.actions.update_entity(snapshot.cards[-1].id, parent_id=card.id)
+                    placement = controller.actions.place_card(document.id, npc_card.id, 80, 95)
+                    structural_actor = ActorRef(npc_card.id, placement.actor_id)
+
         operations = {
             "card_field": lambda n: controller.cards_service.update_card_fields(
                 card.id, {"summary": f"Поле {n}"},
@@ -382,6 +428,7 @@ def benchmark(profile, sample_count, root, *, series_size=40, full_validation=Fa
             "token_move": lambda n: controller.maps_service.move_token(
                 document.id, token.id, 200 + n, 200,
             ),
+            "structure": edit_structure,
         }
         phases = Phases()
         records = defaultdict(list)
@@ -414,7 +461,7 @@ def benchmark(profile, sample_count, root, *, series_size=40, full_validation=Fa
                     if i:
                         records[name].append(sample)
             series = measure_series(
-                app, controller, project, phases, snapshot, document, series_size
+                app, controller, project, phases, snapshot, document, series_size, acks,
             )
             catalogue_data = catalogue_reads(root, catalogue, project.store, phases)
         series_samples = {name: data["samples"] for name, data in series.items()}

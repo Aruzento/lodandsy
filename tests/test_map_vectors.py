@@ -276,11 +276,13 @@ def test_map_vector_snapshot_failure_rolls_back_all_rows(project, tmp_path):
     assert session.save_current()
     before = session.store.load()
     first = next(v for v in before.maps if v.id == document.id)
+    second = next(v for v in before.maps if v.id == target.id)
     changed = replace(first, shapes=(MapShape("circle", ((64, 0),), x=100, y=100),))
+    changed_second = replace(second, shapes=(MapShape("circle", ((32, 0),), x=70, y=70),))
     candidate = replace(
         before,
         revision=before.revision + 1,
-        maps=tuple(changed if v.id == document.id else v for v in before.maps),
+        maps=(changed, changed_second),
     )
     with sqlite3.connect(session.store.path) as connection:
         connection.execute(

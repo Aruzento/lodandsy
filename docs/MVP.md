@@ -169,8 +169,9 @@ shared tileLRU64MiB; rebuild/cancel/checksum/version/atomic publish сохран
 с относительными путями; UI state4 отдельно. FK на каждом connection, составные
 операции транзакционны. Autosave/Ctrl+S — SaveCoordinator с упорядоченными ревизиями
 и ACK после commit; pending/dirty/saving/error/draft видимы. Safe close/switch,
-backup/restore с checksum/inventory. Full snapshot writer и synchronous backup≤4GiB
-сохраняются как ограничения; incremental SQL/backup worker не реализованы.
+backup/restore с checksum/inventory. S4 сохраняет полный неизменяемый снимок для
+целевой ревизии и записывает изменённые агрегаты по [ADR-004](adr/004-sqlite-save-protocol.md).
+Резервное копирование остаётся синхронным с пределом 4 ГиБ.
 
 Targeted batches после блоков, полный pytest/Ruff/pip/diff/architecture gate после
 стабилизации; source/frozen Windows smoke, source parity, manifest/CRC/SHA, лицензии.

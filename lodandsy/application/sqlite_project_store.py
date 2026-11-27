@@ -9,7 +9,7 @@ import tempfile
 import threading
 import zipfile
 from contextlib import ExitStack, closing, contextmanager
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from functools import wraps
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
@@ -136,6 +136,44 @@ class ProjectSnapshot:
 class VerifiedProject:
     snapshot: ProjectSnapshot
     entities: EntityCollection
+    map_versions: dict[str, int]
+
+
+@dataclass(frozen=True)
+class StoredRevision:
+    snapshot: ProjectSnapshot
+    map_versions: dict[str, int]
+    payloads: dict[str, object]
+    acknowledged_base: int | None = None
+
+    @classmethod
+    def verified(cls, snapshot, map_versions, collection, *, acknowledged_base=None):
+        return cls(
+            snapshot, map_versions, {e.id: collection.payload(e.id) for e in snapshot.entities},
+            acknowledged_base,
+        )
+
+    def matches(self, snapshot, map_versions):
+        previous = self.snapshot
+        return (
+            previous.revision == snapshot.revision
+            and previous.rules == snapshot.rules
+            and previous.currency == snapshot.currency
+            and previous.custom_categories == snapshot.custom_categories
+            and self.map_versions == map_versions
+            and all(
+                before == after or (
+                    len(before) == len(after)
+                    and {value.id: value for value in before}
+                    == {value.id: value for value in after}
+                )
+                for before, after in (
+                    (previous.entities, snapshot.entities),
+                    (previous.cards, snapshot.cards), (previous.maps, snapshot.maps),
+                    (previous.tables, snapshot.tables), (previous.assets, snapshot.assets),
+                )
+            )
+        )
 
 
 def _disk_full(error):
@@ -265,6 +303,109 @@ def project_operation(operation):
     return guarded
 
 
+def _entity_delta(before, after, rewrite_all):
+    old = {e.id: e.kind for e in before.snapshot.entities}
+    new = {e.id: e.kind for e in after.summaries()}
+    removed = {kind: set() for kind in ("card", "map", "table")}
+    changed = {kind: set() for kind in removed}
+    for key, kind in old.items():
+        if rewrite_all or new.get(key) != kind:
+            removed[kind].add(key)
+    for key, kind in new.items():
+        if rewrite_all or old.get(key) != kind or before.payloads[key] != after.payload(key):
+            changed[kind].add(key)
+    return removed, changed
+
+
+def _map_write_version(document, previous, changed):
+    if not changed and previous is not None:
+        return previous
+    if previous == TRANSFORM_MAP_VERSION or any(
+        token.uses_object_transform for token in document.tokens
+    ):
+        return TRANSFORM_MAP_VERSION
+    return 9
+
+
+def _write_cards(connection, cards):
+    for card in cards:
+        version, definition, actors, default = encode_card_aggregate(card)
+        connection.execute(
+            "INSERT INTO card_content VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET "
+            "payload_version=excluded.payload_version,content=excluded.content",
+            (card.id, version, definition),
+        )
+        connection.executemany("INSERT INTO card_actor VALUES(?,?,?,?,?)", actors)
+        if default is not None:
+            connection.execute("INSERT INTO card_default_actor VALUES(?,?)", (card.id, default))
+
+
+def _write_maps(connection, maps, versions):
+    for document in maps:
+        version = versions[document.id]
+        connection.execute(
+            "INSERT INTO map_document VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+            "asset_id=excluded.asset_id,payload_version=excluded.payload_version,"
+            "grid=excluded.grid,layers=excluded.layers,objects=excluded.objects,"
+            "layers_initialized=excluded.layers_initialized,fog=excluded.fog",
+            (
+                document.id, document.asset_id, version,
+                json.dumps(asdict(document.grid)),
+                json.dumps([asdict(layer) for layer in document.layers], ensure_ascii=False),
+                json.dumps(
+                    {
+                        "objects": [asdict(o) for o in document.objects],
+                        "shapes": [asdict(v) for v in document.shapes],
+                        "portals": [asdict(v) for v in document.portals],
+                    },
+                    ensure_ascii=False,
+                ),
+                int(document.layers_initialized),
+                json.dumps([asdict(r) for r in document.fog.regions]),
+            ),
+        )
+        fields = TOKEN_FIELDS | {"rotation"} if version == TRANSFORM_MAP_VERSION else TOKEN_FIELDS
+        connection.executemany(
+            "INSERT INTO map_token VALUES(?,?,?,?,?,?)",
+            (
+                (
+                    t.id, document.id, ordinal, t.card_id, t.actor_id,
+                    json.dumps(
+                        {k: v for k, v in asdict(t).items() if k in fields}, ensure_ascii=False,
+                    ),
+                )
+                for ordinal, t in enumerate(document.tokens)
+            ),
+        )
+
+
+def _write_tables(connection, tables):
+    for table in tables:
+        connection.execute(
+            "INSERT INTO table_document VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET "
+            "payload_version=excluded.payload_version,wallet=excluded.wallet",
+            (table.id, 4, encode_wallet(table.wallet)),
+        )
+        connection.executemany(
+            "INSERT INTO table_column VALUES(?,?,?,?,?,?)",
+            (
+                (c.id, table.id, c.name, c.data_type, c.position, encode_settings(c))
+                for c in table.columns
+            ),
+        )
+        connection.executemany(
+            "INSERT INTO table_row VALUES(?,?,?)",
+            ((row.id, table.id, row.position) for row in table.rows),
+        )
+        connection.executemany(
+            "INSERT INTO table_cell VALUES(?,?,?,?)",
+            (
+                (table.id, row.id, key, json.dumps(value, ensure_ascii=False))
+                for row in table.rows for key, value in row.cells
+            ),
+        )
+
+
 class SQLiteProjectStore:
     """One writer lease; SQL and filesystem operations stay inside this adapter."""
 
@@ -274,6 +415,9 @@ class SQLiteProjectStore:
         self._lock = lock
         self._closed = False
         self._project_id = None
+        self._file_identity = None
+        self._stored = None
+        self._pending = None
         self._operation_lock = threading.RLock()
 
     @classmethod
@@ -380,6 +524,8 @@ class SQLiteProjectStore:
                 )
                 connection.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             (root / "assets").mkdir()
+            store._file_identity = cls._database_identity(store.path)
+            store._stored = StoredRevision(ProjectSnapshot((), 0), {}, {})
         except sqlite3.Error as error:
             store.close()
             raise ProjectError(f"Cannot create project: {error}") from error
@@ -472,6 +618,10 @@ class SQLiteProjectStore:
             verified = store._load_verified()
             if cls._database_identity(database) != metadata.database_identity:
                 raise ProjectError("Файл базы проекта был заменён во время проверки.")
+            store._file_identity = metadata.database_identity
+            store._stored = StoredRevision.verified(
+                verified.snapshot, verified.map_versions, verified.entities,
+            )
         except Exception:
             store.close()
             raise
@@ -501,107 +651,121 @@ class SQLiteProjectStore:
         try:
             with closing(connect_database(path, readonly=True)) as connection:
                 connection.execute("BEGIN")
-                cls._check_schema(connection)
-                if connection.execute("PRAGMA quick_check").fetchone() != ("ok",):
-                    raise ProjectError("Project database is damaged; restore a backup")
-                if connection.execute("PRAGMA foreign_key_check").fetchall():
-                    raise ProjectError("Project hierarchy contains missing parents")
-                metadata = connection.execute("SELECT revision,project_id FROM metadata").fetchall()
-                if len(metadata) != 1 or type(metadata[0][0]) is not int or metadata[0][0] < 0:
-                    raise ProjectError("Invalid project metadata")
-                project_id = metadata[0][1]
-                validate_id(project_id)
-                if expected_project_id is not None and expected_project_id != project_id:
-                    raise ProjectError("Project identity changed")
-                assets = tuple(
-                    AssetRecord(*row)
-                    for row in connection.execute(
-                        "SELECT id,path,sha256,size FROM asset ORDER BY id"
-                    )
-                )
-                envelopes = tuple(
-                    Entity(*row)
-                    for row in connection.execute(
-                        "SELECT id,kind,title,parent_id,position FROM entity ORDER BY position,id"
-                    )
-                )
-                actor_rows = {}
-                for key, owner, inventory_id, version, state in connection.execute(
-                    "SELECT id,card_id,inventory_id,payload_version,state "
-                    "FROM card_actor ORDER BY id"
-                ):
-                    actor_rows.setdefault(owner, []).append(
-                        decode_actor(key, inventory_id, version, state)
-                    )
-                defaults = dict(
-                    connection.execute("SELECT card_id,actor_id FROM card_default_actor")
-                )
-                rules_rows = connection.execute(
-                    "SELECT payload_version,ruleset,rules_version,revision,overrides "
-                    "FROM project_rules"
-                ).fetchall()
-                if len(rules_rows) != 1 or rules_rows[0][0] != 1:
-                    raise ProjectError("Unsupported project rules payload")
-                _, ruleset, rules_version, rules_revision, overrides = rules_rows[0]
-                decoded_overrides = json.loads(overrides)
-                if not isinstance(decoded_overrides, list):
-                    raise ProjectError("Invalid rules overrides")
-                rules = ProjectRules(
-                    ruleset,
-                    rules_version,
-                    rules_revision,
-                    tuple(tuple(pair) for pair in decoded_overrides),
-                )
-                economy_rows = connection.execute(
-                    "SELECT payload_version,state FROM project_economy"
-                ).fetchall()
-                if len(economy_rows) != 1:
-                    raise ProjectError("Некорректные настройки экономики")
-                currency, categories = decode_economy(*economy_rows[0])
-                cards = tuple(
-                    decode_card(
-                        title,
-                        key,
-                        parent,
-                        payload_version,
-                        content,
-                        actors=tuple(actor_rows.get(key, ())),
-                        default_actor_id=defaults.get(key),
-                    )
-                    for key, title, parent, payload_version, content in connection.execute(
-                        "SELECT e.id,e.title,e.parent_id,c.payload_version,c.content "
-                        "FROM entity e JOIN card_content c ON e.id=c.id WHERE e.kind='card'"
-                    )
-                )
-                maps, tables = cls._load_modules(connection)
-                snapshot = ProjectSnapshot(
-                    tuple(cards), metadata[0][0], assets, maps, tables, envelopes, rules,
-                    currency, categories,
+                snapshot, versions, project_id = cls._decode_snapshot(
+                    connection, expected_project_id,
                 )
                 collection = snapshot.entity_collection()
-                ordered_cards = CardCollection(entities=collection).all()
-                cls._validate_modules(ordered_cards, assets, maps, tables)
-                expected = {
-                    "card": "card_content",
-                    "map": "map_document",
-                    "table": "table_document",
-                }
-                for kind, table in expected.items():
-                    ids = {row[0] for row in connection.execute(f"SELECT id FROM {table}")}
-                    if ids != {e.id for e in envelopes if e.kind == kind}:
-                        raise ProjectError("Entity payload inventory mismatch")
-                snapshot = ProjectSnapshot(
-                    ordered_cards,
-                    metadata[0][0],
-                    assets,
-                    maps,
-                    tables,
-                    collection.summaries(),
-                    rules,
-                    currency,
-                    categories,
+                snapshot = replace(
+                    snapshot, cards=CardCollection(entities=collection).all(),
+                    entities=collection.summaries(),
                 )
-                return VerifiedProject(snapshot, collection), project_id
+                return VerifiedProject(snapshot, collection, versions), project_id
+        except sqlite3.Error as error:
+            raise ProjectError(f"Cannot read project: {error}") from error
+        except (ValueError, TypeError, KeyError, RecursionError) as error:
+            if isinstance(error, ProjectError):
+                raise
+            raise ProjectError(f"Cannot read project: {error}") from error
+
+    @classmethod
+    def _decode_snapshot(cls, connection, expected_project_id):
+        try:
+            cls._check_schema(connection)
+            if connection.execute("PRAGMA quick_check").fetchone() != ("ok",):
+                raise ProjectError("Project database is damaged; restore a backup")
+            if connection.execute("PRAGMA foreign_key_check").fetchall():
+                raise ProjectError("Project hierarchy contains missing parents")
+            metadata = connection.execute("SELECT revision,project_id FROM metadata").fetchall()
+            if len(metadata) != 1 or type(metadata[0][0]) is not int or metadata[0][0] < 0:
+                raise ProjectError("Invalid project metadata")
+            project_id = metadata[0][1]
+            validate_id(project_id)
+            if expected_project_id is not None and expected_project_id != project_id:
+                raise ProjectError("Project identity changed")
+            assets = tuple(
+                AssetRecord(*row)
+                for row in connection.execute(
+                    "SELECT id,path,sha256,size FROM asset ORDER BY id"
+                )
+            )
+            envelopes = tuple(
+                Entity(*row)
+                for row in connection.execute(
+                    "SELECT id,kind,title,parent_id,position FROM entity ORDER BY position,id"
+                )
+            )
+            actor_rows = {}
+            for key, owner, inventory_id, version, state in connection.execute(
+                "SELECT id,card_id,inventory_id,payload_version,state "
+                "FROM card_actor ORDER BY id"
+            ):
+                actor_rows.setdefault(owner, []).append(
+                    decode_actor(key, inventory_id, version, state)
+                )
+            defaults = dict(
+                connection.execute("SELECT card_id,actor_id FROM card_default_actor")
+            )
+            rules_rows = connection.execute(
+                "SELECT payload_version,ruleset,rules_version,revision,overrides "
+                "FROM project_rules"
+            ).fetchall()
+            if len(rules_rows) != 1 or rules_rows[0][0] != 1:
+                raise ProjectError("Unsupported project rules payload")
+            _, ruleset, rules_version, rules_revision, overrides = rules_rows[0]
+            decoded_overrides = json.loads(overrides)
+            if not isinstance(decoded_overrides, list):
+                raise ProjectError("Invalid rules overrides")
+            rules = ProjectRules(
+                ruleset,
+                rules_version,
+                rules_revision,
+                tuple(tuple(pair) for pair in decoded_overrides),
+            )
+            economy_rows = connection.execute(
+                "SELECT payload_version,state FROM project_economy"
+            ).fetchall()
+            if len(economy_rows) != 1:
+                raise ProjectError("Некорректные настройки экономики")
+            currency, categories = decode_economy(*economy_rows[0])
+            cards = tuple(
+                decode_card(
+                    title,
+                    key,
+                    parent,
+                    payload_version,
+                    content,
+                    actors=tuple(actor_rows.get(key, ())),
+                    default_actor_id=defaults.get(key),
+                )
+                for key, title, parent, payload_version, content in connection.execute(
+                    "SELECT e.id,e.title,e.parent_id,c.payload_version,c.content "
+                    "FROM entity e JOIN card_content c ON e.id=c.id WHERE e.kind='card'"
+                )
+            )
+            maps, tables = cls._load_modules(connection)
+            cls._validate_modules(cards, assets, maps, tables)
+            expected = {
+                "card": "card_content",
+                "map": "map_document",
+                "table": "table_document",
+            }
+            for kind, table in expected.items():
+                ids = {row[0] for row in connection.execute(f"SELECT id FROM {table}")}
+                if ids != {e.id for e in envelopes if e.kind == kind}:
+                    raise ProjectError("Entity payload inventory mismatch")
+            snapshot = ProjectSnapshot(
+                cards,
+                metadata[0][0],
+                assets,
+                maps,
+                tables,
+                envelopes,
+                rules,
+                currency,
+                categories,
+            )
+            versions = dict(connection.execute("SELECT id,payload_version FROM map_document"))
+            return snapshot, versions, project_id
         except sqlite3.Error as error:
             raise ProjectError(f"Cannot read project: {error}") from error
         except (ValueError, TypeError, KeyError, RecursionError) as error:
@@ -727,178 +891,63 @@ class SQLiteProjectStore:
             raise ProjectError("Map refers to an unregistered asset")
 
     @project_operation
-    def save(self, snapshot: ProjectSnapshot):
-        self._check_open()
-        collection = snapshot.entity_collection()
-        cards = CardCollection(entities=collection).all()
+    def save(self, snapshot: ProjectSnapshot, expected_revision=None, *, _rewrite_all=False):
         if type(snapshot.revision) is not int or snapshot.revision < 0:
             raise ProjectError("Invalid snapshot revision")
-        assets = {asset.id: asset for asset in snapshot.assets}
-        if len(assets) != len(snapshot.assets):
+        if expected_revision is not None and (
+            type(expected_revision) is not int or expected_revision < 0
+        ):
+            raise ProjectError("Invalid acknowledged revision")
+        collection = snapshot.entity_collection()
+        snapshot = replace(
+            snapshot, cards=CardCollection(entities=collection).all(),
+            entities=collection.summaries(),
+        )
+        if len({asset.id for asset in snapshot.assets}) != len(snapshot.assets):
             raise ProjectError("Duplicate asset ID")
-        self._validate_modules(cards, snapshot.assets, snapshot.maps, snapshot.tables)
+        self._validate_modules(snapshot.cards, snapshot.assets, snapshot.maps, snapshot.tables)
+        self._check_identity()
         with closing(connect_database(self.path)) as connection, connection:
             connection.execute("PRAGMA synchronous=FULL")
             connection.execute("BEGIN IMMEDIATE")
-            if connection.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
-                raise ProjectError("Project schema changed; save refused")
-            # Refuse to overwrite unsupported/corrupt existing data, including payload inventory.
-            previous = self.load()
-            current = connection.execute("SELECT revision FROM metadata").fetchone()[0]
+            persisted, map_versions, _ = self._decode_snapshot(connection, self.project_id)
+            self._check_identity()
+            recovered = self._confirm_stored_revision(persisted, map_versions)
+            previous = self._stored
+            current = persisted.revision
+            retry = expected_revision is not None and expected_revision != current
+            if retry and expected_revision != self._stored.acknowledged_base:
+                raise ProjectError("Acknowledged revision does not match the saved project")
             if snapshot.revision <= current:
-                raise ProjectError("Stale revision cannot overwrite a newer project")
-            # Validate existing module versions before replacing any canonical payload.
-            self._load_modules(connection)
-            previous_versions = dict(
-                connection.execute("SELECT id,payload_version FROM map_document")
-            )
-            map_versions = {
-                document.id: TRANSFORM_MAP_VERSION
-                if (
-                    previous_versions.get(document.id) == TRANSFORM_MAP_VERSION
-                    or any(token.uses_object_transform for token in document.tokens)
+                if (recovered or retry) and previous.matches(snapshot, map_versions):
+                    return
+                raise ProjectError("Stale revision cannot overwrite the saved project")
+
+            removed, changed = _entity_delta(previous, collection, _rewrite_all)
+            versions = {
+                document.id: _map_write_version(
+                    document, previous.map_versions.get(document.id),
+                    document.id in changed["map"],
                 )
-                else 9
                 for document in snapshot.maps
             }
-            first_extended_save = current > 0 and TRANSFORM_MAP_VERSION not in (
-                previous_versions.values()
-            )
+            old_versions = previous.map_versions
+            first_extended = current > 0 and TRANSFORM_MAP_VERSION not in old_versions.values()
             upgrading = any(
                 version == TRANSFORM_MAP_VERSION
-                and (first_extended_save or previous_versions.get(map_id, version) < version)
-                for map_id, version in map_versions.items()
+                and (first_extended or old_versions.get(key, version) < version)
+                for key, version in versions.items()
             )
             if upgrading:
                 self._backup_before_map_upgrade(previous)
-            existing_assets = {
-                row[0]: AssetRecord(*row)
-                for row in connection.execute("SELECT id,path,sha256,size FROM asset")
-            }
+
+            prior_assets = {asset.id: asset for asset in previous.snapshot.assets}
             for asset in snapshot.assets:
-                if existing_assets.get(asset.id) != asset:
+                if prior_assets.get(asset.id) != asset:
                     self._verify_asset(asset)
-            card_parts = [(c, encode_card_aggregate(c)) for c in cards]
-            encoded_cards = [(c.id, parts[0], parts[1]) for c, parts in card_parts]
-            for table in (
-                "table_cell",
-                "table_row",
-                "table_column",
-                "map_token",
-                "card_default_actor",
-                "card_actor",
-                "card_content",
-                "map_document",
-                "table_document",
-            ):
-                connection.execute(f"DELETE FROM {table}")
-            connection.execute("DELETE FROM entity")
-            connection.execute("DELETE FROM asset")
-            connection.executemany(
-                "INSERT INTO asset VALUES(?,?,?,?)",
-                [(a.id, a.path, a.sha256, a.size) for a in snapshot.assets],
-            )
-            connection.executemany(
-                "INSERT INTO entity VALUES(?,?,?,?,?)",
-                [(e.id, e.kind, e.title, e.parent_id, e.position) for e in collection.summaries()],
-            )
-            connection.executemany("INSERT INTO card_content VALUES(?,?,?)", encoded_cards)
-            connection.executemany(
-                "INSERT INTO map_document VALUES(?,?,?,?,?,?,?,?)",
-                [
-                    (
-                        m.id,
-                        m.asset_id,
-                        map_versions[m.id],
-                        json.dumps(asdict(m.grid)),
-                        json.dumps([asdict(layer) for layer in m.layers], ensure_ascii=False),
-                        json.dumps(
-                            {
-                                "objects": [asdict(o) for o in m.objects],
-                                "shapes": [asdict(v) for v in m.shapes],
-                                "portals": [asdict(v) for v in m.portals],
-                            },
-                            ensure_ascii=False,
-                        ),
-                        int(m.layers_initialized),
-                        json.dumps([asdict(r) for r in m.fog.regions]),
-                    )
-                    for m in snapshot.maps
-                ],
-            )
-            connection.executemany(
-                "INSERT INTO table_document VALUES(?,?,?)",
-                [(t.id, 4, encode_wallet(t.wallet)) for t in snapshot.tables],
-            )
-            connection.executemany(
-                "INSERT INTO card_actor VALUES(?,?,?,?,?)",
-                [row for card, parts in card_parts for row in parts[2]],
-            )
-            connection.executemany(
-                "INSERT INTO card_default_actor VALUES(?,?)",
-                [(card.id, parts[3]) for card, parts in card_parts if parts[3] is not None],
-            )
-            connection.executemany(
-                "INSERT INTO map_token VALUES(?,?,?,?,?,?)",
-                [
-                    (
-                        token.id,
-                        document.id,
-                        ordinal,
-                        token.card_id,
-                        token.actor_id,
-                        json.dumps(
-                            {
-                                k: v
-                                for k, v in asdict(token).items()
-                                if (
-                                    k in TOKEN_FIELDS
-                                    or (k == "rotation"
-                                        and map_versions[document.id] == TRANSFORM_MAP_VERSION)
-                                )
-                            },
-                            ensure_ascii=False,
-                        ),
-                    )
-                    for document in snapshot.maps
-                    for ordinal, token in enumerate(document.tokens)
-                ],
-            )
-            connection.executemany(
-                "INSERT INTO table_column VALUES(?,?,?,?,?,?)",
-                [
-                    (c.id, t.id, c.name, c.data_type, c.position, encode_settings(c))
-                    for t in snapshot.tables
-                    for c in t.columns
-                ],
-            )
-            connection.executemany(
-                "INSERT INTO table_row VALUES(?,?,?)",
-                [(r.id, t.id, r.position) for t in snapshot.tables for r in t.rows],
-            )
-            connection.executemany(
-                "INSERT INTO table_cell VALUES(?,?,?,?)",
-                [
-                    (t.id, r.id, key, json.dumps(value, ensure_ascii=False))
-                    for t in snapshot.tables
-                    for r in t.rows
-                    for key, value in r.cells
-                ],
-            )
-            connection.execute("UPDATE metadata SET revision=?", (snapshot.revision,))
-            connection.execute(
-                "UPDATE project_economy SET state=? WHERE id=1",
-                (encode_economy(snapshot.currency, snapshot.custom_categories),),
-            )
-            connection.execute(
-                "UPDATE project_rules SET ruleset=?,rules_version=?,revision=?,overrides=? "
-                "WHERE id=1",
-                (
-                    snapshot.rules.ruleset,
-                    snapshot.rules.version,
-                    snapshot.rules.revision,
-                    json.dumps(snapshot.rules.overrides, ensure_ascii=False),
-                ),
+
+            self._write_delta(
+                connection, previous, snapshot, removed, changed, versions, _rewrite_all,
             )
             if upgrading:
                 written, _ = self._load_modules(connection)
@@ -909,8 +958,111 @@ class SQLiteProjectStore:
                     or connection.execute("PRAGMA foreign_key_check").fetchone() is not None
                 ):
                     raise ProjectError("Проверка перехода на Map10 не пройдена")
+            updated = connection.execute(
+                "UPDATE metadata SET revision=? WHERE project_id=? AND revision=?",
+                (snapshot.revision, self.project_id, current),
+            )
+            if updated.rowcount != 1:
+                raise ProjectError("Project revision changed during save")
+            self._check_identity()
+            self._pending = StoredRevision.verified(
+                snapshot, versions, collection,
+                acknowledged_base=current if expected_revision is None else expected_revision,
+            )
+            connection.commit()
+            self._stored, self._pending = self._pending, None
 
-    def _backup_before_map_upgrade(self, snapshot):
+    def _check_identity(self):
+        if self._database_identity(self.path) != self._file_identity:
+            raise ProjectError("Файл базы проекта был заменён. Откройте проект заново.")
+
+    def _confirm_stored_revision(self, snapshot, map_versions):
+        # Matching every typed value reuses the domain proof of a verified revision.
+        # A different source must never be adopted as the base of a pending write.
+        if self._stored.matches(snapshot, map_versions):
+            self._pending = None
+            return False
+        if self._pending is not None and self._pending.matches(
+            snapshot, map_versions,
+        ):
+            self._stored, self._pending = self._pending, None
+            return True
+        raise ProjectError("Сохранённые данные или ревизия проекта изменились вне писателя.")
+
+    @staticmethod
+    def _write_delta(connection, previous, target, removed, changed, versions, rewrite_all):
+        before_assets = {asset.id: asset for asset in previous.snapshot.assets}
+        after_assets = {asset.id: asset for asset in target.assets}
+        for key, asset in before_assets.items():
+            if rewrite_all or after_assets.get(key) != asset:
+                connection.execute("DELETE FROM asset WHERE id=?", (key,))
+        connection.executemany(
+            "INSERT INTO asset VALUES(?,?,?,?)",
+            (
+                (a.id, a.path, a.sha256, a.size) for a in target.assets
+                if rewrite_all or before_assets.get(a.id) != a
+            ),
+        )
+
+        # Clear owned rows before inserting any replacements. A compound edit can move
+        # a UUID or an inventory between aggregates that have SQL uniqueness constraints.
+        old_kinds = {e.id: e.kind for e in previous.snapshot.entities}
+        for kind, owner, tables in (
+            ("card", "card_id", ("card_default_actor", "card_actor")),
+            ("map", "map_id", ("map_token",)),
+            ("table", "table_id", ("table_cell", "table_row", "table_column")),
+        ):
+            keys = removed[kind] | {key for key in changed[kind] if old_kinds.get(key) == kind}
+            for table in tables:
+                connection.executemany(
+                    f"DELETE FROM {table} WHERE {owner}=?", ((key,) for key in keys),
+                )
+        for kind, table in (
+            ("card", "card_content"), ("map", "map_document"), ("table", "table_document"),
+        ):
+            connection.executemany(
+                f"DELETE FROM {table} WHERE id=?", ((key,) for key in removed[kind]),
+            )
+        after_ids = {entity.id for entity in target.entities}
+        connection.executemany(
+            "DELETE FROM entity WHERE id=?",
+            (
+                (entity.id,) for entity in previous.snapshot.entities
+                if rewrite_all or entity.id not in after_ids
+            ),
+        )
+        before = {entity.id: entity for entity in previous.snapshot.entities}
+        connection.executemany(
+            "INSERT INTO entity VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+            "kind=excluded.kind,title=excluded.title,parent_id=excluded.parent_id,"
+            "position=excluded.position",
+            (
+                (e.id, e.kind, e.title, e.parent_id, e.position) for e in target.entities
+                if rewrite_all or before.get(e.id) != e
+            ),
+        )
+
+        _write_cards(connection, (c for c in target.cards if c.id in changed["card"]))
+        _write_maps(connection, (m for m in target.maps if m.id in changed["map"]), versions)
+        _write_tables(connection, (t for t in target.tables if t.id in changed["table"]))
+        if rewrite_all or (target.currency, target.custom_categories) != (
+            previous.snapshot.currency, previous.snapshot.custom_categories,
+        ):
+            connection.execute(
+                "UPDATE project_economy SET state=? WHERE id=1",
+                (encode_economy(target.currency, target.custom_categories),),
+            )
+        if rewrite_all or target.rules != previous.snapshot.rules:
+            connection.execute(
+                "UPDATE project_rules SET ruleset=?,rules_version=?,revision=?,overrides=? "
+                "WHERE id=1",
+                (
+                    target.rules.ruleset, target.rules.version, target.rules.revision,
+                    json.dumps(target.rules.overrides, ensure_ascii=False),
+                ),
+            )
+
+    def _backup_before_map_upgrade(self, previous):
         archive = self.root.parent / f"LODANDSY-before-Map10-{uuid4().hex[:12]}.lodbackup"
         temporary_root = Path(tempfile.gettempdir()).resolve()
         size = self.backup(archive, verification_root=temporary_root)
@@ -920,8 +1072,11 @@ class SQLiteProjectStore:
                     prefix="lodandsy-verify-map10-", dir=temporary_root,
                 ))
             target = Path(temporary) / "world"
-            with closing(self.restore(archive, target, verification=True)) as restored:
-                if restored.project_id != self.project_id or restored.load() != snapshot:
+            restored, verified = self.restore_with_snapshot(archive, target, verification=True)
+            with closing(restored):
+                if restored.project_id != self.project_id or not previous.matches(
+                    verified.snapshot, verified.map_versions,
+                ):
                     raise ProjectError("Не прошла проверка резервной копии перед Map10")
 
     @project_operation
@@ -1072,6 +1227,11 @@ class SQLiteProjectStore:
 
     @classmethod
     def restore(cls, archive: Path, destination: Path, *, verification=False):
+        store, _ = cls.restore_with_snapshot(archive, destination, verification=verification)
+        return store
+
+    @classmethod
+    def restore_with_snapshot(cls, archive: Path, destination: Path, *, verification=False):
         destination = Path(destination)
         destination = destination.parent.resolve() / destination.name
         if destination.exists() or destination.is_symlink():
@@ -1095,7 +1255,7 @@ class SQLiteProjectStore:
                     assert staging.parent == destination.parent
                     cls._extract_verified_backup(bundle, entries, staging)
                     _publish_project(staging, destination)
-        return cls.open(destination)
+        return cls.open_with_snapshot(destination)
 
     @classmethod
     def _extract_verified_backup(cls, bundle, entries, staging):

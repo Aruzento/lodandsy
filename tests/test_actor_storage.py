@@ -99,6 +99,8 @@ def test_actor_token_fault_rolls_back_and_retry(project, tmp_path):
             "BEGIN SELECT RAISE(ABORT,'injected after actors'); END"
         )
     app.cards_service.update_card_fields(card.id, {"summary": "Pending"})
+    token = snapshot.maps[0].tokens[0]
+    app.maps_service.move_token(doc.id, token.id, 25, 35)
     assert not controller.save_current()
     assert controller.saver.dirty and controller.saver.last_error
     assert controller.store.load() == snapshot
@@ -106,6 +108,9 @@ def test_actor_token_fault_rolls_back_and_retry(project, tmp_path):
         connection.execute("DROP TRIGGER fail_token")
     assert controller.save_current()
     assert not controller.saver.dirty
+    saved = controller.store.load()
+    assert (saved.maps[0].tokens[0].x, saved.maps[0].tokens[0].y) == (25, 35)
+    assert next(c for c in saved.cards if c.id == card.id).value("summary") == "Pending"
 
 
 def test_schema14_and_corrupt_actor_are_not_rewritten(project, tmp_path):
