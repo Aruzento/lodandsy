@@ -133,6 +133,11 @@ class SaveCoordinator(QObject):
     def wait_current(self):
         if self._saving:
             loop = QEventLoop()
+            # This probe belongs to the wait. The autosave timer and queued
+            # completion can be unavailable during native window teardown.
+            observer = QTimer()
+            observer.setInterval(10)
+            observer.timeout.connect(self._observe_completed)
 
             def quit_when_idle():
                 if not self._saving:
@@ -142,8 +147,10 @@ class SaveCoordinator(QObject):
             try:
                 self._observe_completed()
                 if self._saving:
+                    observer.start()
                     loop.exec()
             finally:
+                observer.stop()
                 self._finished.disconnect(quit_when_idle)
         return self.last_error is None
 
@@ -164,8 +171,9 @@ class SaveCoordinator(QObject):
 
     def shutdown(self):
         self._timer.stop()
-        self.wait_current()
+        self._completion_timer.stop()
+        # The writer depends only on its snapshot. Join it even if Qt is no
+        # longer delivering events, then apply its completion on this thread.
         self._executor.shutdown(wait=True)
         self._observe_completed()
         self._timer.stop()
-        self._completion_timer.stop()

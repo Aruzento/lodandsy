@@ -124,3 +124,39 @@ def test_autosave_recovers_missing_ack_and_discards_late_result(qtbot):
     saver._on_result(old)
     assert saver.saved_revision == 0 and not saver.dirty
     saver.shutdown()
+
+
+def test_shutdown_observes_the_writer_without_qt_completion_delivery(qtbot):
+    saver = SaveCoordinator(lambda rev: ProjectSnapshot((), rev))
+    entered, release = threading.Event(), threading.Event()
+    saved, rescue = [], []
+
+    def persist(snapshot, base):
+        entered.set()
+        assert release.wait(3)
+
+    saver.reset(0, persist)
+    saver.saved.connect(saved.append)
+    saver._result_ready.disconnect()
+    saver.mark_dirty()
+    assert saver.request_save()
+    qtbot.waitUntil(entered.is_set)
+    saver._completion_timer.stop()
+
+    def restore_delivery():
+        rescue.append(True)
+        saver._observe_completed()
+
+    # A regression can fail visibly instead of indefinitely blocking the suite.
+    fallback = QTimer()
+    fallback.setInterval(300)
+    fallback.timeout.connect(restore_delivery)
+    fallback.start()
+    releaser = threading.Timer(0.04, release.set)
+    releaser.start()
+    try:
+        saver.shutdown()
+    finally:
+        fallback.stop()
+        releaser.join()
+    assert saved == [1] and not saver.dirty and not rescue
