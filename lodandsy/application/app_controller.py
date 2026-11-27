@@ -143,7 +143,7 @@ class AppController:
         self.economy_action.triggered.connect(self.open_economy)
         window.right_rail.settings_button.clicked.connect(lambda: self.open_settings())
         self.core.replaced.connect(self.close_settings)
-        self.maps_service.map_changed.connect(self._placements_changed)
+        self.maps_service.placements_changed.connect(self._placements_changed)
         self.maps_service.map_deleted.connect(self._placements_changed)
         self.navigator_selection = None
         tree = window.tree_panel
@@ -178,7 +178,7 @@ class AppController:
         )
         self.core.replaced.connect(self.refresh_tree)
         self.core.selection_changed.connect(self._on_selected_entity_changed)
-        self.maps_service.map_changed.connect(self._module_title_changed)
+        self.maps_service.map_destination_changed.connect(self._module_title_changed)
         self.tables_service.table_changed.connect(
             lambda key, change: self._module_title_changed(key) if change.title else None
         )

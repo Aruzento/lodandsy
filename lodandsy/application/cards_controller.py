@@ -60,7 +60,9 @@ class CardsController(QObject):
         self.delete_actor = lambda reference, **kwargs: None
         self.images = CardMediaController(window, service, media, resources, ensure_project)
         service.card_changed.connect(self._on_card_changed)
-        service.actor_changed.connect(lambda key, actor, fields: self.refresh_relations(key))
+        service.actor_changed.connect(
+            lambda key, actor, fields: self.refresh_relations(key, update_placements=False)
+        )
         service.cards_deleted.connect(self._on_cards_deleted)
         service.cards_replaced.connect(self.reset)
         service.core.entity_changed.connect(self._link_entity_changed)
@@ -349,7 +351,7 @@ class CardsController(QObject):
         self.refresh_relations(card_id)
         return editor
 
-    def refresh_relations(self, card_id):
+    def refresh_relations(self, card_id, *, update_placements=True):
         editor = self.editors.get(card_id)
         if editor is None:
             return
@@ -364,7 +366,8 @@ class CardsController(QObject):
                         name,
                         summary,
                         inventory,
-                        self.placements_query(ActorRef(card_id, actor.id)),
+                        self.placements_query(ActorRef(card_id, actor.id))
+                        if update_placements or actor.id not in editor.relations.rows else None,
                     )
                 )
             editor.relations.set_rows(tuple(rows))

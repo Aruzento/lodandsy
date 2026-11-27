@@ -7,11 +7,10 @@ from PySide6.QtGui import QUndoCommand
 
 from lodandsy.application.maps_service import map_payload
 from lodandsy.domain.actor_state import ActorRef
-from lodandsy.domain.card import Card, Portrait
+from lodandsy.domain.card import Card, CardPayload, Portrait
 from lodandsy.domain.card_schema import ACTOR_TYPES
 from lodandsy.domain.currency import CoinAmount
 from lodandsy.domain.document_payloads import inventory_inputs, validate_inventory_columns
-from lodandsy.domain.entity import EntityCollection
 from lodandsy.domain.inventory_transfer import ItemStack
 from lodandsy.domain.map_document import TokenInstance
 from lodandsy.domain.table_document import RowRecord
@@ -26,7 +25,6 @@ class PlacementEdit(QUndoCommand):
         self.actor, self.default_before, self.inventory = created_actor, default_before, inventory
         self.default_after = actions.cards.get_card(token.card_id).default_actor_id
         self.generation = actions.core.generation
-        self.initial = True
 
     def candidate(self, redo):
         actions, core = self.actions, self.actions.core
@@ -91,13 +89,6 @@ class PlacementEdit(QUndoCommand):
                     records[entity.id] = self.inventory
         return records
 
-    def check(self, redo):
-        records = self.candidate(redo)
-        core = self.actions.core
-        EntityCollection(
-            records.values(), settings=core.entities.settings, validator=core.entities.validator
-        )
-
     def apply(self, redo):
         records = self.candidate(redo)
         actions, core = self.actions, self.actions.core
@@ -119,24 +110,14 @@ class PlacementEdit(QUndoCommand):
                         core.delete(inventory.id)
             actions.maps.commit_placements(self.map_id, records[self.map_id][1].tokens)
 
-    def undo(self):
-        self.apply(False)
-
-    def redo(self):
-        if self.initial:
-            self.initial = False
-        else:
-            self.apply(True)
-
-
 class ProjectActions:
     def __init__(self, core, cards, tables, maps):
         self.core, self.cards, self.tables, self.maps = core, cards, tables, maps
         self._inventory_owner_cache = (None, {})
+        core.committed.connect(self._inventory_owners_committed)
         cards.create_inventory = self.create_actor_inventory
         cards.calculation_inputs = lambda card, actor: inventory_inputs(core.entities, card, actor)
         maps.place_card = self.place_card
-        maps.validate_change = self.validate_map_candidate
         from lodandsy.application.field_edits import FieldEdits
         from lodandsy.domain.module_values import validate_title
 
@@ -149,6 +130,28 @@ class ProjectActions:
         )
         core.replaced.connect(self.title_edits.discard)
         core.entities_deleted.connect(self.title_edits.remove_entities)
+
+    def _inventory_owners_committed(self):
+        receipt = self.core.last_commit
+        signature, owners = self._inventory_owner_cache
+        if signature != (receipt.generation, receipt.serial - 1) or receipt.changes is None:
+            return
+        for change in receipt.changes.aggregates:
+            before, after = change.before, change.after
+            if (
+                before is None or after is None
+                or (before.kind, before.parent_id, before.position)
+                != (after.kind, after.parent_id, after.position)
+            ):
+                return
+            old, new = change.before_payload, change.after_payload
+            if isinstance(old, CardPayload) and (
+                old.sections != new.sections
+                or tuple((a.id, a.inventory_id) for a in old.actors)
+                != tuple((a.id, a.inventory_id) for a in new.actors)
+            ):
+                return
+        self._inventory_owner_cache = (receipt.generation, receipt.serial), owners
 
     def inventory_owner(self, table_id):
         signature = self.core.generation, self.core.serial
@@ -290,15 +293,6 @@ class ProjectActions:
         candidate = candidate.with_cell(row_id, column.id, active)
         with self.core.transaction():
             return self.tables.update_table(candidate, expected=table)
-
-    def validate_map_candidate(self, document):
-        records = [
-            (e, map_payload(document) if e.id == document.id else self.core.entities.payload(e.id))
-            for e in self.core.entities.summaries()
-        ]
-        EntityCollection(
-            records, settings=self.core.entities.settings, validator=self.core.entities.validator
-        )
 
     def place_card(self, map_id, card_id, x, y, *, actor_id=None, **presentation):
         before = self.cards.get_card(card_id)

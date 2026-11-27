@@ -9,6 +9,7 @@ import sqlite3
 import tempfile
 from collections import defaultdict
 from contextlib import ExitStack, closing, contextmanager
+from math import ceil
 from pathlib import Path
 from statistics import median
 from threading import get_ident
@@ -46,6 +47,8 @@ class Phases:
         self.main = get_ident()
         self.elapsed = defaultdict(float)
         self.calls = defaultdict(int)
+        self.counts = defaultdict(int)
+        self.reconciling = False
         self.worker_finished = None
 
     @contextmanager
@@ -70,7 +73,14 @@ class Phases:
 
     def readings(self):
         return {f"{lane}_{phase}_ms": round(value, 4)
-                for (lane, phase), value in self.elapsed.items()}
+                for (lane, phase), value in self.elapsed.items()} | dict(self.counts)
+
+    def reset(self):
+        self.elapsed.clear()
+        self.calls.clear()
+        self.counts.clear()
+        for key in ("validated_aggregates", "reconciled_contexts", "full_validations"):
+            self.counts[key] = 0
 
 
 def io_written():
@@ -128,12 +138,59 @@ def workload(profile, asset):
 
 
 def instrument(stack, phases, controller, project):
-    validate = phases.wrap("validate", document_payloads.validate_project)
+    original_validate = document_payloads.validate_project
+    prepare = controller.core.prepare
+    effective = controller.cards_service.effective
+
+    def validate(collection, previous=None):
+        if get_ident() == phases.main:
+            phases.counts["full_validations"] += 1
+            phases.counts["validated_aggregates"] += len(collection._entities)
+        with phases.measure("validate"):
+            return original_validate(collection, previous)
+
+    def reconcile(changes):
+        phases.reconciling = True
+        try:
+            with phases.measure("reconcile"):
+                return prepare(changes)
+        finally:
+            phases.reconciling = False
+
+    def observe_effective(*args, **kwargs):
+        if phases.reconciling:
+            phases.counts["reconciled_contexts"] += 1
+        return effective(*args, **kwargs)
+
     stack.enter_context(patch.object(document_payloads, "validate_project", validate))
     stack.enter_context(patch.object(controller.core.entities, "validator", validate))
+    stack.enter_context(patch.object(controller.core, "prepare", reconcile))
     stack.enter_context(patch.object(
-        controller.core, "prepare", phases.wrap("reconcile", controller.core.prepare),
+        controller.cards_service, "effective", observe_effective,
     ))
+    partial = getattr(controller.core.entities, "change_validator", None)
+    if partial is not None:
+        validate_affected = partial._validate_affected
+        projection = document_payloads.card_projection
+        current_scope = None
+
+        def observe_projection(collection, key):
+            if current_scope is not None:
+                current_scope.add(key)
+            return projection(collection, key)
+
+        def observe_affected(collection, changes, maps):
+            nonlocal current_scope
+            current_scope = {entry.id for entry in changes.aggregates}
+            try:
+                with phases.measure("validate"):
+                    return validate_affected(collection, changes, maps)
+            finally:
+                phases.counts["validated_aggregates"] += len(current_scope)
+                current_scope = None
+
+        stack.enter_context(patch.object(partial, "_validate_affected", observe_affected))
+        stack.enter_context(patch.object(document_payloads, "card_projection", observe_projection))
     stack.enter_context(patch.object(
         project.saver, "_snapshot", phases.wrap("snapshot", project.saver._snapshot),
     ))
@@ -230,7 +287,56 @@ def catalogue_reads(root, catalogue, store, phases):
             "selected_world_full_reads": 1}
 
 
-def benchmark(profile, sample_count, root):
+def statistics(records, statistic):
+    return {
+        name: {
+            key: round(statistic([sample.get(key, 0) for sample in samples]), 4)
+            for key in sorted(set().union(*(sample.keys() for sample in samples)))
+        }
+        for name, samples in records.items()
+    }
+
+
+def p95(values):
+    return sorted(values)[ceil(0.95 * len(values)) - 1]
+
+
+def measure_series(app, controller, project, phases, snapshot, document, series_size):
+    refs = [
+        ActorRef(card.id, actor.id) for card in snapshot.cards for actor in card.actors
+    ]
+    tokens = document.tokens
+    results = {}
+    for name in ("actor_hp", "token_move"):
+        app.processEvents()
+        records = []
+        initial_revision = project.saver.revision
+        for i in range(series_size):
+            phases.reset()
+            with phases.measure("edit"):
+                if name == "actor_hp":
+                    controller.cards_service.update_actor(
+                        refs[i % len(refs)], {"hp_current": 10 + (i // len(refs)) % 2},
+                    )
+                else:
+                    controller.maps_service.move_token(
+                        document.id, tokens[i % len(tokens)].id, 100 + (i // len(tokens)) % 2, 300,
+                    )
+            records.append(phases.readings())
+        assert project.saver.revision == initial_revision + series_size
+        phases.reset()
+        prior_io = io_written()
+        started = perf_counter()
+        assert project.saver.save(), project.saver.last_error
+        results[name] = {
+            "samples": records,
+            "save_wall_ms": round((perf_counter() - started) * 1000, 4),
+            "write_bytes": io_written() - prior_io,
+        }
+    return results
+
+
+def benchmark(profile, sample_count, root, *, series_size=40, full_validation=False):
     app = QApplication.instance() or QApplication([])
     window = AppShell()
     window.resize(1000, 700)
@@ -248,6 +354,8 @@ def benchmark(profile, sample_count, root):
             snapshot = workload(profile, store.import_asset(source))
             store.save(snapshot)
         project.open_project(root / "world")
+        if full_validation:
+            controller.core.entities.change_validator.full_validation = True
         window.show()
         document = snapshot.maps[0]
         map_view = controller.maps.open_map(document.id).widget().view
@@ -289,8 +397,7 @@ def benchmark(profile, sample_count, root):
             for i in range(sample_count + 1):
                 for name, edit in operations.items():
                     app.processEvents()
-                    phases.elapsed.clear()
-                    phases.calls.clear()
+                    phases.reset()
                     previous_io = io_written()
                     previous_revision = project.saver.revision
                     with phases.measure("edit"):
@@ -306,7 +413,11 @@ def benchmark(profile, sample_count, root):
                                "write_bytes": io_written() - previous_io}
                     if i:
                         records[name].append(sample)
+            series = measure_series(
+                app, controller, project, phases, snapshot, document, series_size
+            )
             catalogue_data = catalogue_reads(root, catalogue, project.store, phases)
+        series_samples = {name: data["samples"] for name, data in series.items()}
         return {
             "platform": platform.platform(), "python": platform.python_version(),
             "sqlite": sqlite3.sqlite_version, "qt_platform": app.platformName(),
@@ -314,13 +425,15 @@ def benchmark(profile, sample_count, root):
                 ("actors", "items", "maps", "tokens", "rows_per_actor"), profile, strict=True,
             )),
             "samples_after_warmup": sample_count,
+            "series_size": series_size,
             "db_bytes": project.store.path.stat().st_size,
             "empty_memory_mib": empty_memory, "loaded_memory_mib": loaded_memory,
             "final_memory_mib": memory(),
-            "median": {name: {
-                key: round(median(record[key] for record in samples), 4)
-                for key in samples[0]
-            } for name, samples in records.items()},
+            "median": statistics(records, median),
+            "p95": statistics(records, p95),
+            "series_median": statistics(series_samples, median),
+            "series_p95": statistics(series_samples, p95),
+            "series": series,
             "samples": records, "catalogue": catalogue_data,
         }
     finally:
@@ -336,10 +449,15 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--profile", choices=PROFILES, required=True)
     parser.add_argument("--samples", type=int, default=5)
+    parser.add_argument("--series", type=int, default=40)
+    parser.add_argument("--full-validation", action="store_true")
     parser.add_argument("--report", type=Path, required=True)
     options = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="lodandsy-audit-benchmark-") as temporary:
-        result = benchmark(PROFILES[options.profile], options.samples, Path(temporary))
+        result = benchmark(
+            PROFILES[options.profile], options.samples, Path(temporary), series_size=options.series,
+            full_validation=options.full_validation,
+        )
     options.report.write_text(json.dumps(result, indent=2), encoding="utf-8")
 
 

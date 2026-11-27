@@ -1,6 +1,7 @@
 """Map viewer/editor lifecycle and native resources; dependencies are explicit public contracts."""
 
 from dataclasses import replace
+from functools import cache
 from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
@@ -66,7 +67,7 @@ class MapsController(QObject):
         self.progress = None
         self.importing = False
         service.map_changed.connect(self._refresh_map)
-        service.map_changed.connect(self._portal_dependents)
+        service.map_destination_changed.connect(self._portal_dependents)
         service.map_deleted.connect(self._portal_dependents)
         service.history_blocked.connect(window.show_notice)
         service.map_deleted.connect(self.close_presentation)
@@ -520,7 +521,7 @@ class MapsController(QObject):
         if not self._portrait or self._portrait[0] != map_id:
             return
         _, token_id, asset_id = self._portrait
-        document = self.service.maps.get(map_id)
+        document = self.service.find_map(map_id)
         token = next((t for t in document.tokens if t.id == token_id), None) if document else None
         try:
             valid = (
@@ -538,7 +539,7 @@ class MapsController(QObject):
             if not key.startswith("map:"):
                 continue
             map_id = key[4:]
-            document = self.service.maps.get(map_id)
+            document = self.service.find_map(map_id)
             if (
                 document
                 and map_id != target_id
@@ -646,7 +647,7 @@ class MapsController(QObject):
         views = [w.widget().view for w in windows if w]
         if map_id in self.presentations:
             views.append(self.presentations[map_id].view)
-        document = self.service.maps.get(map_id)
+        document = self.service.find_map(map_id)
         layers = {v.id: v.visible for v in document.layers} if document else {}
         canonical = {v.id: v for v in document.tokens} if document else {}
         for view in views:
@@ -728,19 +729,18 @@ class MapsController(QObject):
             if token.actor_id:
                 self._actor_maps.setdefault((token.card_id, token.actor_id), set()).add(key)
         project = self.resources
+        resolve_participant = cache(self.cards.participant_info)
+        portal_labels = {}
+        for portal in document.portals:
+            target = self.service.find_map(portal.target_id) if not portal.label else None
+            portal_labels[portal.id] = portal.label or (
+                target.title if target else "Карта назначения недоступна"
+            )
         for window in windows:
             if not window:
                 continue
             widget = window.widget()
-            widget.view.portal_labels = {
-                portal.id: portal.label
-                or (
-                    self.service.entities.get(portal.target_id).title
-                    if portal.target_id in self.service.maps
-                    else "Карта назначения недоступна"
-                )
-                for portal in document.portals
-            }
+            widget.view.portal_labels = portal_labels.copy()
             editor = isinstance(widget, MapEditorWidget)
             window.setWindowTitle(("Редактор карты · " if editor else "") + document.title)
             widget.view.set_annotations(
@@ -750,7 +750,7 @@ class MapsController(QObject):
                 project.assets,
                 self.media.cached_preview,
                 fog_path=cached[1],
-                participant_resolver=self.cards.participant_info,
+                participant_resolver=resolve_participant,
             )
             if editor:
                 widget.set_document(document)
@@ -781,7 +781,7 @@ class MapsController(QObject):
 
     def _actor_changed(self, card_id, actor_id, fields):
         try:
-            self.cards.participant_info(card_id, actor_id)
+            participant = self.cards.participant_info(card_id, actor_id)
         except ValueError:
             return
         for map_id in tuple(self._actor_maps.get((card_id, actor_id), ())):
@@ -789,7 +789,7 @@ class MapsController(QObject):
                 window = self.windows.find_window(prefix + map_id)
                 if window:
                     window.widget().view.refresh_participant(
-                        card_id, actor_id, self.cards.participant_info
+                        card_id, actor_id, lambda *_: participant
                     )
 
     def _edit_layer(self, map_id, key, changes):
@@ -933,7 +933,7 @@ class MapsController(QObject):
 
     def card_changed(self, key, fields=None):
         for map_id in tuple(self._card_maps.get(key, ())):
-            if map_id in self.service.maps:
+            if self.service.find_map(map_id) is not None:
                 self._refresh_map(map_id)
 
     def _add_token(self, map_id, x, y):

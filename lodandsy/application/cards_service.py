@@ -42,6 +42,7 @@ class CardsService(QObject):
             else EntitySession(cards.entities if cards is not None else None, self)
         )
         self.cards = cards if cards is not None else CardCollection(entities=self.core.entities)
+        self.cards.enable_addressed_validation()
         self.field_drafts = {}
         from lodandsy.domain.card_schema import parse_field
 
@@ -107,6 +108,7 @@ class CardsService(QObject):
         self._effective_cache.clear()
         self._published_effective.clear()
         self.cards = CardCollection(entities=self.core.entities)
+        self.cards.enable_addressed_validation()
         self.field_drafts.clear()
         self.cards_replaced.emit()
 
@@ -147,15 +149,16 @@ class CardsService(QObject):
             self._effective_cache[signature] = value
         return value
 
-    def reconcile(self, previous=None):
+    def reconcile(self, changes, *, complete=False):
         """Runs inside the outer transaction before validation/publication."""
-        live = {(card.id, actor.id) for card in self.cards.all() for actor in card.actors}
-        removed = {
-            (card_id, actor.id)
-            for card_id, payload in (previous or {}).items()
-            for actor in getattr(payload, "actors", ())
-            if (card_id, actor.id) not in live
-        }
+        previous = {change.id: change.before_payload for change in changes.aggregates}
+        removed = set()
+        for change in changes.aggregates:
+            before = getattr(change.before_payload, "actors", ())
+            after = getattr(change.after_payload, "actors", ())
+            if before != after:
+                live = {actor.id for actor in after}
+                removed.update((change.id, actor.id) for actor in before if actor.id not in live)
         if removed:
 
             def retire():
@@ -169,8 +172,9 @@ class CardsService(QObject):
                     self._published_effective.pop(identity, None)
 
             self.core.after_commit(retire)
-        for card in self.cards.all():
-            if card.card_type in ACTOR_TYPES:
+        for card_id, contexts in self.cards.affected_contexts(changes, complete=complete).items():
+            card = self.get_card(card_id)
+            if None in contexts and card.card_type in ACTOR_TYPES:
                 base = self.effective(card.id)
                 signature = tuple(
                     (key, v.value, v.source, v.status, v.diagnostic)
@@ -188,6 +192,9 @@ class CardsService(QObject):
                     self.core.after_commit(publish_base)
             actors = []
             for actor in card.actors:
+                if actor.id not in contexts:
+                    actors.append(actor)
+                    continue
                 effective = self.effective(ActorRef(card.id, actor.id))
                 maximum = effective.get("hp_max")
                 signature = tuple(
@@ -209,7 +216,9 @@ class CardsService(QObject):
                     old_actor = next(
                         (
                             a
-                            for a in getattr((previous or {}).get(card.id), "actors", ())
+                            for a in getattr(
+                                previous.get(card.id, self.entities.payload(card.id)), "actors", (),
+                            )
                             if a.id == actor.id
                         ),
                         None,

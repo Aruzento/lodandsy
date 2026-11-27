@@ -99,3 +99,49 @@ def test_project_selection_notification_cannot_cache_previous_inventory(project)
     app.core.replace(EntityCollection())
     assert observed == [None]
     assert app.actions.inventory_owner(actor.inventory_id) is None
+
+
+def test_change_receipt_merges_savepoints_and_ignores_rolled_back_writes(qapp):
+    core = EntitySession()
+    entities = core.entities
+    parent = entities.create("card", "Parent", "root")
+    moved = entities.create("card", "First", "old")
+    sibling = entities.create("card", "Second", "kept")
+    deleted = entities.create("table", "Table", "rows", parent.id)
+    observed = []
+    core.committed.connect(lambda: observed.append(core.last_commit))
+
+    with core.transaction():
+        entities.put_settings("rules")
+        with pytest.raises(ValueError, match="rollback"):
+            with core.transaction():
+                entities.update(parent.id, title="Discard")
+                entities.update(moved.id, parent_id=parent.id)
+                entities.put_settings("discard")
+                raise ValueError("rollback")
+        assert entities.child_ids() == (parent.id, moved.id, sibling.id)
+        with core.transaction():
+            entities.delete(deleted.id)
+            entities.update(moved.id, parent_id=parent.id)
+            entities.put_payload(moved.id, "new")
+            created = entities.create("table", "New", "empty", moved.id)
+        ephemeral = entities.create("card", "Ephemeral", "empty")
+        entities.delete(ephemeral.id)
+        assert observed == []
+
+    receipt, = observed
+    assert (receipt.generation, receipt.serial) == (0, 1)
+    changes = {change.id: change for change in receipt.changes.aggregates}
+    assert set(changes) == {moved.id, sibling.id, deleted.id, created.id}
+    assert (changes[moved.id].before_payload, changes[moved.id].after_payload) == ("old", "new")
+    assert changes[moved.id].after.parent_id == parent.id
+    assert (changes[sibling.id].before.position, changes[sibling.id].after.position) == (2, 1)
+    assert changes[deleted.id].after is None and changes[created.id].before is None
+    assert (receipt.changes.settings_before, receipt.changes.settings_after) == (None, "rules")
+
+    with core.transaction():
+        entities.put_payload(moved.id, "temporary")
+        entities.put_payload(moved.id, "new")
+    assert observed == [receipt]
+    core.replace(EntityCollection())
+    assert core.last_commit is None

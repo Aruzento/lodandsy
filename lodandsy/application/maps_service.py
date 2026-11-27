@@ -36,27 +36,47 @@ def map_payload(document):
 class GuardedUndoStack(QUndoStack):
     blocked = Signal(str)
 
+    def __init__(self, service):
+        super().__init__(service)
+        self.core = service.core
+        self._stepping = False
+
     def undo(self):
-        if not self.canUndo():
-            return False
-        try:
-            self.command(self.index() - 1).check(False)
-        except ValueError as error:
-            self.blocked.emit(str(error))
-            return False
-        super().undo()
-        return True
+        return self._step(False)
 
     def redo(self):
-        if not self.canRedo():
+        return self._step(True)
+
+    def _step(self, redo):
+        if not (self.canRedo() if redo else self.canUndo()):
             return False
+        if self._stepping or self.core.in_transaction:
+            self.blocked.emit("Переход по истории доступен после завершения операции")
+            return False
+        command = self.command(self.index() if redo else self.index() - 1)
+        self._stepping = True
         try:
-            self.command(self.index()).check(True)
+            with self.core.transaction():
+                # Move the Qt history index before publishing feature notifications.
+                self.core.after_commit(lambda: self._finish_step(redo))
+                command.apply(redo)
         except ValueError as error:
+            self._stepping = False
             self.blocked.emit(str(error))
             return False
-        super().redo()
+        except BaseException:
+            self._stepping = False
+            raise
         return True
+
+    def _finish_step(self, redo):
+        try:
+            if redo:
+                super().redo()
+            else:
+                super().undo()
+        finally:
+            self._stepping = False
 
     def _action(self, parent, prefix, redo):
         action = QAction(parent)
@@ -107,6 +127,8 @@ class MapEdit(QUndoCommand):
             raise ValueError("История относится к другому проекту")
         source, target = (self.before, self.after) if redo else (self.after, self.before)
         current = self.session.get_map(source.id)
+        if current is source:
+            return target
         changes = {}
         for field in self.fields:
             old, new, actual = (
@@ -146,19 +168,14 @@ class MapEdit(QUndoCommand):
                 changes[field] = new
         return replace(current, **changes)
 
-    def check(self, redo):
-        candidate = self.candidate(redo)
-        self.session.validate_change(candidate)
-
-    def undo(self):
-        self.session._put_map(self.candidate(False))
-
-    def redo(self):
-        self.session._put_map(self.candidate(True))
+    def apply(self, redo):
+        self.session._put_map(self.candidate(redo))
 
 
 class MapsService(QObject):
     map_changed = Signal(str)
+    map_destination_changed = Signal(str)
+    placements_changed = Signal(str)
     map_deleted = Signal(str)
     history_blocked = Signal(str)
 
@@ -167,7 +184,6 @@ class MapsService(QObject):
         self.core = core if core is not None else EntitySession(parent=self)
         self._undo = {}
         self.place_card = None
-        self.validate_change = lambda document: None
         self.core.replaced.connect(self.reset)
         self.core.entities_deleted.connect(self.notify_deleted)
         self.core.entity_changed.connect(self._entity_changed)
@@ -190,7 +206,9 @@ class MapsService(QObject):
 
     def _put(self, document):
         # Undo belongs to Map payload. Entity rename/reparent is a separate Core command.
-        document = replace(document, title=self.entities.get(document.id).title)
+        title = self.entities.get(document.id).title
+        if document.title != title:
+            document = replace(document, title=title)
         self.entities.put_payload(document.id, map_payload(document))
         self.entities.project(document.id, lambda e, p: document)
 
@@ -221,6 +239,10 @@ class MapsService(QObject):
     def _entity_changed(self, key, fields):
         if self.entities.get(key).kind == "map":
             self.map_changed.emit(key)
+            if "title" in fields:
+                self.map_destination_changed.emit(key)
+            if fields & {"title", "payload"}:
+                self.placements_changed.emit(key)
 
     def notify_deleted(self, deleted):
         for key in deleted:
@@ -230,10 +252,19 @@ class MapsService(QObject):
                 stack.deleteLater()
             self.map_deleted.emit(key)
 
-    def _put_map(self, document):
+    def _put_map(self, document, *, record=None):
+        previous = self.get_map(document.id)
+        placements_changed = previous.tokens is not document.tokens and (
+            [(t.id, t.card_id, t.actor_id) for t in previous.tokens]
+            != [(t.id, t.card_id, t.actor_id) for t in document.tokens]
+        )
         with self.core.transaction():
             self._put(document)
+            if record is not None:
+                self.core.after_commit(lambda: self.record_operation(document.id, record))
             self.core.after_commit(lambda: self.map_changed.emit(document.id))
+            if placements_changed:
+                self.core.after_commit(lambda: self.placements_changed.emit(document.id))
             self.core.mark_changed()
 
     def create_map(self, title, asset_id, parent_id=None):
@@ -250,6 +281,7 @@ class MapsService(QObject):
             )
             self.core.after_commit(lambda: self.core.entity_created.emit(document.id))
             self.core.after_commit(lambda: self.map_changed.emit(document.id))
+            self.core.after_commit(lambda: self.map_destination_changed.emit(document.id))
             self.core.mark_changed()
         return document
 
@@ -292,10 +324,17 @@ class MapsService(QObject):
         return self._undo[map_id]
 
     def record_operation(self, map_id, command):
-        self.undo_stack(map_id).push(command)
+        if self.find_map(map_id) is not None:
+            self.undo_stack(map_id).push(command)
 
     def get_map(self, map_id):
         return self._get(map_id, "map")
+
+    def find_map(self, map_id):
+        try:
+            return self.get_map(map_id)
+        except ValueError:
+            return None
 
     def commit_placements(self, map_id, tokens):
         self._put_map(replace(self.get_map(map_id), tokens=tuple(tokens)))
@@ -318,8 +357,7 @@ class MapsService(QObject):
         after = replace(before, **changes)
         if before != after:
             operation = MapEdit(self, before, after, command)
-            operation.check(True)
-            self.undo_stack(map_id).push(operation)
+            self._put_map(after, record=operation)
 
     def put_vector(self, map_id, value):
         from lodandsy.domain.map_document import MapPortal, MapShape
