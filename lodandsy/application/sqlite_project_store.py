@@ -1,12 +1,14 @@
+import errno
 import hashlib
 import json
 import os
 import shutil
 import sqlite3
+import stat
 import tempfile
 import threading
 import zipfile
-from contextlib import closing
+from contextlib import ExitStack, closing, contextmanager
 from dataclasses import asdict, dataclass, field
 from functools import wraps
 from pathlib import Path, PurePosixPath
@@ -26,7 +28,7 @@ from lodandsy.domain.card import Card, validate_card_id
 from lodandsy.domain.card_collection import CardCollection
 from lodandsy.domain.currency import CurrencySystem
 from lodandsy.domain.document_payloads import project_entities
-from lodandsy.domain.entity import Entity
+from lodandsy.domain.entity import Entity, EntityCollection
 from lodandsy.domain.item_categories import ItemCategory
 from lodandsy.domain.map_document import (
     MapDocument,
@@ -46,6 +48,10 @@ DATABASE_NAME = "project.sqlite3"
 LOCK_NAME = ".lodandsy.lock"
 SCHEMA_VERSION = 17
 MAX_BACKUP_BYTES = 4 * 1024**3
+TEMP_DB_STAGE = "Создание временной SQLite"
+ARCHIVE_STAGE = "Создание резервного архива"
+RESTORE_STAGE = "Восстановление резервной копии"
+VERIFY_STAGE = "Пробное восстановление Map10"
 TRANSFORM_MAP_VERSION = 10
 TOKEN_FIELDS = {
     "x", "y", "cells_w", "cells_h", "z", "label_override", "image_override", "kind_override",
@@ -55,6 +61,22 @@ TOKEN_FIELDS = {
 
 class ProjectError(ValueError):
     pass
+
+
+class IncompatibleProjectError(ProjectError):
+    def __init__(self, version):
+        self.version = version
+        super().__init__(
+            f"Unsupported project schema version: {version}. "
+            f"Требуется SQLite-схема {SCHEMA_VERSION}."
+        )
+
+
+@dataclass(frozen=True)
+class ProjectMetadata:
+    project_id: str
+    schema_version: int
+    database_identity: tuple[int, int]
 
 
 @dataclass(frozen=True)
@@ -110,6 +132,19 @@ class ProjectSnapshot:
             object.__setattr__(self, "entities", self.entity_collection().summaries())
 
 
+@dataclass(frozen=True)
+class VerifiedProject:
+    snapshot: ProjectSnapshot
+    entities: EntityCollection
+
+
+def _disk_full(error):
+    if isinstance(error, OSError):
+        return error.errno == errno.ENOSPC or getattr(error, "winerror", None) in {39, 112}
+    code = getattr(error, "sqlite_errorcode", 0) or 0
+    return (code & 0xFF) == sqlite3.SQLITE_FULL or "database or disk is full" in str(error)
+
+
 class ProjectLock:
     def __init__(self, root: Path, filename=LOCK_NAME):
         self._file = (root / filename).open("a+b")
@@ -127,8 +162,10 @@ class ProjectLock:
                 import fcntl
 
                 fcntl.flock(self._file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
+        except OSError as error:
             self._file.close()
+            if _disk_full(error):
+                raise
             raise ProjectError("Project is already open or cannot be locked") from None
 
     def close(self):
@@ -136,16 +173,64 @@ class ProjectLock:
             self._file.close()
 
 
-def connect_database(path: Path, *, readonly=False, immutable=False):
-    options = "?mode=ro" if readonly or immutable else "?mode=rw"
-    if immutable:
-        options += "&immutable=1"
+def connect_database(path: Path, *, readonly=False):
+    options = "?mode=ro" if readonly else "?mode=rw"
     connection = sqlite3.connect(
         path.as_uri() + options, uri=True, timeout=5
     )
     connection.execute("PRAGMA foreign_keys=ON")
     connection.execute("PRAGMA trusted_schema=OFF")
     return connection
+
+
+def _space_message(path, stage, required):
+    return f"Недостаточно свободного места. {stage}. Путь {path}. Требуется {required} байт."
+
+
+def _require_space(directory, stage, required):
+    free = shutil.disk_usage(directory).free
+    if free < required:
+        raise ProjectError(f"{_space_message(directory, stage, required)} Доступно {free} байт.")
+
+
+@contextmanager
+def _disk_stage(path, stage, required):
+    try:
+        yield
+    except (OSError, sqlite3.Error) as error:
+        if _disk_full(error):
+            message = _space_message(path, stage, required)
+            if isinstance(error, OSError):
+                raise OSError(errno.ENOSPC, message) from error
+            raise ProjectError(message) from error
+        raise
+
+
+def _volume_identity(directory):
+    return directory.stat().st_dev or directory.anchor.casefold()
+
+
+def _archive_requirement(entries):
+    # DEFLATE can expand incompressible data. Allow 6.25% and room for local,
+    # central and ZIP64 headers, including two copies of each UTF-8 name.
+    return 128 + sum(
+        size + size // 16 + 256 + 2 * len(name.encode("utf-8"))
+        for name, size in entries
+    )
+
+
+def _preflight_backup(
+    temporary, destination, sqlite_bytes, archive_bytes, total, verification_root,
+):
+    _require_space(temporary, TEMP_DB_STAGE, sqlite_bytes)
+    target_volume = _volume_identity(destination)
+    shared = _volume_identity(temporary) == target_volume
+    _require_space(destination, ARCHIVE_STAGE, archive_bytes + (sqlite_bytes if shared else 0))
+    if verification_root is not None:
+        shared = _volume_identity(verification_root) == target_volume
+        _require_space(
+            verification_root, VERIFY_STAGE, total + (archive_bytes if shared else 0),
+        )
 
 
 def _publish_project(staging, destination):
@@ -324,42 +409,73 @@ class SQLiteProjectStore:
     def _check_schema(connection):
         version = connection.execute("PRAGMA user_version").fetchone()[0]
         if version != SCHEMA_VERSION:
-            raise ProjectError(
-                f"Unsupported project schema version: {version}. "
-                f"Требуется SQLite-схема {SCHEMA_VERSION}."
-            )
+            raise IncompatibleProjectError(version)
+        return version
+
+    @staticmethod
+    def _database_identity(database):
+        try:
+            info = database.lstat()
+        except FileNotFoundError as error:
+            raise ProjectError(f"Нет файла мира {DATABASE_NAME} в выбранной папке.") from error
+        if not stat.S_ISREG(info.st_mode) or database.resolve() != database:
+            raise ProjectError("Файл базы должен находиться непосредственно в папке мира.")
+        return info.st_dev, info.st_ino
 
     @classmethod
-    def _project_root(cls, folder: Path):
-        root = Path(folder).resolve()
-        database = root / DATABASE_NAME
-        if not database.is_file():
-            raise ProjectError(f"Нет файла мира {DATABASE_NAME} в выбранной папке.")
-        if database.resolve() != database or database.is_symlink():
-            raise ProjectError("Файл базы должен находиться непосредственно в папке мира.")
+    def _read_metadata(cls, database):
+        identity = cls._database_identity(database)
         try:
-            with closing(connect_database(database, immutable=True)) as connection:
-                cls._check_schema(connection)
+            with closing(connect_database(database, readonly=True)) as connection:
+                connection.execute("PRAGMA busy_timeout=250")
+                connection.execute("BEGIN")
+                version = cls._check_schema(connection)
+                rows = connection.execute("SELECT project_id FROM metadata LIMIT 2").fetchall()
+                if len(rows) != 1:
+                    raise ProjectError("В базе должна быть одна запись метаданных проекта.")
+                project_id = rows[0][0]
+                validate_id(project_id)
         except sqlite3.Error as error:
-            raise ProjectError(f"Не удалось прочитать версию базы проекта: {error}") from error
-        return root
+            raise ProjectError(
+                f"Не удалось прочитать версию или метаданные проекта: {error}"
+            ) from error
+        except ValueError as error:
+            if isinstance(error, ProjectError):
+                raise
+            raise ProjectError("Некорректный идентификатор проекта.") from error
+        if cls._database_identity(database) != identity:
+            raise ProjectError("Файл базы проекта был заменён во время чтения метаданных.")
+        return ProjectMetadata(project_id, version, identity)
 
     @classmethod
     def inspect(cls, folder: Path):
-        """Check a catalogue entry without taking the writer lease."""
-        root = cls._project_root(folder)
-        cls._read_snapshot(root / DATABASE_NAME)
+        """Read catalogue metadata without decoding the world or taking its writer lease."""
+        return cls._read_metadata(Path(folder).resolve() / DATABASE_NAME)
 
     @classmethod
     def open(cls, folder: Path):
-        root = cls._project_root(folder)
+        store, _ = cls.open_with_snapshot(folder)
+        return store
+
+    @classmethod
+    def open_with_snapshot(cls, folder: Path, *, expected=None):
+        root = Path(folder).resolve()
+        database = root / DATABASE_NAME
+        metadata = cls._read_metadata(database)
+        if expected is not None and metadata != expected:
+            raise ProjectError("Выбранный проект был заменён. Откройте каталог заново.")
         store = cls(root, ProjectLock(root))
         try:
-            store.load()
+            if cls._database_identity(database) != metadata.database_identity:
+                raise ProjectError("Файл базы проекта был заменён до открытия.")
+            store._project_id = metadata.project_id
+            verified = store._load_verified()
+            if cls._database_identity(database) != metadata.database_identity:
+                raise ProjectError("Файл базы проекта был заменён во время проверки.")
         except Exception:
             store.close()
             raise
-        return store
+        return store, verified
 
     def _check_open(self):
         if self._closed:
@@ -372,10 +488,13 @@ class SQLiteProjectStore:
             self.load()
         return self._project_id
 
-    @project_operation
     def load(self) -> ProjectSnapshot:
-        snapshot, self._project_id = self._read_snapshot(self.path, self._project_id)
-        return snapshot
+        return self._load_verified().snapshot
+
+    @project_operation
+    def _load_verified(self):
+        verified, self._project_id = self._read_snapshot(self.path, self._project_id)
+        return verified
 
     @classmethod
     def _read_snapshot(cls, path, expected_project_id=None):
@@ -471,7 +590,7 @@ class SQLiteProjectStore:
                     ids = {row[0] for row in connection.execute(f"SELECT id FROM {table}")}
                     if ids != {e.id for e in envelopes if e.kind == kind}:
                         raise ProjectError("Entity payload inventory mismatch")
-                return ProjectSnapshot(
+                snapshot = ProjectSnapshot(
                     ordered_cards,
                     metadata[0][0],
                     assets,
@@ -481,7 +600,8 @@ class SQLiteProjectStore:
                     rules,
                     currency,
                     categories,
-                ), project_id
+                )
+                return VerifiedProject(snapshot, collection), project_id
         except sqlite3.Error as error:
             raise ProjectError(f"Cannot read project: {error}") from error
         except (ValueError, TypeError, KeyError, RecursionError) as error:
@@ -792,9 +912,15 @@ class SQLiteProjectStore:
 
     def _backup_before_map_upgrade(self, snapshot):
         archive = self.root.parent / f"LODANDSY-before-Map10-{uuid4().hex[:12]}.lodbackup"
-        self.backup(archive)
-        with tempfile.TemporaryDirectory(prefix="lodandsy-verify-map10-") as temporary:
-            with closing(self.restore(archive, Path(temporary) / "world")) as restored:
+        temporary_root = Path(tempfile.gettempdir()).resolve()
+        size = self.backup(archive, verification_root=temporary_root)
+        with ExitStack() as staging:
+            with _disk_stage(temporary_root, VERIFY_STAGE, size):
+                temporary = staging.enter_context(tempfile.TemporaryDirectory(
+                    prefix="lodandsy-verify-map10-", dir=temporary_root,
+                ))
+            target = Path(temporary) / "world"
+            with closing(self.restore(archive, target, verification=True)) as restored:
                 if restored.project_id != self.project_id or restored.load() != snapshot:
                     raise ProjectError("Не прошла проверка резервной копии перед Map10")
 
@@ -856,120 +982,145 @@ class SQLiteProjectStore:
         if checksum.hexdigest() != asset.sha256:
             raise ProjectError(f"Asset checksum mismatch: {asset.path}")
 
+    def _unregistered_assets(self, assets):
+        registered = {asset.path for asset in assets}
+        folder = self.root / "assets"
+        resolved = folder.resolve()
+        if not resolved.is_relative_to(self.root):
+            raise ProjectError("Asset directory is outside the project")
+        # Documents can refer to files that are absent from the SQL inventory.
+        for path in sorted(folder.rglob("*")):
+            name = path.relative_to(self.root).as_posix()
+            if name not in registered and path.is_file():
+                if not path.resolve().is_relative_to(resolved):
+                    raise ProjectError("Asset path is outside the project")
+                yield path, name, path.stat().st_size
+
+    def _write_backup_archive(self, destination, database, assets):
+        archive = destination.with_name(destination.name + f".{uuid4().hex}.tmp")
+        try:
+            with zipfile.ZipFile(archive, "x", compression=zipfile.ZIP_DEFLATED) as bundle:
+                bundle.write(database, DATABASE_NAME)
+                for asset in assets:
+                    self._verify_asset(asset)
+                    info = zipfile.ZipInfo(asset.path)
+                    info.file_size = asset.size
+                    info.compress_type = bundle.compression
+                    checksum, size = hashlib.sha256(), 0
+                    with (self.root / asset.path).open("rb") as source:
+                        with bundle.open(info, "w") as output:
+                            for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                                size += len(chunk)
+                                if size > asset.size:
+                                    raise ProjectError("Asset changed while creating backup")
+                                output.write(chunk)
+                                checksum.update(chunk)
+                    if checksum.hexdigest() != asset.sha256 or size != asset.size:
+                        raise ProjectError("Asset changed while creating backup")
+                total = database.stat().st_size + sum(asset.size for asset in assets)
+                for path, name, size in self._unregistered_assets(assets):
+                    total += size
+                    if total > MAX_BACKUP_BYTES:
+                        raise ProjectError("Backup exceeds the supported 4 GiB restore budget")
+                    bundle.write(path, name)
+                total = sum(entry.file_size for entry in bundle.infolist())
+                if total > MAX_BACKUP_BYTES:
+                    raise ProjectError("Backup grew beyond the supported 4 GiB restore budget")
+            with archive.open("r+b") as stream:
+                os.fsync(stream.fileno())
+            os.replace(archive, destination)
+            return total
+        finally:
+            archive.unlink(missing_ok=True)
+
     @project_operation
-    def backup(self, destination: Path):
-        self._check_open()
+    def backup(self, destination: Path, *, verification_root=None) -> int:
         destination = Path(destination).resolve()
         if destination.is_relative_to(self.root):
             raise ProjectError("Save backups outside the project folder")
-        with tempfile.TemporaryDirectory(prefix="lodandsy-backup-") as temporary:
-            staging = Path(temporary).resolve()
-            assert staging.is_relative_to(Path(tempfile.gettempdir()).resolve())
-            database = staging / DATABASE_NAME
-            with closing(connect_database(self.path, readonly=True)) as source:
-                with closing(sqlite3.connect(database)) as backup:
-                    backup.execute("PRAGMA foreign_keys=ON")
-                    source.backup(backup)
-                    assets = tuple(
-                        AssetRecord(*row)
-                        for row in backup.execute("SELECT id,path,sha256,size FROM asset")
-                    )
-            total = database.stat().st_size + sum(asset.size for asset in assets)
+        temporary_root = Path(tempfile.gettempdir()).resolve()
+        with closing(connect_database(self.path, readonly=True)) as source:
+            source.execute("BEGIN")
+            page_size = source.execute("PRAGMA page_size").fetchone()[0]
+            database_size = page_size * source.execute("PRAGMA page_count").fetchone()[0]
+            assets = tuple(
+                AssetRecord(*row) for row in source.execute("SELECT id,path,sha256,size FROM asset")
+            )
+            entries = [(DATABASE_NAME, database_size)]
+            entries.extend((asset.path, asset.size) for asset in assets)
+            entries.extend((name, size) for _, name, size in self._unregistered_assets(assets))
+            total = sum(size for _, size in entries)
             if total > MAX_BACKUP_BYTES:
                 raise ProjectError("Backup exceeds the supported 4 GiB restore budget")
-            archive = destination.with_name(destination.name + f".{uuid4().hex}.tmp")
-            try:
-                with zipfile.ZipFile(archive, "x", compression=zipfile.ZIP_DEFLATED) as bundle:
-                    bundle.write(database, DATABASE_NAME)
-                    registered_paths = {asset.path for asset in assets}
-                    for asset in assets:
-                        self._verify_asset(asset)
-                        checksum, size = hashlib.sha256(), 0
-                        with (self.root / asset.path).open("rb") as source:
-                            with bundle.open(asset.path, "w") as output:
-                                for chunk in iter(lambda: source.read(1024 * 1024), b""):
-                                    output.write(chunk)
-                                    checksum.update(chunk)
-                                    size += len(chunk)
-                        if checksum.hexdigest() != asset.sha256 or size != asset.size:
-                            raise ProjectError("Asset changed while creating backup")
-                    # Documents may reference user-supplied files inside assets too.
-                    # Preserve them, including unreferenced imports; never discard bytes
-                    # merely because a derivative/infrastructure record is absent.
-                    asset_folder = self.root / "assets"
-                    if not asset_folder.resolve().is_relative_to(self.root):
-                        raise ProjectError("Asset directory is outside the project")
-                    for path in sorted(asset_folder.rglob("*")):
-                        if not path.is_file():
-                            continue
-                        relative = path.relative_to(self.root).as_posix()
-                        if relative in registered_paths:
-                            continue
-                        if not path.resolve().is_relative_to(asset_folder.resolve()):
-                            raise ProjectError("Asset path is outside the project")
-                        total += path.stat().st_size
-                        if total > MAX_BACKUP_BYTES:
-                            raise ProjectError("Backup exceeds the supported 4 GiB restore budget")
-                        bundle.write(path, relative)
-                    if sum(entry.file_size for entry in bundle.infolist()) > MAX_BACKUP_BYTES:
-                        raise ProjectError("Backup grew beyond the supported 4 GiB restore budget")
-                with archive.open("r+b") as stream:
-                    os.fsync(stream.fileno())
-                os.replace(archive, destination)
-            finally:
-                archive.unlink(missing_ok=True)
+            sqlite_bytes = database_size + page_size
+            archive_bytes = _archive_requirement(entries)
+            _preflight_backup(
+                temporary_root, destination.parent, sqlite_bytes, archive_bytes,
+                total, verification_root,
+            )
+            with ExitStack() as staging:
+                with _disk_stage(temporary_root, TEMP_DB_STAGE, sqlite_bytes):
+                    temporary = staging.enter_context(tempfile.TemporaryDirectory(
+                        prefix="lodandsy-backup-", dir=temporary_root,
+                    ))
+                    database = Path(temporary) / DATABASE_NAME
+                    with closing(sqlite3.connect(database)) as backup:
+                        backup.execute("PRAGMA foreign_keys=ON")
+                        source.backup(backup)
+                with _disk_stage(destination, ARCHIVE_STAGE, archive_bytes):
+                    return self._write_backup_archive(destination, database, assets)
 
     @classmethod
-    def restore(cls, archive: Path, destination: Path):
+    def restore(cls, archive: Path, destination: Path, *, verification=False):
         destination = Path(destination)
         destination = destination.parent.resolve() / destination.name
         if destination.exists() or destination.is_symlink():
             raise ProjectError("Restore requires a new folder; existing data is never overwritten")
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(
-            prefix=".lodandsy-restore-", dir=destination.parent
-        ) as temp:
-            staging = Path(temp).resolve()
-            assert staging.parent == destination.parent
-            with zipfile.ZipFile(archive) as bundle:
-                entries = bundle.infolist()
-                names = [entry.filename for entry in entries]
-                if len(set(names)) != len(names) or DATABASE_NAME not in names:
-                    raise ProjectError("Invalid backup inventory")
-                total_size = sum(entry.file_size for entry in entries)
-                if total_size > MAX_BACKUP_BYTES:
-                    raise ProjectError("Backup exceeds the 4 GiB restore limit")
-                if shutil.disk_usage(destination.parent).free < total_size:
-                    raise ProjectError("Недостаточно свободного места для восстановления копии.")
-                for entry in entries:
-                    parts = PurePosixPath(entry.filename).parts
-                    allowed = entry.filename == DATABASE_NAME or (
-                        len(parts) >= 2 and parts[0] == "assets"
-                    )
-                    if (
-                        not allowed
-                        or ".." in parts
-                        or "\\" in entry.filename
-                        or ":" in entry.filename
-                        or entry.is_dir()
-                        or (entry.external_attr >> 16) & 0o170000 == 0o120000
-                    ):
-                        raise ProjectError("Unsafe backup entry")
-                    target = staging / entry.filename
-                    if not target.resolve().is_relative_to(staging):
-                        raise ProjectError("Unsafe backup path")
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    with bundle.open(entry) as source, target.open("xb") as output:
-                        shutil.copyfileobj(source, output)
-            validation = cls.open(staging)
-            try:
-                snapshot = validation.load()
-                for asset in snapshot.assets:
-                    validation._verify_asset(asset)
-            finally:
-                validation.close()
-            _publish_project(staging, destination)
+        stage = VERIFY_STAGE if verification else RESTORE_STAGE
+        with zipfile.ZipFile(archive) as bundle:
+            entries = bundle.infolist()
+            names = [entry.filename for entry in entries]
+            if len(set(names)) != len(names) or DATABASE_NAME not in names:
+                raise ProjectError("Invalid backup inventory")
+            total_size = sum(entry.file_size for entry in entries)
+            if total_size > MAX_BACKUP_BYTES:
+                raise ProjectError("Backup exceeds the 4 GiB restore limit")
+            with _disk_stage(destination, stage, total_size):
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                _require_space(destination.parent, stage, total_size)
+                with tempfile.TemporaryDirectory(
+                    prefix=".lodandsy-restore-", dir=destination.parent
+                ) as temp:
+                    staging = Path(temp).resolve()
+                    assert staging.parent == destination.parent
+                    cls._extract_verified_backup(bundle, entries, staging)
+                    _publish_project(staging, destination)
         return cls.open(destination)
+
+    @classmethod
+    def _extract_verified_backup(cls, bundle, entries, staging):
+        for entry in entries:
+            parts = PurePosixPath(entry.filename).parts
+            allowed = entry.filename == DATABASE_NAME or (len(parts) >= 2 and parts[0] == "assets")
+            if (
+                not allowed
+                or ".." in parts
+                or "\\" in entry.filename
+                or ":" in entry.filename
+                or entry.is_dir()
+                or (entry.external_attr >> 16) & 0o170000 == 0o120000
+            ):
+                raise ProjectError("Unsafe backup entry")
+            target = staging / entry.filename
+            if not target.resolve().is_relative_to(staging):
+                raise ProjectError("Unsafe backup path")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with bundle.open(entry) as source, target.open("xb") as output:
+                shutil.copyfileobj(source, output)
+        validation, verified = cls.open_with_snapshot(staging)
+        with closing(validation):
+            for asset in verified.snapshot.assets:
+                validation._verify_asset(asset)
 
     def close(self):
         with self._operation_lock:

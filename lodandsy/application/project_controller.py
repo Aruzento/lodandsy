@@ -307,11 +307,12 @@ class ProjectController(QObject):
         if not self.controller.may_close_settings():
             raise ProjectError("Смена проекта отменена. Черновики настроек сохранены в окне.")
 
-    def open_project(self, folder: Path, *, discard=False):
+    def open_project(self, folder: Path, *, discard=False, expected=None):
         if self.store is not None and self.store.root == Path(folder).resolve():
             return
         self._check_switch(discard)
-        self._activate_store(SQLiteProjectStore.open(folder))
+        store, verified = SQLiteProjectStore.open_with_snapshot(folder, expected=expected)
+        self._activate_store(store, verified=verified)
 
     def restore_project(self, archive: Path, name: str, *, discard=False):
         self._check_switch(discard)
@@ -324,10 +325,14 @@ class ProjectController(QObject):
         self._activate_store(store, save_previous_layout=False)
         return True
 
-    def _activate_store(self, store, *, save_previous_layout=True):
+    def _activate_store(self, store, *, verified=None, save_previous_layout=True):
         try:
-            snapshot = store.load()
-            cards = CardCollection(entities=snapshot.entity_collection())
+            if verified is None:
+                snapshot = store.load()
+                entities = snapshot.entity_collection()
+            else:
+                snapshot, entities = verified.snapshot, verified.entities
+            cards = CardCollection(entities=entities)
             if save_previous_layout:
                 self._save_ui_state()
         except Exception:
@@ -443,12 +448,12 @@ class ProjectController(QObject):
         if catalogue_error:
             dialog.error.setText(catalogue_error)
 
-        def selected(folder):
+        def selected(folder, expected=None):
             try:
                 same = self.store is not None and self.store.root == Path(folder).resolve()
                 if not same and not self._confirm_changes(defer_discard=True):
                     return
-                self.open_project(Path(folder), discard=True)
+                self.open_project(Path(folder), discard=True, expected=expected)
             except (OSError, ValueError) as error:
                 dialog.error.setText("Не удалось открыть проект.\n" + str(error))
                 return
@@ -467,7 +472,10 @@ class ProjectController(QObject):
                 self.window.show()
                 dialog.accept()
 
-        dialog.open_requested.connect(selected)
+        expected_projects = {entry["path"]: entry.get("metadata") for entry in entries}
+        dialog.open_requested.connect(
+            lambda folder: selected(folder, expected_projects.get(folder))
+        )
         dialog.browse_requested.connect(browse)
         dialog.create_requested.connect(create)
         return dialog.exec()

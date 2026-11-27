@@ -2,9 +2,11 @@ import errno
 import hashlib
 import json
 import sqlite3
+import tempfile
 import zipfile
 from contextlib import closing
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -100,7 +102,7 @@ def test_failed_map10_upgrade_preserves_original_world(
     store, _, original, updated, _ = map9_world(project, tmp_path, qtbot)
     before = hashlib.sha256(store.path.read_bytes()).hexdigest()
     if stage == "backup":
-        def fail_backup(_):
+        def fail_backup(_, *, verification_root):
             raise OSError("fault before migration")
 
         monkeypatch.setattr(store, "backup", fail_backup)
@@ -124,7 +126,9 @@ def test_failed_map10_upgrade_preserves_original_world(
     assert store.load() == original
 
 
-@pytest.mark.parametrize("failure", ["temp-db", "archive", "verify-space", "budget"])
+@pytest.mark.parametrize(
+    "failure", ["temp-db", "archive", "temp-space", "verify-space", "budget"],
+)
 def test_map10_storage_budget_and_disk_failures_keep_original(
     project, tmp_path, qtbot, monkeypatch, failure,
 ):
@@ -139,7 +143,6 @@ def test_map10_storage_budget_and_disk_failures_keep_original(
             return connect(database, *args, **kwargs)
 
         monkeypatch.setattr(sqlite3, "connect", connect_with_full_temp)
-        expected = ProjectError
     elif failure == "archive":
         open_archive = zipfile.ZipFile
 
@@ -149,25 +152,40 @@ def test_map10_storage_budget_and_disk_failures_keep_original(
             return open_archive(file, mode, *args, **kwargs)
 
         monkeypatch.setattr(zipfile, "ZipFile", open_with_full_destination)
-        expected = OSError
-    elif failure == "verify-space":
+    elif failure == "temp-space":
         monkeypatch.setattr(
             sqlite_project_store.shutil, "disk_usage", lambda unused: SimpleNamespace(free=0),
         )
-        expected = ProjectError
+    elif failure == "verify-space":
+        def usage(path):
+            return SimpleNamespace(
+                free=0 if Path(path).name.startswith("lodandsy-verify-map10-") else 2**63,
+            )
+
+        monkeypatch.setattr(sqlite_project_store.shutil, "disk_usage", usage)
     else:
         monkeypatch.setattr(sqlite_project_store, "MAX_BACKUP_BYTES", len(before) - 1)
-        expected = ProjectError
+    expected = OSError if failure == "archive" else ProjectError
     with pytest.raises(expected) as error:
         store.save(updated)
     assert store.path.read_bytes() == before and store.load() == original
     backups = tuple(tmp_path.glob("LODANDSY-before-Map10-*.lodbackup"))
     assert len(backups) == (1 if failure == "verify-space" else 0)
     assert not tuple(tmp_path.glob("LODANDSY-before-Map10-*.tmp"))
+    if failure in {"temp-db", "temp-space"}:
+        assert sqlite_project_store.TEMP_DB_STAGE in str(error.value)
+        assert str(Path(tempfile.gettempdir()).resolve()) in str(error.value)
     if failure == "temp-db":
         assert isinstance(error.value.__cause__, sqlite3.OperationalError)
+    if failure == "archive":
+        assert sqlite_project_store.ARCHIVE_STAGE in str(error.value)
+        assert str(tmp_path) in str(error.value)
+        assert error.value.__cause__.errno == errno.ENOSPC
     if failure == "verify-space":
+        assert sqlite_project_store.VERIFY_STAGE in str(error.value)
+    if failure != "budget":
         assert "Недостаточно свободного места" in str(error.value)
+        assert "Требуется " in str(error.value) and " байт" in str(error.value)
     if failure == "budget":
         assert "4 GiB" in str(error.value)
 

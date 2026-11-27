@@ -77,15 +77,17 @@ class ProjectChooser(QDialog):
         for entry in entries:
             error = entry.get("error", "")
             opened = QDateTime.fromString(entry.get("opened_at") or "", Qt.DateFormat.ISODate)
-            if error:
-                detail = "Не удалось проверить проект"
-            elif opened.isValid():
-                date = QLocale.system().toString(
-                    opened.toLocalTime(), QLocale.FormatType.ShortFormat,
-                )
-                detail = f"Открыт {date}"
+            if entry.get("status") == "incompatible":
+                detail = f"Несовместимая версия SQLite {entry['schema_version']}"
+            elif error:
+                detail = "Ошибка чтения метаданных"
             else:
-                detail = "Дата последнего открытия неизвестна"
+                detail = "Целостность проверяется при открытии"
+                if opened.isValid():
+                    date = QLocale.system().toString(
+                        opened.toLocalTime(), QLocale.FormatType.ShortFormat,
+                    )
+                    detail += f" · Открыт {date}"
             item = QListWidgetItem(entry["title"] + "\n" + detail)
             item.setToolTip(entry["path"] + ("\n" + error if error else ""))
             item.setData(Qt.ItemDataRole.UserRole, entry)

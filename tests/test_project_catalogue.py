@@ -1,4 +1,5 @@
 import errno
+import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -15,6 +16,7 @@ from lodandsy.application.project_history import ProjectHistory
 from lodandsy.application.sqlite_project_store import (
     SCHEMA_VERSION,
     ProjectError,
+    ProjectLock,
     SQLiteProjectStore,
     connect_database,
 )
@@ -191,7 +193,7 @@ def test_windows_path_characters_rejected_before_accessing_documents(character):
         ProjectCatalogue(unexpected_documents).destination(f"world{character}name")
 
 
-def test_catalogue_lists_valid_worlds_and_diagnoses_damage_without_writes(tmp_path):
+def test_catalogue_lists_statuses_without_decoding_or_writing(tmp_path, qtbot, monkeypatch):
     catalogue = ProjectCatalogue(lambda: tmp_path)
     root = catalogue.root
     world = root / "Валидный мир"
@@ -204,16 +206,149 @@ def test_catalogue_lists_valid_worlds_and_diagnoses_damage_without_writes(tmp_pa
     invalid = root / "Повреждённый"
     invalid.mkdir()
     (invalid / future.path.name).write_bytes(b"broken")
+    malformed = SQLiteProjectStore.create_new(root / "Ошибочный UUID")
+    malformed.close()
+    with closing(connect_database(malformed.path)) as conn, conn:
+        conn.execute("UPDATE metadata SET project_id = 'not-a-uuid'")
     (root / "Обычная папка").mkdir()
     before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
-    entries = {entry["title"]: entry for entry in catalogue.entries(())}
-    assert set(entries) == {world.name, future.root.name, invalid.name}
+    monkeypatch.setattr(
+        SQLiteProjectStore, "_read_snapshot",
+        lambda *_: pytest.fail("Catalogue must not decode project payloads"),
+    )
+    records = catalogue.entries(())
+    entries = {entry["title"]: entry for entry in records}
+    assert set(entries) == {world.name, future.root.name, invalid.name, malformed.root.name}
     assert not entries[world.name]["error"]
+    assert entries[world.name]["status"] == "pending"
+    assert entries[world.name]["metadata"].project_id
+    assert entries[world.name]["schema_version"] == SCHEMA_VERSION
+    assert entries[future.root.name]["status"] == "incompatible"
     assert str(SCHEMA_VERSION + 1) in entries[future.root.name]["error"]
     assert entries[invalid.name]["error"]
+    assert entries[invalid.name]["status"] == entries[malformed.root.name]["status"] == (
+        "metadata_error"
+    )
+    dialog = ProjectChooser(records)
+    qtbot.addWidget(dialog)
+    assert "Целостность проверяется при открытии" in dialog.projects.currentItem().text()
+    for index, entry in enumerate(records):
+        dialog.projects.setCurrentRow(index)
+        assert dialog.open_button.isEnabled() == (entry["status"] == "pending")
     with pytest.raises(ProjectError, match="Unsupported project schema"):
         SQLiteProjectStore.open(future.root)
     assert before == {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+
+
+def test_activation_uses_the_single_verified_read_under_writer_lock(
+    project, tmp_path, monkeypatch,
+):
+    app, controller = project
+    target = tmp_path / "Целевой мир"
+    assert controller.create_project(target)
+    card = app.create_card("Карточка")
+    assert controller.save_current()
+    assert controller.create_project(tmp_path / "Текущий", preserve_current=False)
+    previous = controller.store
+    expected = SQLiteProjectStore.inspect(target)
+    read_snapshot = SQLiteProjectStore._read_snapshot
+    reads = []
+
+    def read(path, expected_project_id):
+        assert path.parent == target and expected_project_id == expected.project_id
+        with pytest.raises(ProjectError, match="already open"):
+            ProjectLock(target).close()
+        loaded = read_snapshot(path, expected_project_id)
+        reads.append(loaded[0])
+        return loaded
+
+    monkeypatch.setattr(SQLiteProjectStore, "_read_snapshot", staticmethod(read))
+    controller.open_project(target, expected=expected)
+    verified, = reads
+    assert controller.store is not previous and previous._closed
+    assert app.core.entities is verified.entities
+    assert app.cards.get(card.id).title == "Карточка"
+    assert controller.saver.saved_revision == verified.snapshot.revision
+
+
+def test_catalogue_passes_expected_identity_when_file_is_replaced(
+    project, tmp_path, qtbot,
+):
+    app, controller = project
+    controller.catalogue = ProjectCatalogue(lambda: tmp_path / "Documents")
+    assert controller.create_project("Текущий")
+    current = controller.store
+    card = app.create_card("Текущее содержимое")
+    assert controller.save_current()
+    candidate = controller.catalogue.root / "Заменяемый"
+    with closing(SQLiteProjectStore.create_new(candidate)) as target:
+        database = target.path
+    replacement = tmp_path / "identical.sqlite3"
+    shutil.copyfile(database, replacement)  # retains UUID and SQLite contents
+
+    def replace_after_listing():
+        dialog = QApplication.activeModalWidget()
+        try:
+            entry = SQLiteProjectStore.inspect(candidate)
+            replacement.replace(database)
+            assert SQLiteProjectStore.inspect(candidate).project_id == entry.project_id
+            dialog.open_requested.emit(str(candidate))
+            assert "заменён" in dialog.error.text()
+        finally:
+            dialog.reject()
+
+    QTimer.singleShot(0, replace_after_listing)
+    assert not controller.choose_project()
+    assert controller.store is current and app.cards.get(card.id).title == "Текущее содержимое"
+
+
+def test_replacing_database_during_verified_read_releases_candidate_lease(
+    tmp_path, monkeypatch,
+):
+    target = tmp_path / "Мир"
+    with closing(SQLiteProjectStore.create_new(target)) as store:
+        database = store.path
+    replacement = tmp_path / "copy.sqlite3"
+    shutil.copyfile(database, replacement)
+    read_snapshot = SQLiteProjectStore._read_snapshot
+
+    def read_then_replace(path, expected_project_id):
+        result = read_snapshot(path, expected_project_id)
+        replacement.replace(path)
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(SQLiteProjectStore, "_read_snapshot", staticmethod(read_then_replace))
+        with pytest.raises(ProjectError, match="заменён во время проверки"):
+            SQLiteProjectStore.open(target)
+    with closing(ProjectLock(target)):
+        assert database.is_file()
+
+
+def test_corrupt_payload_stays_pending_and_failed_open_preserves_draft(project, tmp_path):
+    app, controller = project
+    controller.catalogue = ProjectCatalogue(lambda: tmp_path / "Documents")
+    assert controller.create_project("Повреждённый")
+    app.create_card("Недоступная карточка")
+    assert controller.save_current()
+    candidate = controller.store.path
+    assert controller.create_project("Текущий", preserve_current=False)
+    current = controller.store
+    card = app.create_card("Сохранённое имя")
+    assert controller.save_current()
+    editor = app.open_card_editor(card.id).widget()
+    editor.title_edit.setText("")
+    editor.title_edit.finish()
+    with closing(connect_database(candidate)) as conn, conn:
+        conn.execute("UPDATE card_content SET payload_version=999")
+    before = candidate.read_bytes()
+    entry = next(e for e in controller.catalogue.entries(()) if e["title"] == "Повреждённый")
+    assert entry["status"] == "pending"
+    with pytest.raises(ProjectError):
+        controller.open_project(candidate.parent, discard=True, expected=entry["metadata"])
+    assert controller.store is current
+    assert controller.draft_count == 1 and editor.title_edit.text() == ""
+    assert candidate.read_bytes() == before
 
 
 def test_concurrent_managed_create_has_one_winner_even_with_case_variants(tmp_path):

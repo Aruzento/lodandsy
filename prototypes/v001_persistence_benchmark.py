@@ -207,22 +207,27 @@ def catalogue_reads(root, catalogue, store, phases):
         shutil.copytree(store.root / "assets", world / "assets")
     phases.calls.clear()
     assert len(catalogue.entries(())) == 3
-    assert phases.calls["gui", "read_snapshot"] == 3
+    assert phases.calls["gui", "read_snapshot"] == 0
     started = perf_counter()
-    assert all(not entry["error"] for entry in catalogue.entries(()))
+    entries = catalogue.entries(())
     listing = (perf_counter() - started) * 1000
-    # Reproduce the selected-world path: open validates, then activation loads again.
+    assert all(entry["status"] == "pending" for entry in entries)
+    listing_reads = phases.calls["gui", "read_snapshot"]
+    # As in ProjectController, use the snapshot obtained inside the writer lease.
     phases.calls.clear()
-    candidate = managed / "Копия 0"
+    selected = entries[0]
+    candidate = Path(selected["path"])
     started = perf_counter()
-    with closing(SQLiteProjectStore.open(candidate)) as opened:
-        open_ms = (perf_counter() - started) * 1000
-        started = perf_counter()
-        opened.load()
-        reload_ms = (perf_counter() - started) * 1000
-    assert phases.calls["gui", "read_snapshot"] == 2
+    opened, verified = SQLiteProjectStore.open_with_snapshot(
+        candidate, expected=selected["metadata"],
+    )
+    open_ms = (perf_counter() - started) * 1000
+    with closing(opened):
+        assert verified.snapshot.revision >= 1
+    assert phases.calls["gui", "read_snapshot"] == 1
     return {"three_world_listing_ms": round(listing, 3), "one_world_open_ms": round(open_ms, 3),
-            "second_load_ms": round(reload_ms, 3), "selected_world_full_reads": 2}
+            "second_load_ms": 0, "catalogue_full_reads": listing_reads,
+            "selected_world_full_reads": 1}
 
 
 def benchmark(profile, sample_count, root):

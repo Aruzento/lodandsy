@@ -10,6 +10,7 @@ from PySide6.QtCore import QStandardPaths
 from lodandsy.application.sqlite_project_store import (
     DATABASE_NAME,
     LOCK_NAME,
+    IncompatibleProjectError,
     ProjectError,
     ProjectLock,
     SQLiteProjectStore,
@@ -108,18 +109,24 @@ class ProjectCatalogue:
         for child in children:
             if child.name.startswith((".lodandsy-create-", ".lodandsy-restore-")):
                 continue
+            metadata, version = None, None
             try:
                 if not _ordinary_directory(child):
                     continue
                 if not ((child / DATABASE_NAME).exists() or (child / LOCK_NAME).exists()):
                     continue
-                SQLiteProjectStore.inspect(child)
-                error = ""
+                metadata = SQLiteProjectStore.inspect(child)
+                version = metadata.schema_version
+                status, error = "pending", ""
+            except IncompatibleProjectError as issue:
+                version = issue.version
+                status, error = "incompatible", str(issue)
             except (OSError, ProjectError) as issue:
-                error = str(issue)
+                status, error = "metadata_error", str(issue)
             rank, opened_at = recent.get(str(child).casefold(), (len(recent), None))
             entries.append((rank, {
                 "path": str(child), "title": child.name, "error": error,
-                "opened_at": opened_at,
+                "opened_at": opened_at, "status": status,
+                "schema_version": version, "metadata": metadata,
             }))
         return tuple(entry for _, entry in sorted(entries, key=lambda item: item[0]))
