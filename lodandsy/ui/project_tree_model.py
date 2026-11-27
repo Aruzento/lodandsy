@@ -1,6 +1,7 @@
 from PySide6.QtCore import QByteArray, QMimeData, QModelIndex, Qt, Signal
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 
+from lodandsy.domain.module_values import validate_title
 from lodandsy.ui.icons import icon, tree_card_icon
 
 NODE_KIND_ROLE = int(Qt.ItemDataRole.UserRole) + 1
@@ -14,6 +15,7 @@ class ProjectTreeModel(QStandardItemModel):
 
     reparent_requested = Signal(str, object)
     move_requested = Signal(str, object, int)
+    rename_requested = Signal(str, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -63,7 +65,7 @@ class ProjectTreeModel(QStandardItemModel):
         self._nodes, self._items = {}, {}
         for entity in entities:
             item = QStandardItem(self._decoration(entity, card_types), entity.title)
-            item.setEditable(False)
+            item.setEditable(entity.kind == "card" and card_types.get(entity.id) == "folder")
             item.setData(entity.kind, NODE_KIND_ROLE)
             item.setData(entity.id, NODE_ID_ROLE)
             item.setData(f"{entity.kind}:{entity.id}", NODE_KEY_ROLE)
@@ -81,7 +83,21 @@ class ProjectTreeModel(QStandardItemModel):
             | Qt.ItemFlag.ItemIsSelectable
             | Qt.ItemFlag.ItemIsDragEnabled
             | Qt.ItemFlag.ItemIsDropEnabled
+            | (super().flags(index) & Qt.ItemFlag.ItemIsEditable)
         )
+
+    def setData(self, index, value, role=Qt.ItemDataRole.EditRole):
+        if role == Qt.ItemDataRole.EditRole and index.isValid():
+            if not self.flags(index) & Qt.ItemFlag.ItemIsEditable:
+                return False
+            try:
+                title = validate_title(value)
+            except ValueError:
+                return False
+            if title != index.data():
+                self.rename_requested.emit(index.data(NODE_ID_ROLE), title)
+            return True
+        return super().setData(index, value, role)
 
     def mimeTypes(self):
         return [ENTITY_MIME_TYPE]

@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 from shiboken6 import isValid
 
 from lodandsy.ui.icons import icon
+from lodandsy.ui.map_settings_dialogs import measurement_picker
 from lodandsy.ui.theme import MAP_TOOLBAR_STYLE, MAP_TOOLBAR_VERTICAL_STYLE
 
 SHAPES = {
@@ -304,9 +305,18 @@ class MapToolbars(QObject):
         )
         self.shape_actions = self.add_group("shape", SHAPES, lambda key: "shape_" + key)
         self.context = QWidget(parent)
+        self.context.hide()
+        self.measurement = QWidget(parent)
+        self.measurement.hide()
+        measure_layout = QVBoxLayout(self.measurement)
+        measure_layout.setContentsMargins(12, 4, 12, 8)
+        measure_layout.addWidget(QLabel("Измерение расстояний"))
+        self.measurement_mode = measurement_picker(self.measurement, self.view.measurement_mode)
+        measure_layout.addWidget(self.measurement_mode)
         layout = QVBoxLayout(self.context)
-        layout.setContentsMargins(4, 2, 4, 2)
-        layout.setSpacing(2)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(6)
+        layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.help = QLabel()
         self.help.setWordWrap(True)
         for page in (self.help, fog, vectors):

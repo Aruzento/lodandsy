@@ -120,6 +120,14 @@ class CardInspectorBinding:
             self.session.select_card(key)
         self.refresh()
 
+    def clear_map_context(self):
+        if self._actor_ref is not None or self.inspector.feature_page_active:
+            self.finish_edits()
+            self._actor_ref = None
+            self._feet_per_cell = None
+            self.inspector.clear_feature_page()
+            self.refresh()
+
     def show_inventory(self):
         if self._actor_ref:
             key = self.session.get_actor(self._actor_ref).inventory_id

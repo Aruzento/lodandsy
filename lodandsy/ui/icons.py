@@ -102,6 +102,9 @@ PATHS = {
     "rename": '<path d="m3 10 7-7 3 3-7 7H3zM9 4l3 3"/>',
     "fit": '<path d="M6 3H3v3M10 3h3v3M3 10v3h3M13 10v3h-3"/>',
     "link": '<path d="m6 5 2-2a3 3 0 0 1 4 4l-2 2M10 11l-2 2a3 3 0 0 1-4-4l2-2M5 11l6-6"/>',
+    "bullet_list": '<path d="M6 4h8M6 8h8M6 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01"/>',
+    "numbered_list": '<path d="M7 4h7M7 8h7M7 12h7M2.5 3l1-1v3M2 8a1 1 0 0 1 2 0'
+    'c0 1-2 1.5-2 2.5h2M2 13h2"/>',
     "up": '<path d="m3 10 5-5 5 5"/>',
     "down": '<path d="m3 6 5 5 5-5"/>',
 }

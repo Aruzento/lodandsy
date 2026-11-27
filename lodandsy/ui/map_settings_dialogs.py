@@ -19,6 +19,15 @@ def number(parent, value, minimum=0, maximum=1_000_000):
     return box
 
 
+def measurement_picker(parent=None, mode="grid"):
+    combo = QComboBox(parent)
+    combo.setAccessibleName("Измерение расстояний")
+    combo.addItem("D&D 5e 2014", "grid")
+    combo.addItem("Геометрическое", "geometry")
+    combo.setCurrentIndex(max(0, combo.findData(mode)))
+    return combo
+
+
 class MapGridDialog(QDialog):
     def __init__(self, grid, parent=None, *, measurement_mode="grid"):
         super().__init__(parent)
@@ -34,12 +43,7 @@ class MapGridDialog(QDialog):
         self.scale_known = QCheckBox("Масштаб в футах известен")
         self.scale_known.setChecked(grid.feet_per_cell is not None)
         self.feet = number(self, grid.feet_per_cell or 5, 0.01, 1e9)
-        self.measurement_mode_combo = QComboBox(self)
-        self.measurement_mode_combo.addItem("D&D 5e 2014", "grid")
-        self.measurement_mode_combo.addItem("Геометрическое", "geometry")
-        self.measurement_mode_combo.setCurrentIndex(
-            max(0, self.measurement_mode_combo.findData(measurement_mode))
-        )
+        self.measurement_mode_combo = measurement_picker(self, measurement_mode)
         for label, widget in [
             ("", self.enabled),
             ("Клетка (px карты):", self.cell),

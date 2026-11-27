@@ -45,6 +45,7 @@ class TreePanel(QDockWidget):
 
     create_requested = Signal(str, object)
     typed_create_requested = Signal(str, object, str)
+    folder_create_requested = Signal(object)
     player_create_requested = Signal(str, object, str)
     rename_requested = Signal(str, str)
     delete_requested = Signal(str)
@@ -89,6 +90,7 @@ class TreePanel(QDockWidget):
 
         self.tree_model.reparent_requested.connect(self.reparent_requested.emit)
         self.tree_model.move_requested.connect(self.move_requested.emit)
+        self.tree_model.rename_requested.connect(self.rename_requested.emit)
 
         content = QWidget(self)
         layout = QVBoxLayout(content)
@@ -129,12 +131,18 @@ class TreePanel(QDockWidget):
         menu = QMenu(self if parent is None else parent)
         for kind, title in [
             ("card", "Карточка…"),
+            ("folder", "Создать папку"),
             ("map", "Карта из изображения…"),
             ("table", "Таблица…"),
         ]:
             action = menu.addAction(title)
             action.setObjectName(f"create-{kind}")
-            action.triggered.connect(lambda _checked=False, k=kind: self._create_kind(k, parent_id))
+            action.triggered.connect(
+                lambda _checked=False, k=kind: self._create_kind(
+                    k, self.tree_view.currentIndex().data(NODE_ID_ROLE)
+                    if k == "folder" and parent is None else parent_id,
+                )
+            )
         return menu
 
     def _create_kind(self, kind, parent_id=None):
@@ -142,8 +150,17 @@ class TreePanel(QDockWidget):
             return
         if kind == "card":
             self._request_create(parent_id)
+        elif kind == "folder":
+            self.folder_create_requested.emit(parent_id)
         else:
             self.module_create_requested.emit(kind, parent_id)
+
+    def edit_folder(self, key):
+        index = self.tree_model.index_for_node("card:" + key)
+        self.tree_view.expand(index.parent())
+        self.tree_view.scrollTo(index)
+        self.tree_view.setFocus()
+        self.tree_view.edit(index)
 
     def show_creation_menu(self):
         self.create_menu.exec(
@@ -227,6 +244,9 @@ class TreePanel(QDockWidget):
         target_index = self._resolve_index(index)
         card_id = target_index.data(NODE_ID_ROLE)
         if card_id is None:
+            return
+        if target_index.flags() & Qt.ItemFlag.ItemIsEditable:
+            self.edit_folder(card_id)
             return
 
         current_title = target_index.data()
@@ -348,6 +368,7 @@ class TreePanel(QDockWidget):
         if not index.isValid():
             for k, title in [
                 ("card", "Создать карточку…"),
+                ("folder", "Создать папку"),
                 ("map", "Создать карту…"),
                 ("table", "Создать таблицу…"),
             ]:

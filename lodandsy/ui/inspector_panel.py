@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QTabWidget,
     QToolButton,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -146,7 +147,13 @@ class InspectorPanel(QDockWidget):
         empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         empty.setObjectName("emptyInspector")
         self.pages.addWidget(empty)
-        self.setWidget(self.pages)
+        container = QWidget()
+        self.panel_layout = QVBoxLayout(container)
+        self.panel_layout.setContentsMargins(0, 0, 0, 0)
+        self.panel_layout.setSpacing(0)
+        self.panel_layout.addWidget(self.pages, 1)
+        self.context_control = None
+        self.setWidget(container)
 
         self.title_edit.commit_requested.connect(lambda raw: self._on_title_editing_finished())
         self.parent_combo.currentIndexChanged.connect(self._on_parent_index_changed)
@@ -343,6 +350,17 @@ class InspectorPanel(QDockWidget):
         if self.pages.indexOf(widget) < 0:
             self.pages.addWidget(widget)
         self.pages.setCurrentWidget(widget)
+
+    def show_context_control(self, widget):
+        if widget is self.context_control:
+            return
+        if self.context_control is not None:
+            self.panel_layout.removeWidget(self.context_control)
+            self.context_control.hide()
+        self.context_control = widget
+        if widget is not None:
+            self.panel_layout.addWidget(widget)
+            widget.show()
 
     def show_entity_summary(self, entity_id, title):
         self.clear_card()

@@ -347,6 +347,12 @@ class VectorTools(QWidget):
         delete = QPushButton("Удалить фигуру")
         delete.clicked.connect(self.delete)
         form.addRow(delete)
+        self.portal_inspector = QWidget()
+        self.destroyed.connect(self.portal_inspector.deleteLater)
+        portal_form = QFormLayout(self.portal_inspector)
+        edit_portal = QPushButton("Свойства портала…")
+        edit_portal.clicked.connect(self.edit_selected_portal)
+        portal_form.addRow(edit_portal)
         view.viewport().installEventFilter(self)
         view.installEventFilter(self)
         view.viewport().setMouseTracking(True)
@@ -389,6 +395,21 @@ class VectorTools(QWidget):
     def value(self):
         return next((v for v in self.view.vector_shapes if v.id == self.selected), None)
 
+    def selected_portal(self):
+        return next((v for v in self.view.vector_portals if v.id == self.selected), None)
+
+    def edit_selected_portal(self):
+        if portal := self.selected_portal():
+            self.portal_edited.emit(portal.id)
+
+    def inspector_page(self):
+        if self.selected is not None:
+            if self.value() is not None:
+                return self.inspector
+            if self.selected_portal() is not None:
+                return self.portal_inspector
+        return None
+
     def selected_transform_item(self):
         item = self.transform_selection
         return item if item is not None and isValid(item) and item.can_transform else None
@@ -398,6 +419,8 @@ class VectorTools(QWidget):
             resize = self.gesture[1]
             if resize.item is not self.selected_transform_item() or not resize.is_current():
                 self.cancel()
+        if self.selected is not None and self.inspector_page() is None:
+            self.select(None)
 
     def _token_selection_changed(self):
         if not isValid(self.view):
@@ -423,7 +446,7 @@ class VectorTools(QWidget):
             self.color.setText(value.color)
             self.opacity.setValue(value.opacity * 100)
             self.rotation.setValue(value.rotation)
-            self.inspector_requested.emit(self.inspector)
+        self.inspector_requested.emit(self.inspector if value else None)
         self.view.viewport().update()
 
     def apply_properties(self):
@@ -645,6 +668,8 @@ class VectorTools(QWidget):
                     if item is not None:
                         item.setSelected(False)
                     self.selected = portal.id
+                    self.inspected = None
+                    self.inspector_requested.emit(self.portal_inspector)
                     if kind == QEvent.Type.MouseButtonDblClick:
                         self.portal_opened.emit(portal.id)
                     else:

@@ -7,6 +7,7 @@ from PySide6.QtGui import (
     QTextBlockFormat,
     QTextCharFormat,
     QTextCursor,
+    QTextFormat,
     QTextListFormat,
 )
 from PySide6.QtWidgets import (
@@ -58,8 +59,8 @@ class RichToolbar(QToolBar):
             ("italic", "I", "Курсив", "Ctrl+I"),
             ("underline", "U", "Подчёркнутый", "Ctrl+U"),
             ("strike", "S", "Зачёркнутый", "Ctrl+Shift+X"),
-            ("bullet", "•", "Маркированный список", "Ctrl+Shift+8"),
-            ("numbered", "1.", "Нумерованный список", "Ctrl+Shift+7"),
+            ("bullet", "Маркированный список", "Маркированный список", "Ctrl+Shift+8"),
+            ("numbered", "Нумерованный список", "Нумерованный список", "Ctrl+Shift+7"),
             ("quote", "Цитата", "Цитата", "Ctrl+Shift+Q"),
             ("code", "Код", "Блок кода", "Ctrl+E"),
             ("rule", "—", "Разделитель", ""),
@@ -73,6 +74,8 @@ class RichToolbar(QToolBar):
             action.setToolTip(tip + (f" · {key}" if key else ""))
             if name in {"undo", "redo", "link", "image"}:
                 action.setIcon(icon(name if name != "image" else "map"))
+            if name in {"bullet", "numbered"}:
+                action.setIcon(icon(name + "_list"))
             if key:
                 action.setShortcut(QKeySequence(key))
                 action.setShortcutContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
@@ -131,22 +134,36 @@ class RichToolbar(QToolBar):
         self.editor.text_edit.setFocus()
 
     def heading(self, level):
-        if self.editor.text_edit.isReadOnly():
+        edit = self.editor.text_edit
+        if edit.isReadOnly():
             return
-        cursor = self.editor.text_edit.textCursor()
-        cursor.beginEditBlock()
-        block = QTextBlockFormat()
-        block.setHeadingLevel(level)
-        block.setNonBreakableLines(False)
-        cursor.mergeBlockFormat(block)
-        if not cursor.hasSelection():
-            cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
-        format = QTextCharFormat()
-        format.setFontPointSize((11, 28, 22, 16)[level])
-        format.setFontWeight(QFont.Weight.Bold if level else QFont.Weight.Normal)
-        cursor.mergeCharFormat(format)
-        cursor.endEditBlock()
-        self.editor.text_edit.setFocus()
+        selection = edit.textCursor()
+        block = edit.document().findBlock(selection.selectionStart())
+        end = selection.selectionEnd()
+        style = QTextCharFormat()
+        style.setFontPointSize((11, 28, 22, 16)[level])
+        style.setFontWeight(QFont.Weight.Bold if level else QFont.Weight.Normal)
+        style.setProperty(QTextFormat.Property.FontSizeAdjustment, 0)
+        selection.beginEditBlock()
+        while block.isValid():
+            cursor = QTextCursor(block)
+            block_format = cursor.blockFormat()
+            block_format.setHeadingLevel(level)
+            cursor.setBlockFormat(block_format)
+            cursor.movePosition(
+                QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor
+            )
+            if cursor.hasSelection():
+                cursor.mergeCharFormat(style)
+            else:
+                cursor.mergeBlockCharFormat(style)
+            block = block.next()
+            if not block.isValid() or block.position() >= end:
+                break
+        selection.endEditBlock()
+        edit.setTextCursor(selection)
+        edit.setFocus()
+        self.sync_paragraph()
 
     def align(self, index):
         self.editor.text_edit.setAlignment(

@@ -2,6 +2,7 @@ from collections.abc import Callable
 
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QApplication, QWidget
+from shiboken6 import isValid
 
 from lodandsy.ui.app_shell import AppShell
 from lodandsy.ui.workspace_placement import WorkspacePlacement
@@ -50,7 +51,9 @@ class WindowManager(QObject):
     def _on_focus_changed(self, _old, current):
         if current is not None:
             for key, window in self._windows.items():
-                if current is window.dock or window.dock.isAncestorOf(current):
+                if isValid(window.dock) and (
+                    current is window.dock or window.dock.isAncestorOf(current)
+                ):
                     self._set_active_window(key)
                     return
 
@@ -68,6 +71,7 @@ class WindowManager(QObject):
         anchor = self.find_window(self.active_window_key)
         self._windows[key] = window
         dock.closed.connect(lambda: self._on_window_closed(window))
+        dock.tabWidget().clicked.connect(lambda: self._set_active_window(key))
         try:
             self.workspace.add_document(dock, placement, anchor.dock if anchor else None)
         except Exception:
@@ -80,7 +84,8 @@ class WindowManager(QObject):
         return window
 
     def find_window(self, key):
-        return self._windows.get(key)
+        window = self._windows.get(key)
+        return window if window is not None and isValid(window.dock) else None
 
     def focus_window(self, key, *, floating=False):
         window = self.find_window(key)

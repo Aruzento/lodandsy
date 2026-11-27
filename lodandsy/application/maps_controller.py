@@ -6,7 +6,7 @@ from pathlib import Path
 from threading import Event
 from types import SimpleNamespace
 
-from PySide6.QtCore import QEventLoop, QObject, QRectF, QSettings, Qt, Signal
+from PySide6.QtCore import QEventLoop, QObject, QRectF, QSettings, QSignalBlocker, Qt, Signal
 from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox, QProgressDialog
 
 from lodandsy.application.background_tasks import BackgroundTasks
@@ -26,6 +26,7 @@ class MapsController(QObject):
     import_finished = Signal()
     busy_changed = Signal()
     import_progress = Signal(int)
+    inspector_context_changed = Signal(str)
 
     def __init__(
         self,
@@ -61,7 +62,8 @@ class MapsController(QObject):
         self._map_editor_ui = {}
         self._card_maps = {}
         self._actor_maps = {}
-        self.show_vector_inspector = lambda widget: None
+        self.show_inspector_page = lambda widget: None
+        self.show_inspector_control = lambda widget: None
         self.show_actor = lambda card_id, actor_id, scale=None: None
         self.update_actor_scale = lambda card_id, actor_id, scale: None
         self.progress = None
@@ -313,7 +315,10 @@ class MapsController(QObject):
                     lambda key: self.service.delete_vector(map_id, key)
                 )
                 widget.vector_tools.inspector_requested.connect(
-                    lambda panel: self.show_vector_inspector(panel)
+                    lambda _panel: self.inspector_context_changed.emit(map_id)
+                )
+                widget.tool_state.changed.connect(
+                    lambda _tool: self.inspector_context_changed.emit(map_id)
                 )
                 widget.fog_tools.edited.connect(
                     lambda path, erase: self._fog_edit(map_id, path, erase, widget)
@@ -338,12 +343,17 @@ class MapsController(QObject):
                 widget.view.measurement_changed.connect(
                     lambda value: self._measurement(map_id, value, widget.view.measurement_mode)
                 )
+                widget.tools.measurement_mode.activated.connect(
+                    lambda index: self._set_measurement_mode(
+                        map_id, widget.tools.measurement_mode.itemData(index)
+                    )
+                )
                 widget.view.token_action.connect(
                     lambda token, action: self._token_action(map_id, token, action)
                     if generation == self.service.core.generation else None
                 )
-                widget.view.token_selected.connect(
-                    lambda token: self._select_participant(map_id, token)
+                widget.view.scene().selectionChanged.connect(
+                    lambda: self.inspector_context_changed.emit(map_id)
                 )
                 widget.view.token_add_requested.connect(lambda x, y: self._add_token(map_id, x, y))
                 widget.view.card_exists = self._is_card
@@ -356,6 +366,7 @@ class MapsController(QObject):
         window = self.windows.open_window(key, title, factory)
         if not editor:
             window.closed.connect(lambda closed: self.close_presentation(map_id))
+            window.closed.connect(lambda closed: self._release_inspector_pages(closed.widget()))
         window.closed.connect(
             lambda closed: self._remember_map_camera(map_id, closed.widget(), editor)
         )
@@ -767,17 +778,47 @@ class MapsController(QObject):
             view = viewer.widget().view
             self._measurement(key, view.measurement, view.measurement_mode)
 
-    def _select_participant(self, map_id, token_id):
-        token = next((t for t in self.service.get_map(map_id).tokens if t.id == token_id), None)
-        if token and token.actor_id:
-            self.show_actor(
-                token.card_id, token.actor_id, self.service.get_map(map_id).grid.feet_per_cell
-            )
+    @staticmethod
+    def _release_inspector_pages(widget):
+        for page in (
+            widget.tools.context,
+            widget.vector_tools.inspector,
+            widget.vector_tools.portal_inspector,
+            widget.tools.measurement,
+        ):
+            page.hide()
+            page.setParent(widget)
+
+    def show_inspector_context(self, window_key):
+        if not window_key or not window_key.startswith("map:"):
+            self.show_inspector_control(None)
+            return False
+        window = self.windows.find_window(window_key)
+        if window is None:
+            self.show_inspector_control(None)
+            return False
+        widget = window.widget()
+        token_id = widget.view.selected_token_id() if widget.tool_state.active == "select" else None
+        self.show_inspector_control(widget.tools.measurement if token_id else None)
+        if widget.tool_state.active != "select":
+            self.show_inspector_page(widget.tools.context)
+            return True
+        if page := widget.vector_tools.inspector_page():
+            self.show_inspector_page(page)
+            return True
+        document = self.service.find_map(window_key[4:]) if token_id else None
+        if document is not None:
+            token = next((token for token in document.tokens if token.id == token_id), None)
+            if token and token.actor_id:
+                self.show_actor(token.card_id, token.actor_id, document.grid.feet_per_cell)
+                return True
+        return False
 
     def focus_token(self, map_id, token_id):
         widget = self.open_map(map_id).widget()
+        if widget.tool_state.active != "select":
+            widget.tool_state.activate("select")
         widget.view.select_token(token_id)
-        self._select_participant(map_id, token_id)
 
     def _actor_changed(self, card_id, actor_id, fields):
         try:
@@ -895,10 +936,17 @@ class MapsController(QObject):
                 self._error("Сетка изменена другим представлением")
             else:
                 self.service.edit_map(map_id, grid=dialog.grid(), command="Изменить сетку")
-                mode = dialog.measurement_mode_combo.currentData()
-                QSettings().setValue("maps/measurement", mode)
-                self._measurement(map_id, None, mode)
+                self._set_measurement_mode(map_id, dialog.measurement_mode_combo.currentData())
         dialog.deleteLater()
+
+    def _set_measurement_mode(self, map_id, mode):
+        QSettings().setValue("maps/measurement", mode)
+        self._measurement(map_id, None, mode)
+        window = self.windows.find_window(f"map:{map_id}")
+        if window:
+            combo = window.widget().tools.measurement_mode
+            with QSignalBlocker(combo):
+                combo.setCurrentIndex(combo.findData(mode))
 
     def _move_token(self, map_id, token_id, x, y, view):
         window = self.windows.find_window(f"map:{map_id}")

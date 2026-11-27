@@ -2,11 +2,37 @@
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QToolButton, QVBoxLayout
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QSizePolicy,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from lodandsy.domain.card_schema import SKILLS
 from lodandsy.ui.game_labels import ABILITY_NAMES, SKILL_NAMES, source_text, value_text
 from lodandsy.ui.semantic_edits import SemanticLineEdit
+
+
+class SheetDisclosure(QToolButton):
+    def __init__(self, title, body, *, opened=False):
+        super().__init__()
+        self.body = body
+        self.setObjectName("sheetDisclosure")
+        self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.setText(title)
+        self.setCheckable(True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setChecked(opened)
+        self.toggled.connect(self._display)
+        self._display(opened)
+
+    def _display(self, opened):
+        self.setArrowType(Qt.ArrowType.DownArrow if opened else Qt.ArrowType.RightArrow)
+        self.body.setVisible(opened)
 
 
 class ProficiencyRow(QFrame):
@@ -65,11 +91,12 @@ class AbilityBlock(QFrame):
         layout.setContentsMargins(10, 8, 10, 8)
         layout.setSpacing(2)
         heading = QHBoxLayout()
-        self.caption = QLabel(ABILITY_NAMES[key])
-        font = QFont(self.font())
-        font.setWeight(QFont.Weight.DemiBold)
-        self.caption.setFont(font)
-        heading.addWidget(self.caption, 1)
+        details = QWidget()
+        detail_layout = QVBoxLayout(details)
+        detail_layout.setContentsMargins(0, 0, 0, 0)
+        detail_layout.setSpacing(2)
+        self.disclosure = SheetDisclosure(ABILITY_NAMES[key], details, opened=True)
+        heading.addWidget(self.disclosure, 1)
         self.result = QLabel("—")
         font = QFont(self.font())
         font.setPointSize(19)
@@ -91,7 +118,7 @@ class AbilityBlock(QFrame):
         self.base = QLabel()
         self.base.setObjectName("mutedCaption")
         self.base.setWordWrap(True)
-        layout.addWidget(self.base)
+        detail_layout.addWidget(self.base)
         self.rows = {}
         for target, field, title, saving in (
             (key + "_save", key + "_save_proficient", "Спасбросок", True),
@@ -104,7 +131,8 @@ class AbilityBlock(QFrame):
             row = ProficiencyRow(field, title, saving=saving)
             row.changed.connect(self.values_changed)
             self.rows[target] = row
-            layout.addWidget(row)
+            detail_layout.addWidget(row)
+        layout.addWidget(details)
         layout.addStretch(1)
 
     def render(self, card, actor, effective, drafts, active):

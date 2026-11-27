@@ -96,6 +96,14 @@ class ProjectController(QObject):
         ]:
             menu.addAction(action)
         tools = self.window.menuBar().addMenu("Инструменты")
+        note = tools.addMenu(icon("card_note"), "Заметка")
+        for action, title in (
+            ("note", "Открыть заметку…"), ("new", "Создать заметку…"),
+            ("inventory", "Открыть инвентарь…"),
+        ):
+            note.addAction(
+                title, lambda _checked=False, key=action: self.controller.open_note_tool(key)
+            )
         dice = tools.addAction("Кубики")
         dice.setIcon(icon("dice"))
         dice.triggered.connect(self.controller.dice.open)

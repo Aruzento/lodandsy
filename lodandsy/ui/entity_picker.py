@@ -5,13 +5,16 @@ from html import escape
 from PySide6.QtCore import QAbstractListModel, QEvent, QModelIndex, Qt
 from PySide6.QtWidgets import QDialog, QLabel, QLineEdit, QListView, QVBoxLayout
 
+from lodandsy.ui.icons import icon, tree_card_icon
+
 
 class ReferenceListModel(QAbstractListModel):
-    def __init__(self, queries, kind=None, card_type=None, parent=None):
+    def __init__(self, queries, kind=None, card_type=None, parent=None, *, predicate=None):
         super().__init__(parent)
         self.queries, self.kind, self.card_type = queries, kind, card_type
         self.ids = ()
         self.text = ""
+        self.predicate = predicate
         queries.changed.connect(self._changed)
         queries.reset_done.connect(self.filter)
         self.filter()
@@ -27,6 +30,8 @@ class ReferenceListModel(QAbstractListModel):
             return None
         if role == Qt.ItemDataRole.UserRole:
             return info.id
+        if role == Qt.ItemDataRole.DecorationRole:
+            return tree_card_icon(info.card_type) if info.kind == "card" else icon(info.kind)
         if role == Qt.ItemDataRole.DisplayRole:
             parent = info.path.rsplit(" / ", 1)[0] if " / " in info.path else "Корень проекта"
             return info.title + "\n" + parent + " · " + info.id[:8]
@@ -37,6 +42,8 @@ class ReferenceListModel(QAbstractListModel):
         if text is not None:
             self.text = text
         ids = self.queries.search(self.text, kind=self.kind, card_type=self.card_type)
+        if self.predicate is not None:
+            ids = tuple(key for key in ids if self.predicate(key))
         if ids != self.ids:
             self.beginResetModel()
             self.ids = ids
@@ -61,22 +68,24 @@ class ReferenceListModel(QAbstractListModel):
 
 
 class EntityPicker(QDialog):
-    def __init__(self, queries, column, parent=None, current=None):
+    def __init__(
+        self, queries, column=None, parent=None, current=None, *, predicate=None, click=False,
+    ):
         super().__init__(parent, Qt.WindowType.Popup)
         self.setObjectName("entityPicker")
-        self.setWindowTitle(
-            "Выбрать предмет" if column.ref_card_type == "item" else "Выбрать документ"
-        )
+        kind = getattr(column, "ref_kind", None)
+        card_type = getattr(column, "ref_card_type", None)
+        self.setWindowTitle("Выбрать предмет" if card_type == "item" else "Выбрать документ")
         self.resize(380, 320)
         self.chosen_id = None
         self.query = QLineEdit()
         self.query.setPlaceholderText("Название или другое имя…")
         self.query.setAccessibleName(
-            "Поиск предмета" if column.ref_card_type == "item" else "Поиск документа"
+            "Поиск предмета" if card_type == "item" else "Поиск документа"
         )
         self.list = QListView()
         self.list.setAccessibleName("Результаты поиска документов")
-        self.model = ReferenceListModel(queries, column.ref_kind, column.ref_card_type, self)
+        self.model = ReferenceListModel(queries, kind, card_type, self, predicate=predicate)
         self.list.setModel(self.model)
         self._selection_id = current
         self.model.modelAboutToBeReset.connect(self._remember_selection)
@@ -92,6 +101,8 @@ class EntityPicker(QDialog):
         self.query.textChanged.connect(self._search)
         self.query.returnPressed.connect(self._accept_current)
         self.list.activated.connect(lambda index: self._accept_current())
+        if click:
+            self.list.clicked.connect(lambda index: self._accept_current())
         self.query.installEventFilter(self)
         self._select(current)
         self.query.setFocus()

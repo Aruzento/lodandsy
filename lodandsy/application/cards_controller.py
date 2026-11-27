@@ -58,6 +58,7 @@ class CardsController(QObject):
         self.placements_query = lambda reference: ()
         self.locate_placement = lambda map_id, token_id: None
         self.delete_actor = lambda reference, **kwargs: None
+        self.reference_queries = None
         self.images = CardMediaController(window, service, media, resources, ensure_project)
         service.card_changed.connect(self._on_card_changed)
         service.actor_changed.connect(
@@ -326,6 +327,7 @@ class CardsController(QObject):
         self.media.ready.connect(editor.portrait_panel.refresh_image)
         editor.portrait_panel.image_requested.connect(lambda: self.images.portrait(editor))
         editor.entity_options = self.service.entities.summaries
+        editor.reference_queries = self.reference_queries
         editor.image_requested.connect(lambda source: self.images.request(editor, source))
         editor.link_activated.connect(lambda url: self.follow_link(url, editor))
         editor.links_changed.connect(lambda: self._refresh_editor_links(editor))

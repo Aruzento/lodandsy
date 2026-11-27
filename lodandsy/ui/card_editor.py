@@ -2,7 +2,7 @@ from html import escape
 from pathlib import Path
 
 from PySide6.QtCore import QSignalBlocker, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QAction, QTextCursor
+from PySide6.QtGui import QAction, QPalette, QTextCharFormat, QTextCursor
 from PySide6.QtWidgets import (
     QBoxLayout,
     QHBoxLayout,
@@ -23,6 +23,7 @@ from lodandsy.domain.card import EMPTY_DOCUMENT
 from lodandsy.domain.card_schema import CARD_TYPES
 from lodandsy.ui.card_relations import CardRelations
 from lodandsy.ui.conflict_bar import ConflictBar
+from lodandsy.ui.entity_picker import EntityPicker
 from lodandsy.ui.game_labels import ATTRIBUTES_PAGE, SYSTEM_PAGES, system_pages
 from lodandsy.ui.game_sheet import GameSheet
 from lodandsy.ui.icons import icon
@@ -37,6 +38,7 @@ class RichTextEdit(QTextEdit):
     image_requested = Signal(object)
     link_activated = Signal(QUrl)
     notice = Signal(str)
+    wiki_requested = Signal(object)
 
     def canInsertFromMimeData(self, source):
         return source.hasImage() or source.hasUrls() or super().canInsertFromMimeData(source)
@@ -76,6 +78,65 @@ class RichTextEdit(QTextEdit):
         else:
             super().mouseReleaseEvent(event)
 
+    def keyPressEvent(self, event):
+        wiki_trigger = not self.isReadOnly() and event.text() == "["
+        super().keyPressEvent(event)
+        if wiki_trigger:
+            cursor = self.textCursor()
+            cursor.movePosition(QTextCursor.MoveOperation.Left, QTextCursor.MoveMode.KeepAnchor, 2)
+            if cursor.selectedText() == "[[":
+                self.wiki_requested.emit(cursor)
+
+    def link_selection(self, cursor, href):
+        first, last = None, None
+        iterator = cursor.block().begin()
+        while not iterator.atEnd():
+            fragment = iterator.fragment()
+            start, end = fragment.position(), fragment.position() + fragment.length()
+            iterator += 1
+            if fragment.charFormat().anchorHref() == href:
+                first = start if first is None else first
+                last = end
+                if not iterator.atEnd() and iterator.fragment().charFormat().anchorHref() == href:
+                    continue
+                if first <= cursor.position() <= last:
+                    cursor.setPosition(first)
+                    cursor.setPosition(last, QTextCursor.MoveMode.KeepAnchor)
+                    return cursor
+            first, last = None, None
+        return None
+
+    def contextMenuEvent(self, event):
+        point = self.viewport().mapFromGlobal(event.globalPos())
+        href = self.anchorAt(point)
+        menu = self.createStandardContextMenu(point)
+        if href:
+            menu.addSeparator()
+            menu.addAction("Открыть ссылку", lambda: self.link_activated.emit(QUrl(href)))
+            cursor = self.link_selection(self.cursorForPosition(point), href)
+            if not self.isReadOnly() and cursor is not None:
+                if href.startswith("lodandsy://entity/"):
+                    menu.addAction("Изменить ссылку…", lambda: self.wiki_requested.emit(cursor))
+                menu.addAction("Удалить ссылку", lambda: self.unlink(cursor))
+        menu.exec(event.globalPos())
+        menu.deleteLater()
+
+    def unlink(self, cursor):
+        style = QTextCharFormat()
+        style.setAnchor(False)
+        style.setAnchorHref("")
+        style.setFontUnderline(False)
+        style.setForeground(self.palette().color(QPalette.ColorRole.Text))
+        cursor.mergeCharFormat(style)
+
+    def insert_link(self, cursor, href, label):
+        style = cursor.charFormat()
+        if style.isAnchor():
+            style = cursor.blockCharFormat()
+        cursor.insertHtml(f'<a href="{escape(href, quote=True)}">{escape(label)}</a>')
+        self.setTextCursor(cursor)
+        self.setCurrentCharFormat(style)
+
 
 class CardEditorWidget(QWidget):
     pending_changed = Signal()
@@ -109,6 +170,8 @@ class CardEditorWidget(QWidget):
         self.configure_document = lambda document: None
         self.table_factory = lambda key: None
         self.entity_options = lambda: ()
+        self.reference_queries = None
+        self.wiki_picker = None
         self.text_edit = RichTextEdit(self)
         self.text_edit.setObjectName("visualCardEditor")
         self.text_edit.setMinimumSize(80, 120)
@@ -117,6 +180,7 @@ class CardEditorWidget(QWidget):
         self.text_edit.image_requested.connect(self.image_requested)
         self.text_edit.link_activated.connect(self.link_activated)
         self.text_edit.notice.connect(self.show_link_error)
+        self.text_edit.wiki_requested.connect(self.open_wiki_picker)
         self.text_edit.textChanged.connect(self._changed)
         self.title_edit = SemanticLineEdit()
         self.title_edit.setObjectName("cardHeroTitle")
@@ -347,6 +411,8 @@ class CardEditorWidget(QWidget):
 
     def select_section(self, key, capture=True):
         if key != self.current_section:
+            if self.wiki_picker is not None:
+                self.wiki_picker.reject()
             self.flush_pending()
         if not self._model:
             return
@@ -620,7 +686,46 @@ class CardEditorWidget(QWidget):
         if href:
             self.link_activated.emit(QUrl(href))
 
+    def open_wiki_picker(self, cursor):
+        queries = self.reference_queries
+        if queries is None or self.wiki_picker is not None:
+            return
+        href = cursor.charFormat().anchorHref()
+        current = href.removeprefix("lodandsy://entity/") if href else None
+        expected = cursor.selectedText()
+        picker = EntityPicker(queries, parent=self, current=current, click=True)
+        picker.resize(340, 250)
+        self.wiki_picker = picker
+        editor = self.text_edit
+        point = editor.viewport().mapToGlobal(editor.cursorRect().bottomLeft())
+        available = editor.screen().availableGeometry()
+        point.setX(max(available.left(), min(point.x(), available.right() - picker.width() + 1)))
+        point.setY(max(available.top(), min(point.y(), available.bottom() - picker.height() + 1)))
+        picker.move(point)
+
+        def finish(result):
+            self.wiki_picker = None
+            if (
+                result
+                and cursor.document() is editor.document()
+                and cursor.selectedText() == expected
+                and not editor.isReadOnly()
+            ):
+                info = queries.info(picker.chosen_id)
+                if info is not None:
+                    editor.insert_link(cursor, f"lodandsy://entity/{info.id}", info.title)
+            picker.deleteLater()
+
+        picker.finished.connect(finish)
+        picker.show()
+
     def request_link(self):
+        cursor = self.text_edit.textCursor()
+        href = cursor.charFormat().anchorHref()
+        if href.startswith("lodandsy://entity/") and self.reference_queries is not None:
+            if selected := self.text_edit.link_selection(cursor, href):
+                self.open_wiki_picker(selected)
+                return
         options = tuple(self.entity_options())
         labels = [
             "Внешняя HTTP/HTTPS-ссылка…",
@@ -642,7 +747,7 @@ class CardEditorWidget(QWidget):
         else:
             entity = options[labels.index(choice) - 1]
             href, label = f"lodandsy://entity/{entity.id}", label or entity.title
-        cursor.insertHtml(f'<a href="{escape(href, quote=True)}">{escape(label)}</a>')
+        self.text_edit.insert_link(cursor, href, label)
 
     def contextMenuEvent(self, event):
         menu = self.text_edit.createStandardContextMenu()

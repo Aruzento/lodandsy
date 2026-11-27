@@ -1,6 +1,7 @@
 """Composition root: explicit feature wiring, shared navigation and project lifecycle."""
 
 from html import escape
+from types import SimpleNamespace
 
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import QInputDialog, QMessageBox
@@ -27,6 +28,7 @@ from lodandsy.domain.card_collection import CardCollection
 from lodandsy.domain.treasure import CatalogItem
 from lodandsy.ui.card_search_dialog import CardSearchDialog
 from lodandsy.ui.currency_editor import CurrencyEditor
+from lodandsy.ui.entity_picker import EntityPicker
 from lodandsy.ui.icons import icon
 from lodandsy.ui.rules_editor import RulesEditor
 from lodandsy.ui.settings_dialog import SettingsDialog
@@ -95,6 +97,7 @@ class AppController:
             self.copy_card_link,
             self.ensure_project,
         )
+        self.card_views.reference_queries = self.references
         self.maps = MapsController(
             window,
             self.window_manager,
@@ -121,16 +124,20 @@ class AppController:
         self.card_views.delete_actor = self.actions.delete_actor
 
         def show_map_panel(widget):
-            self.inspector_binding.finish_edits()
-            window.inspector_panel.show_feature_page(widget)
+            if window.inspector_panel.pages.currentWidget() is not widget:
+                self.inspector_binding.finish_edits()
+                window.inspector_panel.show_feature_page(widget)
 
-        self.maps.show_vector_inspector = show_map_panel
+        self.maps.show_inspector_page = show_map_panel
+        self.maps.show_inspector_control = window.inspector_panel.show_context_control
         self.maps.show_actor = lambda card, actor, scale=None: self.inspector_binding.show_actor(
             ActorRef(card, actor), feet_per_cell=scale
         )
         self.maps.update_actor_scale = lambda card, actor, scale: (
             self.inspector_binding.update_actor_scale(ActorRef(card, actor), scale)
         )
+        self.window_manager.active_window_changed.connect(self._refresh_map_inspector)
+        self.maps.inspector_context_changed.connect(self._map_inspector_changed)
         self.settings_window = None
         self.maps.open_participant = self.card_views.open_game_sheet
         self.maps.open_participant_inventory = self._open_participant_inventory
@@ -153,6 +160,7 @@ class AppController:
         tree.entity_open_requested.connect(self.open_entity)
         tree.create_requested.connect(self._on_create_requested)
         tree.typed_create_requested.connect(self._on_create_requested)
+        tree.folder_create_requested.connect(self.create_folder)
         tree.player_create_requested.connect(
             lambda title, parent, kind: self._on_create_requested(title, parent, kind, player=True)
         )
@@ -276,6 +284,57 @@ class AppController:
             if player:
                 self.cards_service.set_player(card.id, True, create=True)
         return self.cards_service.get_card(card.id)
+
+    def create_folder(self, parent_id=None):
+        entities = self.core.entities
+        occupied = {entities.get(key).title.casefold() for key in entities.child_ids(parent_id)}
+        base = title = "Новая папка"
+        suffix = 2
+        while title.casefold() in occupied:
+            title = f"{base} {suffix}"
+            suffix += 1
+        folder = self.create_card(title, parent_id, card_type="folder")
+        self.core.select(folder.id)
+        self.window.tree_panel.edit_folder(folder.id)
+        return folder
+
+    def open_note_tool(self, action):
+        if self.resources.store is None:
+            self.window.show_notice("Сначала создайте или откройте проект")
+            return None
+        generation = self.core.generation
+        if action == "new":
+            title, accepted = QInputDialog.getText(self.window, "Новая заметка", "Название")
+            if not accepted or not title.strip() or generation != self.core.generation:
+                return None
+            try:
+                key = self.create_card(title, card_type="note").id
+            except ValueError as error:
+                self.window.show_notice(str(error))
+                return None
+        else:
+            inventory = action == "inventory"
+            picker = EntityPicker(
+                self.references,
+                SimpleNamespace(ref_kind="table" if inventory else "card",
+                                ref_card_type=None if inventory else "note"),
+                self.window,
+                predicate=self.actions.inventory_owner if inventory else None,
+            )
+            picker.setWindowTitle("Выбрать инвентарь" if inventory else "Выбрать заметку")
+            accepted = picker.exec()
+            key = picker.chosen_id
+            picker.deleteLater()
+            if not accepted or generation != self.core.generation or key is None:
+                return None
+            if inventory:
+                if self.actions.inventory_owner(key) is not None:
+                    return self.tables.open_table(key, floating=True)
+                return None
+            if self.references.resolve(key, kind="card", card_type="note") is None:
+                return None
+        self.open_card_editor(key)
+        return self.window_manager.focus_window(self.card_editor_window_key(key), floating=True)
 
     def open_settings(self, section=None):
         project = self.resources.store
@@ -471,6 +530,15 @@ class AppController:
 
     def _on_navigator_selected(self, kind, entity_id):
         self.core.select(entity_id)
+
+    def _refresh_map_inspector(self, window_key):
+        if not self.maps.show_inspector_context(window_key):
+            self.inspector_binding.clear_map_context()
+
+    def _map_inspector_changed(self, map_id):
+        key = "map:" + map_id
+        if self.window_manager.active_window_key == key and self.window_manager.find_window(key):
+            self._refresh_map_inspector(key)
 
     def _on_selected_entity_changed(self, entity_id):
         entity = self.cards_service.current_entity

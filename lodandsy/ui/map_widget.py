@@ -718,11 +718,7 @@ class MapWidget(QWidget):
         body = QHBoxLayout()
         body.setSpacing(6)
         body.addWidget(self.tools.sidebar)
-        content = QVBoxLayout()
-        content.setSpacing(4)
-        content.addWidget(self.tools.context)
-        content.addWidget(self.view, 1)
-        body.addLayout(content, 1)
+        body.addWidget(self.view, 1)
         layout.addLayout(body, 1)
         self.tool_state.activate("select")
         self.pending_camera = None

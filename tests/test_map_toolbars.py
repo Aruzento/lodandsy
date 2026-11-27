@@ -246,9 +246,12 @@ def test_native_overflow_keeps_hidden_actions_accessible(project, tmp_path, qtbo
     widget.tool_state.activate("fog_hide")
     QApplication.processEvents()
     assert widget.width() <= floating.width()
+    context = widget.tools.context
+    assert app.window.inspector_panel.pages.currentWidget() is context
+    assert not widget.isAncestorOf(context)
     for control in (widget.fog_tools.size, widget.fog_tools.opacity):
-        bounds = QRect(control.mapTo(widget, control.rect().topLeft()), control.size())
-        assert control.isVisible() and widget.rect().contains(bounds)
+        bounds = QRect(control.mapTo(context, control.rect().topLeft()), control.size())
+        assert control.isVisible() and context.rect().contains(bounds)
     widget.tool_state.activate("select")
     floating.resize(200, 300)
     QApplication.processEvents()
