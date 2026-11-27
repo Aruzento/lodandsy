@@ -5,6 +5,7 @@ from lodandsy.application.rich_html import validate_html
 from lodandsy.domain.actor_state import ActorState
 from lodandsy.domain.card import Card, CardSection, Portrait
 from lodandsy.domain.card_schema import field_definition
+from lodandsy.domain.currency import CoinAmount
 from lodandsy.domain.modifiers import Modifier
 
 
@@ -14,11 +15,11 @@ def encode_card(card):
     for section in card.sections:
         if section.kind == "rich_text":
             validate_html(section.content)
-    return 7, json.dumps(
+    return 8, json.dumps(
         dict(
             card_type=card.card_type,
             fields={
-                key: [asdict(m) for m in value] if key == "modifiers" else value
+                key: encode_field(key, value)
                 for key, value in card.values
             },
             sections=[asdict(s) for s in card.sections],
@@ -26,6 +27,14 @@ def encode_card(card):
         ),
         ensure_ascii=False,
     )
+
+
+def encode_field(key, value):
+    if key == "modifiers":
+        return [asdict(m) for m in value]
+    if key == "cost" and value is not None:
+        return asdict(value)
+    return value
 
 
 def encode_card_aggregate(card):
@@ -69,7 +78,7 @@ def _unique_pairs(pairs):
 
 
 def decode_card(title, key, parent, version, source, *, actors=(), default_actor_id=None):
-    if type(version) is not int or version != 7:
+    if type(version) is not int or version != 8:
         raise ValueError(f"Unsupported Card payload version: {version}")
     if not isinstance(source, str) or len(source.encode("utf-8")) > 5 * 2**20:
         raise ValueError("Card payload exceeds budget")
@@ -100,6 +109,10 @@ def decode_card(title, key, parent, version, source, *, actors=(), default_actor
     values = []
     for name, value in data["fields"].items():
         definition = field_definition(name)
+        if definition.data_type == "coin_amount" and value is not None:
+            if not isinstance(value, dict):
+                raise ValueError("Invalid Item price")
+            value = CoinAmount(**value)
         if definition.data_type == "modifier_list":
             if not isinstance(value, list):
                 raise ValueError("Invalid modifier list")

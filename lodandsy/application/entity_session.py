@@ -1,10 +1,21 @@
 """Shared entity lifecycle and transaction notifications; no feature payload knowledge."""
 
+import logging
 from contextlib import contextmanager
+from dataclasses import dataclass
 
 from PySide6.QtCore import QObject, Signal
 
-from lodandsy.domain.entity import EntityCollection
+from lodandsy.domain.entity import ChangeSet, EntityCollection
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class CommittedChange:
+    generation: int
+    serial: int
+    changes: ChangeSet | None
 
 
 class EntitySession(QObject):
@@ -22,25 +33,29 @@ class EntitySession(QObject):
         self.generation = 0
         self._depth = 0
         self._notifications = []
+        self._publishing = False
+        self._pending_notifications = []
         self._dirty = False
         self.serial = 0
+        self.last_commit = None
         self.prepare = None
+
+    @property
+    def in_transaction(self):
+        return self._depth > 0
 
     @contextmanager
     def transaction(self):
         start, dirty = len(self._notifications), self._dirty
-        before_payloads = (
-            {e.id: self.entities.payload(e.id) for e in self.entities.summaries()}
-            if self._depth == 0
-            else None
-        )
         self._depth += 1
         try:
             with self.entities.atomic():
                 yield
-                if self._depth == 1 and self.prepare is not None:
-                    self.prepare(before_payloads)
-        except Exception:
+                if self._depth == 1:
+                    if self.prepare is not None:
+                        self.prepare(self.entities.pending_changes())
+                    changes = self.entities.pending_changes()
+        except BaseException:
             del self._notifications[start:]
             self._dirty = dirty
             raise
@@ -49,11 +64,36 @@ class EntitySession(QObject):
         if self._depth == 0:
             notifications, self._notifications = self._notifications, []
             changed, self._dirty = self._dirty, False
-            for callback in notifications:
-                callback()
+            self._publish(notifications, changed or bool(changes), changes)
+
+    def _publish(self, notifications, changed, changes=None):
+        if changed:
+            self.serial += 1
+            self.last_commit = CommittedChange(self.generation, self.serial, changes)
+        self._pending_notifications.extend(
+            (self.generation, callback) for callback in notifications
+        )
+        if self._publishing:
             if changed:
-                self.serial += 1
                 self.committed.emit()
+            return
+        self._publishing = True
+        try:
+            # Saving must observe the committed revision even if a callback opens
+            # a nested event loop, commits again or raises after the rollback boundary.
+            if changed:
+                self.committed.emit()
+            while self._pending_notifications:
+                pending, self._pending_notifications = self._pending_notifications, []
+                for generation, callback in pending:
+                    if generation != self.generation:
+                        continue
+                    try:
+                        callback()
+                    except Exception:
+                        logger.exception("Post-commit entity notification failed")
+        finally:
+            self._publishing = False
 
     def after_commit(self, callback):
         if self._depth:
@@ -65,8 +105,7 @@ class EntitySession(QObject):
         if self._depth:
             self._dirty = True
         else:
-            self.serial += 1
-            self.committed.emit()
+            self._publish((), True)
 
     def select(self, key):
         if key is not None:
@@ -105,7 +144,10 @@ class EntitySession(QObject):
         return deleted
 
     def replace(self, entities):
+        if self.in_transaction:
+            raise ValueError("Нельзя заменить проект внутри транзакции")
         self.generation += 1
-        self.select(None)
+        self.last_commit = None
         self.entities = entities
+        self.select(None)
         self.replaced.emit()

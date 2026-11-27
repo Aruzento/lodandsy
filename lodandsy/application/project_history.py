@@ -1,10 +1,10 @@
-"""User-local project catalogue; never part of a world or its backup."""
+"""User-local opening history, independent from discovery on disk."""
 
 import json
 import os
 from pathlib import Path
 
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QDateTime, QSettings, Qt
 
 
 class ProjectHistory:
@@ -17,7 +17,7 @@ class ProjectHistory:
 
     @staticmethod
     def identity(value):
-        return os.path.normcase(ProjectHistory.path(value)).casefold()
+        return os.path.normcase(os.path.normpath(value)).casefold()
 
     @property
     def entries(self):
@@ -31,7 +31,7 @@ class ProjectHistory:
             row
             for row in data
             if isinstance(row, dict)
-            and set(row) == {"path", "title"}
+            and {"path", "title"} <= row.keys() <= {"path", "title", "opened_at"}
             and all(isinstance(value, str) and value for value in row.values())
         )
 
@@ -39,18 +39,14 @@ class ProjectHistory:
     def last_directory(self):
         return self.settings.value("projects/lastDirectory", "")
 
-    def remember(self, folder, *, replaces=None):
+    def remember(self, folder):
         path = self.path(folder)
-        identities = {self.identity(path)}
-        if replaces:
-            identities.add(self.identity(replaces))
-        entries = [{"path": path, "title": Path(path).name or path}]
-        entries.extend(e for e in self.entries if self.identity(e["path"]) not in identities)
+        identity = self.identity(path)
+        entries = [{
+            "path": path, "title": Path(path).name or path,
+            "opened_at": QDateTime.currentDateTimeUtc().toString(Qt.DateFormat.ISODate),
+        }]
+        entries.extend(e for e in self.entries if self.identity(e["path"]) != identity)
         self.settings.setValue("projects/catalogue", json.dumps(entries, ensure_ascii=False))
         self.settings.setValue("projects/lastDirectory", str(Path(path).parent))
-        self.settings.sync()
-
-    def remove(self, folder):
-        entries = [e for e in self.entries if self.identity(e["path"]) != self.identity(folder)]
-        self.settings.setValue("projects/catalogue", json.dumps(entries, ensure_ascii=False))
         self.settings.sync()

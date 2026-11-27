@@ -1,7 +1,7 @@
 import math
 
-from PySide6.QtCore import QEvent, QPointF, QRectF, QSettings, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PySide6.QtCore import QEvent, QPointF, QRectF, QSettings, QSignalBlocker, Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF
 from PySide6.QtWidgets import (
     QGraphicsItem,
     QGraphicsScene,
@@ -120,7 +120,7 @@ class MapView(QGraphicsView):
         self.map_width, self.map_height = 1000, 700
         self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
-        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.NoAnchor)
         self.setAccessibleName("Карта: колесо — масштаб, перетаскивание — перемещение")
         self.setAcceptDrops(role != "player")
         self.card_exists = lambda key: False
@@ -188,6 +188,15 @@ class MapView(QGraphicsView):
             painter.drawPath(self._fog_preview)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(self._fog_selection)
+            fog_tools = self.tool_state.fog if self.role == "viewer" else None
+            outline = fog_tools.brush_outline() if fog_tools is not None else None
+            if outline is not None:
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                for color, width in (("#191919", 3), ("#ffffff", 1)):
+                    pen = QPen(QColor(color), width)
+                    pen.setCosmetic(True)
+                    painter.setPen(pen)
+                    painter.drawPath(outline)
             # Overlay geometry is in logical viewport pixels, independent of map zoom/DPR.
             transform = painter.worldTransform()
             painter.resetTransform()
@@ -212,6 +221,21 @@ class MapView(QGraphicsView):
 
     def public_motion_visible(self, item, origin, target):
         from PySide6.QtGui import QPainterPathStroker
+
+        if item.object_card:
+            rect = item.boundingRect()
+            corners = (rect.topLeft(), rect.topRight(), rect.bottomRight(), rect.bottomLeft())
+            outline = [item.mapToScene(point) - item.scenePos() for point in corners]
+            start = [point + QPointF(*origin) for point in outline]
+            end = [point + QPointF(*target) for point in outline]
+            corridor = QPainterPath()
+            corridor.addPolygon(QPolygonF(start))
+            sides = ([start[i - 1], start[i], end[i], end[i - 1]] for i in range(4))
+            for polygon in (end, *sides):
+                section = QPainterPath()
+                section.addPolygon(QPolygonF(polygon))
+                corridor = corridor.united(section)
+            return not self._fog_path.intersects(corridor)
 
         segment = QPainterPath(QPointF(*origin))
         segment.lineTo(QPointF(*target))
@@ -255,7 +279,9 @@ class MapView(QGraphicsView):
                 end, end - QPointF(math.cos(angle + offset) * 10, math.sin(angle + offset) * 10)
             )
         label = painter.fontMetrics().boundingRect(text).adjusted(-6, -4, 6, 4)
-        footprint = transform.mapRect(item.boundingRect())
+        footprint = transform.mapRect(
+            item.sceneBoundingRect() if item.object_card else item.boundingRect()
+        )
         radius = max(footprint.width(), footprint.height()) / 2
         length = math.hypot(delta.x(), delta.y())
         normal = QPointF(delta.y() / length, -delta.x() / length) if length > 0 else QPointF(0, -1)
@@ -362,6 +388,7 @@ class MapView(QGraphicsView):
             except ValueError:
                 card = None
             presentation = resolve_token(token, card)
+            inventory = None
             if self.role != "player" and token.actor_id and participant_resolver:
                 from dataclasses import replace
 
@@ -386,6 +413,8 @@ class MapView(QGraphicsView):
                 != (self._background is not None and self.token_interaction_enabled)
             ):
                 item.set_value(token, presentation, root, path, provider)
+            item.object_card = card is not None and card.card_type == "object"
+            item.has_inventory = inventory is not None
             items.append(item)
         self._tokens = items
 
@@ -455,6 +484,7 @@ class MapView(QGraphicsView):
                     item.presentation, label=item.token.label_override or name, summary=summary
                 )
                 item.set_value(item.token, presentation, item.root, item.asset_path, item.provider)
+                item.has_inventory = inventory is not None
 
     def _drag_card(self, event):
         if (
@@ -579,16 +609,25 @@ class MapView(QGraphicsView):
         super().focusOutEvent(event)
 
     def wheelEvent(self, event):
-        if self.role == "player":
-            event.accept()
+        event.accept()
+        delta = event.angleDelta().y() or event.pixelDelta().y()
+        if self.role == "player" or not delta:
             return
         scale = self.transform().m11()
         target = max(
-            self.minimum_zoom(), min(16, scale * (1.2 if event.angleDelta().y() > 0 else 1 / 1.2))
+            self.minimum_zoom(), min(16, scale * (1.2 if delta > 0 else 1 / 1.2))
         )
-        self.scale(target / scale, target / scale)
+        if target == scale:
+            return
+        cursor = event.position()
+        world = self.viewportTransform().inverted()[0].map(cursor)
+        with QSignalBlocker(self):
+            self.scale(target / scale, target / scale)
+            error = self.viewportTransform().map(world) - cursor
+            horizontal, vertical = self.horizontalScrollBar(), self.verticalScrollBar()
+            horizontal.setValue(horizontal.value() + round(error.x()))
+            vertical.setValue(vertical.value() + round(error.y()))
         self._publish_camera()
-        event.accept()
 
     def contextMenuEvent(self, event):
         if self.role == "player":

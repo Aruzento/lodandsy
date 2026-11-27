@@ -99,19 +99,6 @@ class GameSheet(QWidget):
         outer.addWidget(self.scroll, 1)
         self.conflicts = ConflictBar()
         outer.addWidget(self.conflicts)
-        self.setStyleSheet("""
-            QFrame#abilityTile, QFrame#resourceTile {
-                border:1px solid rgba(128,128,128,72); border-radius:6px;
-                background:palette(base);
-            }
-            QFrame#abilityTile QLineEdit { padding:4px; }
-            QToolButton#proficiencyToggle { padding:0; min-height:24px; min-width:26px; }
-            QToolButton#proficiencyToggle:disabled { color:palette(text); border:0; }
-            QToolButton#resourceValue:disabled { color:palette(text); background:transparent; }
-            QLabel#proficiencyResult { font-weight:600; }
-            QToolButton#resourceValue { border:0; text-align:left; }
-            QToolButton#sheetDisclosure { border:0; padding:6px 0; font-weight:600; }
-        """)
 
     def _form(self, keys, parent_layout, *, scope="card"):
         form = CardFieldsForm(groups=False)
@@ -199,7 +186,7 @@ class GameSheet(QWidget):
             button = QToolButton()
             button.setIcon(icon("settings"))
             button.setFixedSize(24, 24)
-            button.setStyleSheet("QToolButton { padding:2px; }")
+            button.setObjectName("sheetResourceAction")
             button.setToolTip("Настройки: " + title)
             button.setAccessibleName("Настройки: " + title)
             button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)

@@ -3,6 +3,7 @@ import re
 from dataclasses import dataclass, field, replace
 from uuid import uuid4
 
+from lodandsy.domain.currency import CoinAmount, validate_wallet
 from lodandsy.domain.module_values import validate_id, validate_title
 
 
@@ -169,9 +170,11 @@ class TableDocument:
         default_factory=lambda: (ColumnDefinition("Столбец 1"),)
     )
     rows: tuple[RowRecord, ...] = ()
+    wallet: tuple[CoinAmount, ...] = ()
 
     def __post_init__(self):
         validate_id(self.id)
+        validate_wallet(self.wallet)
         object.__setattr__(self, "title", validate_title(self.title))
         for values, kind, limit in [
             (self.columns, ColumnDefinition, 64),
@@ -247,7 +250,11 @@ def display_value(value):
 class TablePayload:
     columns: tuple
     rows: tuple
-    version: int = field(default=3, init=False)
+    wallet: tuple[CoinAmount, ...] = ()
+    version: int = field(default=4, init=False)
+
+    def __post_init__(self):
+        validate_wallet(self.wallet)
 
 
 def inventory_columns():

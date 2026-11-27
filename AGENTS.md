@@ -17,13 +17,17 @@ LODANDSY — нативное локальное Windows-приложение д
 
 ## Архитектурные ограничения
 
-- Общее правило владельца: не сохранять устаревшие решения без обоснованной текущей
-  необходимости. Общее правило разработки: разрешена потеря тестовых данных: legacy Markdown,
-  старые редакторы/режимы/форматы и адаптеры совместимости удаляются. Обязательные
-  миграции и архивирование старых форматов отменены. Единственный формат Card — новый
-  визуальный документ ADR-014; единственный URI — lodandsy://entity/UUID. Старые проекты
-  не изменять автоматически: неподдерживаемая версия получает явный отказ. Это правило
-  имеет приоритет над историческими требованиями обратной совместимости ниже и в ADR.
+- Принятая 27.11.2026 v0.01 — первая поддерживаемая база пользовательских миров
+  SQLite17/Card8/Map9–10/Actor1/Table4/Rules1/Economy1. Версия приложения и версии
+  форматов независимы. При изменении
+  формата определи входную версию и путь миграции, создай и проверь backup до записи,
+  сохрани UUID, ссылки, данные и вложения, проверь целостность и повторное открытие.
+  При ошибке обеспечь откат или оставь оригинал без изменений. Изменения SQLite и файлов
+  требуют безопасной конверсии копии или доказанного восстановления обеих частей.
+  Неизвестная будущая версия и неподдерживаемые прототипы до v0.01 отклоняются без
+  записи и удаления. Исходный мир нельзя удалять или пересоздавать вместо миграции.
+  Единственный документ Card — визуальный ADR-014, единственный URI —
+  lodandsy://entity/UUID. Базовые версии и процедура в ADR-040.
 - Сохраняй Python 3.14, PySide6, Qt Widgets и Windows-first. Изменение основного стека требует доказанной необходимости и согласования. Не вводи web runtime, сервер, облако, второй GUI-стек, ORM, плагинную платформу или новую зависимость без конкретной причины и проверки совместимости, лицензии и сборки.
 - Модульный монолит: `domain` — данные и инварианты без Qt; `application` — операции, сессия, координация сохранения и адаптеры; `ui` — Qt-представления и оконная политика. Не перестраивай каталоги ради формальной архитектуры.
 - Маленький Core, встроенные Cards, Map, Tools. Модуль владеет собственным payload и операциями; общий Entity contract минимален. UI не владеет данными мира. Один путь изменения на объект и один канонический источник истины для сохранённых данных.
@@ -47,9 +51,12 @@ private widgets/worker соседних модулей и общих ModuleContr
 Один canonical EntityCollection/SQLite writer и post-commit revision ACK.
 
 MOW parser/controller/actions/source fields отменены и удалены. Общие aliases, HTML
-sanitizer и assets сохраняются. Welcome/Open используют MRU каталог QSettings вне мира;
-ProjectController выполняет guards, неудача не переключает мир. Backup/restore — gear
-правого rail. Не создавать сканер миров или второй формат хранения. ADR-030.
+sanitizer и assets сохраняются. Welcome/Open проверяют только непосредственных соседей
+в системном `Documents/LODANDSY/project`. QSettings хранит историю открытий, включая
+время и последнее расположение внешнего мира. Создание и восстановление используют
+название и управляемый каталог. Явное открытие внешнего мира доступно. ProjectController
+сохраняет мир и черновики при отказе переключения. Backup/restore — окно настроек.
+Канонический формат один. ADR-040 заменяет правила каталога ADR-030.
 
 Обязательный Card Editor: square portrait слева132–220 logical px; справа immutable
 read-only type, один title и inline summary. Ниже отдельный ряд tabs и content inset16px.
@@ -79,8 +86,12 @@ Qt дизайн нейтральный graphite #191919/#202020. Private мак�
 только в .prototype-deps, не repo/production/release. Inventory — обычная Table:
 item UUID, positive integer count, live description/cost без stored derived cells.
 Object Cards library, original alpha/aspect long-edge128; front layer сверху.
-Full snapshot writer/synchronous backup4GiB и libvips tiles сохраняются.
-Схема по факту: SQLite16/Card7/Map9/Actor1/Rules1(profile2)/Table3, UI state4; legacy/migration adapters нет.
+SaveCoordinator формирует полный неизменяемый снимок. SQLite writer пишет изменённые
+агрегаты после проверки сохранённой ревизии по ADR-004. Backup синхронный с пределом
+4 ГиБ. Libvips tiles сохраняются.
+Схема по факту: SQLite17/Card8/Map9–10/Actor1/Rules1(profile2)/Table4/Economy1, UI state4.
+Map10 хранит дробный размер и поворот токена «Объект». Map7–9 читаются без записи,
+переход при сохранении проверяет backup и целостность в транзакции. ADR-036/040.
 Targeted batches после блоков, общий gate/build после стабилизации; report/draw.io/checklist.
 Git-действия только в конце после проверки по последним указаниям владельца.
 
@@ -131,8 +142,8 @@ merge/release этим пакетом не разрешены. Частные в
 блоки с 18skills/6saves, homebrew race/class/subclass/level. Item equipment facts
 определяются только active inventory rows, один armor/shield с atomic replace/cancel.
 Card armor_type/armor_base/shield удалены; это только resolved formula inputs.
-SQLite16/Card7, профиль5e14 version2; legacy/миграции отсутствуют по новому прямому
-решению владельца «все миры тестовые». SQLite15 отклоняется без записи/удаления.
+Исторический формат шага SQLite16/Card7, профиль5e14 version2. Экспериментальные
+SQLite15/16 отклоняются без записи/удаления. Действующая политика v0.01 в ADR-040.
 Ручной итоговый AC побеждает, оборудование и источники видны в native AC dialog.
 Отчёт: docs/validation/2026-11-22-character-sheet-v2.md. Новые Git-публикации не разрешены.
 
@@ -164,3 +175,20 @@ Map7/8 читаются без записи с hide_label=false. SQLite16/Card7/
 Подпись хранится при скрытии; навигация/иконка и Map Undo сохранены. Новая поставка:
 LODANDSY-Map-M5.5-Final-2026-11-26.zip; отчёт docs/validation/2026-11-26-map-m55-final.md.
 Обе задачи остаются In Progress до ручной приёмки; commit/push/merge не разрешены.
+
+Обязательный визуальный стандарт ARU-26: [docs/design/UI-SYSTEM.md](docs/design/UI-SYSTEM.md).
+Нативные Qt Widgets/ADS используют общие роли в ui/theme.py и SVG в ui/icons.py.
+Принятые размеры листа и панели карты сохраняются. Шестерёнка открывает одно
+окно настроек, кошелёк редактируется в инвентаре через общий FieldEdits.
+
+Ручная приёмка v0.01 зафиксирована в [отчёте владельца](docs/validation/v001-owner-acceptance.md).
+Проверка полной сборки на чистой Windows без Python остаётся ARU-64.
+
+Tools T3 / ARU-92–96, 26.11.2026. Владелец подтвердил новую версию тестовых миров
+без переноса. ADR-039: SQLite17/Card8/Table4/Economy1, Map9/Actor1/Rules1/UIstate4.
+EconomyService использует общие ProjectSettings и существующий SaveCoordinator.
+Cost хранит UUID номинала и целое количество. Кошелёк принадлежит Table инвентаря,
+наследуется из шаблона и проверяется на уровне канона. Clipboard UUID scoped,
+ProjectActions выполняет атомарный paste. Loot/Shop читают текущий Item catalogue,
+локальный результат хранится в раскладке с UUID проекта. Все ARU-92–96 остаются
+In Progress до ручной приёмки. Отчёт docs/validation/2026-11-26-tools-t3.md.

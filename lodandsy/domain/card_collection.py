@@ -1,7 +1,7 @@
 from dataclasses import replace
 
 from lodandsy.domain.card import Card
-from lodandsy.domain.document_payloads import project_entities, validate_project
+from lodandsy.domain.document_payloads import ProjectValidation, project_entities, validate_project
 
 
 class CardCollection:
@@ -9,8 +9,22 @@ class CardCollection:
 
     def __init__(self, cards=(), *, entities=None):
         self.entities = entities if entities is not None else project_entities(cards)
+        self._needs_initial_validation = self.entities.validator is None
         if self.entities.validator is None:
             self.entities.validator = validate_project
+
+    def enable_addressed_validation(self):
+        if self._needs_initial_validation:
+            self.entities.validator(self.entities, None)
+            self._needs_initial_validation = False
+        if self.entities.validator is validate_project and self.entities.change_validator is None:
+            self.entities.change_validator = ProjectValidation(self.entities)
+
+    def affected_contexts(self, changes, *, complete=False):
+        validation = self.entities.change_validator
+        if isinstance(validation, ProjectValidation):
+            return validation.affected_contexts(self.entities, changes, complete=complete)
+        return {card.id: {None, *(actor.id for actor in card.actors)} for card in self.all()}
 
     def all(self):
         return tuple(self.get(e.id) for e in self.entities.summaries() if e.kind == "card")

@@ -1,10 +1,19 @@
 """Maps-owned vector gestures and public foreground painter."""
 
 import math
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap, QTransform
+from PySide6.QtGui import (
+    QColor,
+    QIcon,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+    QPolygonF,
+    QTransform,
+)
 from PySide6.QtWidgets import (
     QColorDialog,
     QDoubleSpinBox,
@@ -18,8 +27,15 @@ from PySide6.QtWidgets import (
 )
 from shiboken6 import isValid
 
-from lodandsy.domain.map_document import MapShape
+from lodandsy.domain.map_document import MAX_TOKEN_EXTENT, MapShape, TokenInstance
 from lodandsy.domain.map_measurements import distance
+from lodandsy.ui.map_annotations import TokenItem
+
+TOKEN_TRANSFORMS = {"resize_token", "rotate_token"}
+TRANSFORM_KEYS = {
+    Qt.Key.Key_Alt: Qt.KeyboardModifier.AltModifier,
+    Qt.Key.Key_Shift: Qt.KeyboardModifier.ShiftModifier,
+}
 
 
 def mode_is_portal(gesture):
@@ -49,6 +65,118 @@ def transform(value):
     result.rotate(value.rotation)
     result.scale(value.scale, value.scale)
     return result
+
+
+def resize_factors(rect, corner, point, modifiers, *, uniform=False, minimum=0.01):
+    anchor = (
+        rect.center() if modifiers & Qt.KeyboardModifier.ShiftModifier
+        else QPointF(
+            rect.left() if corner.x() == rect.right() else rect.right(),
+            rect.top() if corner.y() == rect.bottom() else rect.bottom(),
+        )
+    )
+
+    def factor(delta, span):
+        if minimum is not None:
+            return max(minimum, delta * math.copysign(1, span) / max(minimum, abs(span)))
+        if not span:
+            raise ValueError("Размер неразличим при текущей точности")
+        return delta / span
+
+    sx = factor(point.x() - anchor.x(), corner.x() - anchor.x())
+    sy = factor(point.y() - anchor.y(), corner.y() - anchor.y())
+    if uniform or modifiers & Qt.KeyboardModifier.AltModifier:
+        sx = sy = max(sx, sy)
+    return anchor, sx, sy
+
+
+def rotation_for_drag(angle, center, start, point, modifiers):
+    old, new = start - center, point - center
+    if new.isNull():
+        return angle
+    angle += math.degrees(math.atan2(new.y(), new.x()) - math.atan2(old.y(), old.x()))
+    angle = (angle + 180) % 360 - 180
+    if modifiers & Qt.KeyboardModifier.ShiftModifier:
+        angle = round(angle / 15) * 15
+    return angle
+
+
+def rotation_handle(view, matrix, rect):
+    viewport = view.viewportTransform()
+    top = viewport.map(matrix.map(QPointF(rect.center().x(), rect.top())))
+    normal = viewport.map(QPointF(-matrix.m21(), -matrix.m22())) - viewport.map(QPointF())
+    length = math.hypot(normal.x(), normal.y())
+    return viewport.inverted()[0].map(top + normal * (25 / length))
+
+
+def paint_edit_handles(painter, points, *, frame=None):
+    mapping = painter.worldTransform()
+    painter.save()
+    painter.resetTransform()
+    painter.setPen(QPen(QColor("#ffffff"), 1))
+    if frame is not None:
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawPolygon(QPolygonF([mapping.map(point) for point in frame]))
+    painter.setBrush(QColor("#303030"))
+    for point in points:
+        painter.drawEllipse(mapping.map(point), 5, 5)
+    painter.restore()
+
+
+def resize_corners(rect):
+    return rect.topLeft(), rect.topRight(), rect.bottomRight(), rect.bottomLeft()
+
+
+@dataclass(frozen=True)
+class TokenTransform:
+    item: TokenItem
+    token: TokenInstance
+    size: tuple[float | int, float | int]
+    cell_size: float
+    rect: QRectF
+    matrix: QTransform
+
+    def is_current(self):
+        item = self.item
+        return (
+            isValid(item) and item.scene() is not None and item.can_transform and item.isSelected()
+            and item.token == self.token and item.cell_size == self.cell_size
+            and (item.presentation.cells_w, item.presentation.cells_h) == self.size
+        )
+
+    def resized(self, corner, delta, modifiers):
+        if delta.isNull():
+            return self.token
+        inverse = self.matrix.inverted()[0]
+        local = inverse.map(self.matrix.map(corner) + delta)
+        anchor, sx, sy = resize_factors(self.rect, corner, local, modifiers, minimum=None)
+        if not all(math.isfinite(factor) and factor > 0 for factor in (sx, sy)):
+            raise ValueError("Размер должен быть положительным")
+        center = QPointF(self.token.x, self.token.y)
+        candidate = self.matrix.map(QPointF(anchor.x() * (1 - sx), anchor.y() * (1 - sy)))
+        change = candidate - center
+        max_x = max(self.item.view.map_width, center.x())
+        max_y = max(self.item.view.map_height, center.y())
+        # Interpolate both factors together at the canvas boundary. This keeps
+        # the chosen anchor and preserves the ratio in uniform mode.
+        fraction = 1.0
+        for origin, offset, maximum in (
+            (center.x(), change.x(), max_x), (center.y(), change.y(), max_y),
+        ):
+            if offset < 0 and origin + offset < 0:
+                fraction = min(fraction, -origin / offset)
+            elif offset > 0 and origin + offset > maximum:
+                fraction = min(fraction, (maximum - origin) / offset)
+        width = self.size[0] * (1 + (sx - 1) * fraction if fraction < 1 else sx)
+        height = self.size[1] * (1 + (sy - 1) * fraction if fraction < 1 else sy)
+        if not all(0 < extent / 2 and extent <= MAX_TOKEN_EXTENT
+                   for extent in (width * self.cell_size, height * self.cell_size)):
+            raise ValueError("Размер токена вне технических пределов карты")
+        x = max(0, min(max_x, center.x() + change.x() * fraction))
+        y = max(0, min(max_y, center.y() + change.y() * fraction))
+        if (width, height, x, y) == (*self.size, self.token.x, self.token.y):
+            return self.token
+        return replace(self.token, x=x, y=y, cells_w=width, cells_h=height)
 
 
 def dimensions(value, grid):
@@ -171,6 +299,7 @@ def paint_vectors(view, painter):
 
 class VectorTools(QWidget):
     committed = Signal(object)
+    token_transformed = Signal(object, object)
     removed = Signal(str)
     portal_requested = Signal(float, float)
     portal_opened = Signal(str)
@@ -183,6 +312,7 @@ class VectorTools(QWidget):
         view.vector_tools = self
         self.points = []
         self.selected = None
+        self.transform_selection = None
         self.preview = None
         self.gesture = None
         self.preview_cursor = None
@@ -220,6 +350,8 @@ class VectorTools(QWidget):
         view.viewport().installEventFilter(self)
         view.installEventFilter(self)
         view.viewport().setMouseTracking(True)
+        view.model_changed.connect(self._cancel_stale_transform)
+        view.scene().selectionChanged.connect(self._token_selection_changed)
         view.tool_state.vectors = self
         view.tool_state.prioritize()
 
@@ -245,6 +377,10 @@ class VectorTools(QWidget):
     def cancel(self):
         if getattr(self, "view", None) is None or not isValid(self.view):
             return
+        if self.gesture and self.gesture[0] in TOKEN_TRANSFORMS:
+            item = self.gesture[1].item
+            if isValid(item):
+                item.set_transform_preview(None)
         self.points.clear()
         self.preview = None
         self.gesture = None
@@ -253,10 +389,36 @@ class VectorTools(QWidget):
     def value(self):
         return next((v for v in self.view.vector_shapes if v.id == self.selected), None)
 
+    def selected_transform_item(self):
+        item = self.transform_selection
+        return item if item is not None and isValid(item) and item.can_transform else None
+
+    def _cancel_stale_transform(self):
+        if self.gesture and self.gesture[0] in TOKEN_TRANSFORMS:
+            resize = self.gesture[1]
+            if resize.item is not self.selected_transform_item() or not resize.is_current():
+                self.cancel()
+
+    def _token_selection_changed(self):
+        if not isValid(self.view):
+            return
+        selected = self.view.scene().selectedItems()
+        self.transform_selection = (
+            selected[0] if len(selected) == 1 and isinstance(selected[0], TokenItem) else None
+        )
+        self._cancel_stale_transform()
+        if self.selected and self.selected_transform_item() is not None:
+            self.cancel()
+            self.select(None)
+        self.view.viewport().update()
+
     def select(self, value):
         self.selected = value.id if value else None
         self.inspected = value
         if value:
+            item = self.selected_transform_item()
+            if item is not None:
+                item.setSelected(False)
             self.name.setText(value.name)
             self.color.setText(value.color)
             self.opacity.setValue(value.opacity * 100)
@@ -311,26 +473,33 @@ class VectorTools(QWidget):
             else [(rect.right(), rect.bottom())]
         )
         mapped = [mapping.map(QPointF(*p)) for p in points]
-        top = mapping.map(QPointF(rect.center().x(), rect.top()))
-        screen = self.view.viewportTransform().map(top) + QPointF(0, -25)
-        inverse = self.view.viewportTransform().inverted()[0]
-        return mapped + [inverse.map(screen)]
+        return mapped + [rotation_handle(self.view, mapping, rect)]
+
+    def handle_distance_squared(self, a, b):
+        delta = self.view.viewportTransform().map(a) - self.view.viewportTransform().map(b)
+        return delta.x() ** 2 + delta.y() ** 2
 
     def near(self, a, b, radius=10):
-        delta = self.view.viewportTransform().map(a) - self.view.viewportTransform().map(b)
-        return delta.x() ** 2 + delta.y() ** 2 <= radius**2
+        return self.handle_distance_squared(a, b) <= radius**2
+
+    def _object_handle(self, item, point):
+        matrix, rect = item.sceneTransform(), item.boundingRect()
+        if self.near(point, rotation_handle(self.view, matrix, rect)):
+            return "rotate_token", None
+        corner = min(
+            resize_corners(rect), key=lambda p: self.handle_distance_squared(matrix.map(p), point),
+        )
+        return ("resize_token", corner) if self.near(point, matrix.map(corner)) else None
 
     def paint_handles(self, painter):
         value = self.preview or self.value()
         if isinstance(value, MapShape) and self.selected == value.id:
-            for point in self.handles(value):
-                painter.save()
-                point = painter.worldTransform().map(point)
-                painter.resetTransform()
-                painter.setPen(QPen(QColor("#ffffff"), 1))
-                painter.setBrush(QColor("#303030"))
-                painter.drawEllipse(point, 5, 5)
-                painter.restore()
+            paint_edit_handles(painter, self.handles(value))
+        if (item := self.selected_transform_item()) is not None:
+            matrix, rect = item.sceneTransform(), item.boundingRect()
+            corners = tuple(matrix.map(p) for p in resize_corners(rect))
+            rotation = rotation_handle(self.view, matrix, rect)
+            paint_edit_handles(painter, (*corners, rotation), frame=corners)
         if self.points:
             path = QPainterPath(QPointF(*self.points[0]))
             for p in self.points[1:]:
@@ -365,6 +534,18 @@ class VectorTools(QWidget):
         if self.view.role != "viewer" or not self.enabled:
             return False
         kind = event.type()
+        if (
+            kind in {QEvent.Type.KeyPress, QEvent.Type.KeyRelease}
+            and self.gesture and self.gesture[0] in TOKEN_TRANSFORMS
+            and (modifier := TRANSFORM_KEYS.get(event.key())) is not None
+        ):
+            modifiers = event.modifiers()
+            if kind == QEvent.Type.KeyPress:
+                modifiers |= modifier
+            else:
+                modifiers &= ~modifier
+            self.update_gesture(self.preview_cursor, modifiers)
+            return True
         if kind == QEvent.Type.KeyPress:
             if event.key() == Qt.Key.Key_Escape:
                 self.cancel()
@@ -384,14 +565,17 @@ class VectorTools(QWidget):
             QEvent.Type.MouseButtonDblClick,
         }:
             return False
-        point = self.view.mapToScene(event.position().toPoint())
+        point = self.view.viewportTransform().inverted()[0].map(event.position())
         self.preview_cursor = point
         if kind == QEvent.Type.MouseMove:
             if self.gesture:
                 self.update_gesture(point, event.modifiers())
             if not self.gesture and self.mode in {"select", "vertices"}:
                 value = self.value()
-                hover = value and any(self.near(point, p) for p in self.handles(value))
+                item = self.selected_transform_item()
+                hover = (
+                    item is not None and self._object_handle(item, point) is not None
+                ) or (value and any(self.near(point, p) for p in self.handles(value)))
                 self.view.viewport().setCursor(
                     Qt.CursorShape.CrossCursor if hover else Qt.CursorShape.ArrowCursor
                 )
@@ -415,6 +599,14 @@ class VectorTools(QWidget):
         if event.button() != Qt.MouseButton.LeftButton:
             return False
         if kind == QEvent.Type.MouseButtonRelease and self.gesture:
+            if self.gesture[0] in TOKEN_TRANSFORMS:
+                edit = self.gesture[1]
+                self.update_gesture(point, event.modifiers())
+                candidate = edit.item.transform_preview if self.gesture else None
+                self.cancel()
+                if candidate is not None and candidate != edit.token:
+                    self.token_transformed.emit(edit.token, candidate)
+                return True
             value = self.preview
             previous = self.gesture[1]
             current = (
@@ -437,8 +629,21 @@ class VectorTools(QWidget):
             self.portal_requested.emit(point.x(), point.y())
             return True
         if self.mode in {"select", "vertices"}:
+            item = self.selected_transform_item()
+            if item is not None and kind == QEvent.Type.MouseButtonPress:
+                handle = self._object_handle(item, point)
+                if handle is not None:
+                    self.view.setFocus()
+                    edit = TokenTransform(
+                        item, item.token, (item.presentation.cells_w, item.presentation.cells_h),
+                        item.cell_size, item.boundingRect(), item.sceneTransform(),
+                    )
+                    self.gesture = (handle[0], edit, point, handle[1])
+                    return True
             for portal in reversed(self.view.vector_portals):
                 if self.near(point, QPointF(portal.x, portal.y), 16):
+                    if item is not None:
+                        item.setSelected(False)
                     self.selected = portal.id
                     if kind == QEvent.Type.MouseButtonDblClick:
                         self.portal_opened.emit(portal.id)
@@ -492,6 +697,23 @@ class VectorTools(QWidget):
     def update_gesture(self, point, modifiers):
         mode, value, start, index = self.gesture
         try:
+            if mode in TOKEN_TRANSFORMS:
+                if not value.is_current():
+                    self.cancel()
+                    return
+                if mode == "resize_token":
+                    candidate = value.resized(index, point - start, modifiers)
+                else:
+                    candidate = value.token
+                    if point != start:
+                        center = QPointF(candidate.x, candidate.y)
+                        angle = rotation_for_drag(
+                            candidate.rotation, center, start, point, modifiers,
+                        )
+                        candidate = replace(candidate, rotation=angle)
+                value.item.set_transform_preview(candidate)
+                self.view.viewport().update()
+                return
             if mode == "create":
                 dx, dy = point.x() - start.x(), point.y() - start.y()
                 length = math.hypot(dx, dy)
@@ -519,13 +741,9 @@ class VectorTools(QWidget):
                 delta = point - start
                 value = replace(value, x=value.x + delta.x(), y=value.y + delta.y())
             elif mode == "rotate":
-                angle = value.rotation + math.degrees(
-                    math.atan2(point.y() - value.y, point.x() - value.x)
-                    - math.atan2(start.y() - value.y, start.x() - value.x)
+                angle = rotation_for_drag(
+                    value.rotation, QPointF(value.x, value.y), start, point, modifiers,
                 )
-                angle = (angle + 180) % 360 - 180
-                if modifiers & Qt.KeyboardModifier.ShiftModifier:
-                    angle = round(angle / 15) * 15
                 value = replace(value, rotation=angle)
             elif mode == "vertex":
                 local = transform(value).inverted()[0].map(point)
@@ -535,13 +753,10 @@ class VectorTools(QWidget):
             else:
                 rect = local_path(value).boundingRect()
                 local = transform(value).inverted()[0].map(point)
-                center = (
-                    rect.center()
-                    if modifiers & Qt.KeyboardModifier.ShiftModifier
-                    else rect.topLeft()
+                center, sx, sy = resize_factors(
+                    rect, rect.bottomRight(), local, modifiers,
+                    uniform=value.kind in {"circle", "cone"},
                 )
-                sx = max(0.01, (local.x() - center.x()) / max(0.01, rect.right() - center.x()))
-                sy = max(0.01, (local.y() - center.y()) / max(0.01, rect.bottom() - center.y()))
                 if value.kind in {"circle", "cone"}:
                     new_scale = max(0.0001, min(1e5, value.scale * max(sx, sy)))
                     anchor_world = transform(value).map(center)
@@ -555,8 +770,6 @@ class VectorTools(QWidget):
                         y=anchor_world.y() - rotated.y(),
                     )
                 else:
-                    if modifiers & Qt.KeyboardModifier.AltModifier:
-                        sx = sy = max(sx, sy)
                     value = replace(
                         value,
                         points=tuple(
@@ -567,5 +780,7 @@ class VectorTools(QWidget):
             self.preview = value
             self.view.viewport().update()
         except ValueError as error:
+            if mode in TOKEN_TRANSFORMS:
+                return  # Keep the last representable preview when a handle crosses its anchor.
             self.preview = None
             self.notice.setText(str(error))

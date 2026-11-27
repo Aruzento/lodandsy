@@ -1,8 +1,8 @@
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
-from PySide6.QtWidgets import QMenu, QToolBar, QToolButton, QWidget
+from PySide6.QtWidgets import QToolBar, QToolButton, QWidget
 
-from lodandsy.ui.icons import icon
+from lodandsy.ui.icons import configure_tool_button, icon
 
 
 class RightRail(QToolBar):
@@ -23,12 +23,7 @@ class RightRail(QToolBar):
 
         self.addAction(self.inspector_action)
 
-        self.settings_button = QToolButton(self)
-        self.settings_button.setIcon(icon("settings"))
-        self.settings_button.setToolTip("Настройки проекта")
-        self.settings_button.setAccessibleName("Настройки проекта")
-        self.settings_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        self.settings_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.settings_menu = QMenu(self.settings_button)
-        self.settings_button.setMenu(self.settings_menu)
+        self.settings_button = configure_tool_button(
+            QToolButton(self), "settings", "Настройки LODANDSY"
+        )
         self.addWidget(self.settings_button)

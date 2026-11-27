@@ -1,5 +1,7 @@
 """Cards mutations/queries/drafts. Core owns hierarchy and project selection."""
 
+from dataclasses import replace
+
 from PySide6.QtCore import QObject, Signal
 
 from lodandsy.application.entity_session import EntitySession
@@ -14,7 +16,9 @@ from lodandsy.domain.card_schema import (
     field_definition,
     permitted_fields,
 )
+from lodandsy.domain.currency import CoinAmount
 from lodandsy.domain.entity_reference import ReferenceInfo
+from lodandsy.domain.project_settings import ProjectSettings
 from lodandsy.domain.rules_5e14 import ProjectRules, calculate
 
 
@@ -27,6 +31,7 @@ class CardsService(QObject):
     cards_replaced = Signal()
     actor_changed = Signal(str, str, object)
     rules_changed = Signal()
+    economy_changed = Signal()
     base_effective_changed = Signal(str)
 
     def __init__(self, cards=None, parent=None, *, core=None):
@@ -37,6 +42,7 @@ class CardsService(QObject):
             else EntitySession(cards.entities if cards is not None else None, self)
         )
         self.cards = cards if cards is not None else CardCollection(entities=self.core.entities)
+        self.cards.enable_addressed_validation()
         self.field_drafts = {}
         from lodandsy.domain.card_schema import parse_field
 
@@ -102,6 +108,7 @@ class CardsService(QObject):
         self._effective_cache.clear()
         self._published_effective.clear()
         self.cards = CardCollection(entities=self.core.entities)
+        self.cards.enable_addressed_validation()
         self.field_drafts.clear()
         self.cards_replaced.emit()
 
@@ -112,8 +119,12 @@ class CardsService(QObject):
         return self.cards.get(key)
 
     @property
+    def settings(self):
+        return self.entities.settings or ProjectSettings()
+
+    @property
     def rules(self):
-        return self.entities.settings or ProjectRules()
+        return self.settings.rules or ProjectRules()
 
     def effective(self, reference, *, rules=None):
         card_id = reference.card_id if isinstance(reference, ActorRef) else reference
@@ -138,15 +149,16 @@ class CardsService(QObject):
             self._effective_cache[signature] = value
         return value
 
-    def reconcile(self, previous=None):
+    def reconcile(self, changes, *, complete=False):
         """Runs inside the outer transaction before validation/publication."""
-        live = {(card.id, actor.id) for card in self.cards.all() for actor in card.actors}
-        removed = {
-            (card_id, actor.id)
-            for card_id, payload in (previous or {}).items()
-            for actor in getattr(payload, "actors", ())
-            if (card_id, actor.id) not in live
-        }
+        previous = {change.id: change.before_payload for change in changes.aggregates}
+        removed = set()
+        for change in changes.aggregates:
+            before = getattr(change.before_payload, "actors", ())
+            after = getattr(change.after_payload, "actors", ())
+            if before != after:
+                live = {actor.id for actor in after}
+                removed.update((change.id, actor.id) for actor in before if actor.id not in live)
         if removed:
 
             def retire():
@@ -160,8 +172,9 @@ class CardsService(QObject):
                     self._published_effective.pop(identity, None)
 
             self.core.after_commit(retire)
-        for card in self.cards.all():
-            if card.card_type in ACTOR_TYPES:
+        for card_id, contexts in self.cards.affected_contexts(changes, complete=complete).items():
+            card = self.get_card(card_id)
+            if None in contexts and card.card_type in ACTOR_TYPES:
                 base = self.effective(card.id)
                 signature = tuple(
                     (key, v.value, v.source, v.status, v.diagnostic)
@@ -179,6 +192,9 @@ class CardsService(QObject):
                     self.core.after_commit(publish_base)
             actors = []
             for actor in card.actors:
+                if actor.id not in contexts:
+                    actors.append(actor)
+                    continue
                 effective = self.effective(ActorRef(card.id, actor.id))
                 maximum = effective.get("hp_max")
                 signature = tuple(
@@ -200,7 +216,9 @@ class CardsService(QObject):
                     old_actor = next(
                         (
                             a
-                            for a in getattr((previous or {}).get(card.id), "actors", ())
+                            for a in getattr(
+                                previous.get(card.id, self.entities.payload(card.id)), "actors", (),
+                            )
                             if a.id == actor.id
                         ),
                         None,
@@ -221,6 +239,8 @@ class CardsService(QObject):
 
         if key[1] == "modifiers":
             return json.dumps([asdict(modifier) for modifier in value], ensure_ascii=False)
+        if isinstance(value, CoinAmount):
+            return value.to_text()
         return value_text(value)
 
     def participant_info(self, card_id, actor_id):
@@ -268,7 +288,7 @@ class CardsService(QObject):
         if serial != self.core.serial or candidate.revision != self.rules.revision + 1:
             raise ValueError("Preview устарел; повторите проверку")
         with self.core.transaction():
-            self.entities.put_settings(candidate)
+            self.entities.put_settings(replace(self.settings, rules=candidate))
             self.core.after_commit(self.rules_changed.emit)
             self.core.mark_changed()
         return clamps

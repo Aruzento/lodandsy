@@ -6,6 +6,7 @@ from PySide6.QtTest import QAbstractItemModelTester
 
 from lodandsy.application.rich_html import text_document
 from lodandsy.application.sqlite_project_store import SQLiteProjectStore
+from lodandsy.domain.currency import CoinAmount
 from lodandsy.domain.table_document import ColumnDefinition
 from lodandsy.ui.entity_picker import EntityPicker
 
@@ -33,7 +34,9 @@ def test_item_projections_are_live_addressed_and_never_stored(project, tmp_path,
     ]
     assert [c.key for c in table.columns] == ["item", "quantity", "description", "cost", "active"]
     item = app.create_card("Меч", card_type="item")
-    app.cards_service.update_card_fields(item.id, {"summary": "Острый", "cost": 0})
+    app.cards_service.update_card_fields(
+        item.id, {"summary": "Острый", "cost": CoinAmount(app.economy.currency.base_id, 0)}
+    )
     editor = app.open_card_editor(owner.id).widget()
     editor.select_section(section.id)
     embedded = editor._embedded_tables[section.id]
@@ -45,7 +48,7 @@ def test_item_projections_are_live_addressed_and_never_stored(project, tmp_path,
         "Меч",
         "1",
         "Острый",
-        "0",
+        "0 зм",
     ]
     app.tables_service.set_cell(table.id, table.rows[0].id, table.columns[1].id, "7")
     changes.clear()

@@ -38,7 +38,7 @@ FEATURES = {
     ),
     "tables": modules("domain", "table_document")
     | modules("application", "tables_controller tables_service table_column_codec")
-    | modules("ui", "table_widget table_headers table_model"),
+    | modules("ui", "table_widget table_headers table_model wallet_widget"),
     "maps": modules("domain", "map_document map_fog map_measurements")
     | modules(
         "application",
@@ -52,10 +52,14 @@ FEATURES = {
     "dice": modules("domain", "dice")
     | modules("application", "dice_controller")
     | modules("ui", "dice_widget"),
+    "economy": modules("ui", "currency_editor treasure_widgets")
+    | modules("application", "economy_service economy_codec loot_controller shop_controller")
+    | modules("domain", "treasure"),
 }
 SHARED = (
     {"lodandsy", "lodandsy.domain", "lodandsy.application", "lodandsy.ui"}
-    | modules("domain", "entity entity_reference module_values")
+    | modules("domain", "entity entity_reference module_values currency project_settings "
+              "item_categories inventory_transfer")
     | modules(
         "application",
         "entity_session entity_queries field_edits edit_conflict background_tasks clipboard "
@@ -65,7 +69,7 @@ SHARED = (
         "ui",
         "entity_picker semantic_edits conflict_bar icons project_tree_model card_tree_view "
         "navigator_actions window_manager workspace_host workspace_placement fixed_panel_host "
-        "left_rail right_rail theme project_chooser",
+        "left_rail right_rail theme project_chooser project_name_dialog",
     )
 )
 # Built-in composition, project persistence/codecs and fixed shell adapters deliberately wire
@@ -75,10 +79,11 @@ INTEGRATION = (
     | modules("domain", "document_payloads")
     | modules(
         "application",
-        "app_controller project_actions project_controller save_coordinator sqlite_project_store "
+        "app_controller project_actions project_controller project_catalogue "
+        "save_coordinator sqlite_project_store "
         "workspace_state",
     )
-    | modules("ui", "app_shell inspector_panel tree_panel")
+    | modules("ui", "app_shell inspector_panel tree_panel settings_dialog")
 )
 INTEGRATION_EDGES = {
     ("lodandsy.domain.card_collection", "lodandsy.domain.document_payloads"),

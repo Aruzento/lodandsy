@@ -1,7 +1,7 @@
 from PySide6.QtCore import QByteArray, QMimeData, QModelIndex, Qt, Signal
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 
-from lodandsy.ui.icons import icon
+from lodandsy.ui.icons import icon, tree_card_icon
 
 NODE_KIND_ROLE = int(Qt.ItemDataRole.UserRole) + 1
 NODE_ID_ROLE = int(Qt.ItemDataRole.UserRole) + 2
@@ -18,7 +18,7 @@ class ProjectTreeModel(QStandardItemModel):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._nodes, self._items = {}, {}
-        self._icons = {kind: icon(kind) for kind in ("card", "map", "table")}
+        self._icons = {kind: icon(kind) for kind in ("map", "table")}
 
     def index_for_node(self, key):
         item = self._nodes.get(key)
@@ -30,8 +30,14 @@ class ProjectTreeModel(QStandardItemModel):
     def set_title(self, key, title):
         self._items[key].setText(title)
 
-    def set_entities(self, entities):
+    def _decoration(self, entity, card_types):
+        if entity.kind == "card":
+            return tree_card_icon(card_types.get(entity.id))
+        return self._icons[entity.kind]
+
+    def set_entities(self, entities, *, card_types=None):
         entities = tuple(entities)
+        card_types = card_types or {}
         ids = {entity.id for entity in entities}
         if len(ids) != len(entities):
             raise ValueError("Entity ids must be unique")
@@ -46,13 +52,17 @@ class ProjectTreeModel(QStandardItemModel):
             for e in entities
         ):
             for entity in entities:
-                if self._items[entity.id].text() != entity.title:
-                    self._items[entity.id].setText(entity.title)
+                item = self._items[entity.id]
+                if item.text() != entity.title:
+                    item.setText(entity.title)
+                decoration = self._decoration(entity, card_types)
+                if item.icon().cacheKey() != decoration.cacheKey():
+                    item.setIcon(decoration)
             return
         self.clear()
         self._nodes, self._items = {}, {}
         for entity in entities:
-            item = QStandardItem(self._icons[entity.kind], entity.title)
+            item = QStandardItem(self._decoration(entity, card_types), entity.title)
             item.setEditable(False)
             item.setData(entity.kind, NODE_KIND_ROLE)
             item.setData(entity.id, NODE_ID_ROLE)

@@ -1,5 +1,6 @@
 import shutil
 import zipfile
+from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import uuid4
@@ -7,13 +8,14 @@ from uuid import uuid4
 from PySide6.QtCore import QObject
 from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import (
+    QDialog,
     QFileDialog,
-    QInputDialog,
     QLabel,
     QMessageBox,
     QPushButton,
 )
 
+from lodandsy.application.project_catalogue import ProjectCatalogue
 from lodandsy.application.project_history import ProjectHistory
 from lodandsy.application.save_coordinator import SaveCoordinator, SaveState
 from lodandsy.application.sqlite_project_store import (
@@ -30,16 +32,19 @@ from lodandsy.application.workspace_state import (
     save_workspace_file,
 )
 from lodandsy.domain.card_collection import CardCollection
+from lodandsy.ui.icons import icon
+from lodandsy.ui.theme import apply_role
 
 if TYPE_CHECKING:
     from lodandsy.application.app_controller import AppController
 
 
 class ProjectController(QObject):
-    def __init__(self, controller: "AppController", history=None):
+    def __init__(self, controller: "AppController", history=None, catalogue=None):
         super().__init__(controller.window)
         self.controller = controller
         self.history = history if history is not None else ProjectHistory()
+        self.catalogue = catalogue if catalogue is not None else ProjectCatalogue()
         controller.attach_project(self)
         self.resources = controller.resources
         self.window = controller.window
@@ -52,6 +57,7 @@ class ProjectController(QObject):
         controller.cards_service.field_edits.pending_changed.connect(self._update_status)
         controller.card_views.pending_changed.connect(self._update_status)
         controller.tables_service.pending_changed.connect(self._update_status)
+        controller.tables.wallet_edits.pending_changed.connect(self._update_status)
         controller.actions.title_edits.pending_changed.connect(self._update_status)
         controller.tables_service.draft_changed.connect(self._update_status)
         controller.maps.busy_changed.connect(self._update_status)
@@ -89,10 +95,16 @@ class ProjectController(QObject):
             self.save_action,
         ]:
             menu.addAction(action)
-        self.window.right_rail.settings_menu.addActions([self.backup_action, self.restore_action])
         tools = self.window.menuBar().addMenu("Инструменты")
         dice = tools.addAction("Кубики")
+        dice.setIcon(icon("dice"))
         dice.triggered.connect(self.controller.dice.open)
+        self.loot_action = tools.addAction("Генератор лута")
+        self.loot_action.setIcon(icon("loot"))
+        self.loot_action.triggered.connect(self.controller.loot.open)
+        self.shop_action = tools.addAction("Магазин")
+        self.shop_action.setIcon(icon("shop"))
+        self.shop_action.triggered.connect(self.controller.shop.open)
 
     @property
     def store(self):
@@ -123,6 +135,8 @@ class ProjectController(QObject):
             tuple(self.controller.tables_service.tables.values()),
             self.controller.core.entities.summaries(),
             self.controller.cards_service.rules,
+            self.controller.economy.currency,
+            self.controller.economy.settings.custom_categories,
         )
 
     @property
@@ -130,6 +144,7 @@ class ProjectController(QObject):
         return (
             len(self.controller.cards_service.field_drafts)
             + self.controller.tables_service.draft_count
+            + len(self.controller.tables.wallet_edits.drafts)
             + len(self.controller.actions.title_edits.drafts)
         )
 
@@ -140,10 +155,11 @@ class ProjectController(QObject):
         for key in self.controller.tables_service.draft_table_ids:
             self.controller.tables.discard_drafts(key)
         self.controller.tables_service.discard_orphans()
+        self.controller.tables.wallet_edits.discard()
         self.controller.actions.title_edits.discard()
         self._update_status()
 
-    def _confirm_drafts(self):
+    def _confirm_drafts(self, *, defer_discard=False):
         if not self.draft_count:
             return True
         dialog = QMessageBox(self.window)
@@ -188,6 +204,8 @@ class ProjectController(QObject):
             elif self.controller.tables_service.draft_table_ids:
                 key = self.controller.tables_service.draft_table_ids[0]
                 self.controller.tables.open_table(key)
+            elif self.controller.tables.wallet_edits.drafts:
+                self.controller.tables.focus_wallet_draft()
             elif self.controller.actions.title_edits.drafts:
                 key, field = next(iter(self.controller.actions.title_edits.drafts))
                 self.controller.core.select(key)
@@ -199,11 +217,16 @@ class ProjectController(QObject):
             return False
         if self.saver.dirty and not self.save_current():
             return False
-        self.discard_drafts()
+        if not defer_discard:
+            self.discard_drafts()
         return True
 
     def _update_status(self, *_args):
+        self.window.right_rail.settings_button.setEnabled(self.store is not None)
         self.controller.rules_action.setEnabled(self.store is not None and not self.busy)
+        self.controller.economy_action.setEnabled(self.store is not None and not self.busy)
+        self.loot_action.setEnabled(self.store is not None)
+        self.shop_action.setEnabled(self.store is not None)
         labels = {
             SaveState.CLEAN: "Сохранено",
             SaveState.DIRTY: "Есть несохранённые изменения",
@@ -220,6 +243,7 @@ class ProjectController(QObject):
             text += f" · Ошибочный ввод не сохранён: {self.draft_count}"
         pending = (
             self.controller.tables_service.pending_count
+            + self.controller.tables.wallet_edits.pending_count
             + self.controller.cards_service.field_edits.pending_count
             + self.controller.card_views.pending_count
             + self.controller.actions.title_edits.pending_count
@@ -227,12 +251,10 @@ class ProjectController(QObject):
         if pending:
             text += f" · Незавершённый ввод: {pending}"
         self.status.setText(text)
-        color = (
-            "#f19a9a"
-            if self.saver.state == SaveState.ERROR
-            else ("#c9c7bf" if self.saver.dirty or self.draft_count else "#a6a6a3")
+        role = "error" if self.saver.state == SaveState.ERROR else (
+            "warning" if self.saver.dirty or self.draft_count else "empty"
         )
-        self.status.setStyleSheet(f"color: {color};")
+        apply_role(self.status, role)
         self.status.setToolTip(text)
         self.retry.setVisible(self.saver.state == SaveState.ERROR)
         for action in [
@@ -248,79 +270,77 @@ class ProjectController(QObject):
         self.restore_action.setEnabled(self.backup_action.isEnabled())
         self.window.setWindowTitle(f"LODANDSY — {name}" + (" *" if self.saver.dirty else ""))
 
-    def create_project(self, folder: Path, *, preserve_current=True, discard=False):
+    def _wait_for_edits(self):
         self.controller.flush_edits()
         self.controller.media.wait_import()
         self.controller.maps.wait_import()
         self.saver.wait_current()
+
+    def create_project(self, target: str | Path, *, preserve_current=True, discard=False):
+        self._wait_for_edits()
         if (self.draft_count or (self.saver.dirty and self.store is not None)) and not discard:
             raise ProjectError("Save the current project before creating another")
-        store = SQLiteProjectStore.create(folder)
-        old = self.store
-        if old is not None:
-            try:
-                self._save_ui_state()
-            except Exception:
-                store.close()
-                raise
-        self.store = store
-        self._ui_restore_failed = False
-        self.controller.set_project_root(store.root)
-        if not preserve_current:
-            self.controller.replace_cards(CardCollection())
-            self.assets.clear()
-        self.saver.reset(0, store.save)
-        if (
+        if not self.controller.may_close_settings():
+            return False
+        self._save_ui_state()
+        initial = self._snapshot(1) if preserve_current and (
             self.controller.cards.all()
             or self.assets
             or self.controller.maps_service.maps
             or self.controller.tables_service.tables
-        ):
-            self.saver.mark_dirty()
-            if not self.saver.save():
-                # Keep the selected project and dirty in-memory data available for retry.
-                if old is not None:
-                    old.close()
-                return False
-        if old is not None:
-            old.close()
-        self.history.remember(store.root)
-        self._update_status()
+        ) else None
+        folder = self.catalogue.reserve(target) if isinstance(target, str) else nullcontext(target)
+        with folder as destination:
+            store = SQLiteProjectStore.create_new(destination, initial)
+        if preserve_current:
+            self.controller.close_settings()
+            self.controller.reset_catalogue_tools()
+            self._select_store(store, initial.revision if initial is not None else 0)
+        else:
+            self._activate_store(store, save_previous_layout=False)
         return True
 
-    def open_project(self, folder: Path, *, discard=False):
-        self.controller.flush_edits()
-        self.controller.media.wait_import()
-        self.controller.maps.wait_import()
-        self.saver.wait_current()
-        if self.store is not None and self.store.root == Path(folder).resolve():
-            return
+    def _check_switch(self, discard):
+        self._wait_for_edits()
         if (self.saver.dirty or self.draft_count) and not discard:
             raise ProjectError("Save valid changes, resolve drafts or explicitly discard first")
-        store = SQLiteProjectStore.open(folder)
+        if not self.controller.may_close_settings():
+            raise ProjectError("Смена проекта отменена. Черновики настроек сохранены в окне.")
+
+    def open_project(self, folder: Path, *, discard=False, expected=None):
+        if self.store is not None and self.store.root == Path(folder).resolve():
+            return
+        self._check_switch(discard)
+        store, verified = SQLiteProjectStore.open_with_snapshot(folder, expected=expected)
+        self._activate_store(store, verified=verified)
+
+    def restore_project(self, archive: Path, name: str, *, discard=False):
+        self._check_switch(discard)
+        self._save_ui_state()
+        with self.catalogue.reserve(name) as destination:
+            try:
+                store, verified = SQLiteProjectStore.restore_with_snapshot(archive, destination)
+            except zipfile.BadZipFile as error:
+                raise ProjectError(f"Повреждена резервная копия: {error}") from error
+        self._activate_store(store, verified=verified, save_previous_layout=False)
+        return True
+
+    def _activate_store(self, store, *, verified=None, save_previous_layout=True):
         try:
-            snapshot = store.load()
-            cards = CardCollection(entities=snapshot.entity_collection())
+            if verified is None:
+                snapshot = store.load()
+                entities = snapshot.entity_collection()
+            else:
+                snapshot, entities = verified.snapshot, verified.entities
+            cards = CardCollection(entities=entities)
+            if save_previous_layout:
+                self._save_ui_state()
         except Exception:
             store.close()
             raise
-        previous = self.store
-        if previous is not None:
-            try:
-                self._save_ui_state()
-            except Exception:
-                store.close()
-                raise
         self.controller.replace_cards(cards)
-        self.store = store
-        self.controller.set_project_root(store.root)
         self.assets = {asset.id: asset for asset in snapshot.assets}
-        self.saver.reset(snapshot.revision, store.save)
-        self._ui_restore_failed = False
-        if previous is not None:
-            previous.close()
-        self.history.remember(store.root)
-        self._update_status()
+        self._select_store(store, snapshot.revision)
         try:
             state = load_workspace_file(store.root)
             if state is not None:
@@ -329,26 +349,29 @@ class ProjectController(QObject):
             self._ui_restore_failed = True
             self._show_error(error)
 
+    def _select_store(self, store, revision):
+        previous = self.store
+        self.store = store
+        self.controller.set_project_root(store.root)
+        self.saver.reset(revision, store.save)
+        self._ui_restore_failed = False
+        if previous is not None:
+            previous.close()
+        self.history.remember(store.root)
+        self._update_status()
+
     def save_current(self) -> bool:
         self.controller.flush_edits()
         self.controller.media.wait_import()
         if self.store is None:
-            folder = QFileDialog.getExistingDirectory(self.window, "Пустая папка нового проекта")
-            if not folder:
-                return False
-            try:
-                return self.create_project(Path(folder))
-            except (OSError, ValueError) as error:
-                self._show_error(error)
-                return False
+            return self._name_project(
+                self.window, lambda name: self.create_project(name, preserve_current=True)
+            )
         return self.saver.save()
 
-    def _confirm_changes(self) -> bool:
-        self.controller.flush_edits()
-        self.controller.media.wait_import()
-        self.controller.maps.wait_import()
-        self.saver.wait_current()
-        if not self._confirm_drafts():
+    def _confirm_changes(self, *, defer_discard=False) -> bool:
+        self._wait_for_edits()
+        if not self._confirm_drafts(defer_discard=defer_discard):
             return False
         if not self.saver.dirty:
             return True
@@ -366,7 +389,7 @@ class ProjectController(QObject):
         return choice == QMessageBox.StandardButton.Discard
 
     def can_close(self):
-        if not self.controller.close_rules():
+        if not self.controller.may_close_settings():
             return False
         if not self._confirm_changes():
             return False
@@ -397,60 +420,63 @@ class ProjectController(QObject):
 
     def _request_new(self, _checked=False, *, parent=None):
         host = parent if parent is not None else self.window
-        folder = QFileDialog.getExistingDirectory(
-            host, "Пустая папка нового проекта", self.history.last_directory
+        return self._name_project(
+            host,
+            lambda name: self._confirm_changes(defer_discard=True)
+            and self.create_project(name, preserve_current=False, discard=True),
         )
-        if not folder or not self._confirm_changes():
-            return False
-        try:
-            return self.create_project(Path(folder), preserve_current=False, discard=True)
-        except (OSError, ValueError) as error:
-            if parent is None:
-                self._show_error(error)
-            else:
-                parent.error.setText("Не удалось создать проект.\n" + str(error))
-            return False
+
+    def _name_project(self, host, submit, **options):
+        from lodandsy.ui.project_name_dialog import ProjectNameDialog
+
+        dialog = ProjectNameDialog(self.catalogue.destination, submit, host, **options)
+        return dialog.exec() == QDialog.DialogCode.Accepted
 
     def choose_project(self, *, welcome=False):
         from lodandsy.ui.project_chooser import ProjectChooser
 
+        try:
+            root = self.catalogue.root
+            entries = self.catalogue.entries(self.history.entries)
+            catalogue_error = ""
+        except (OSError, ValueError) as error:
+            root, entries = "", ()
+            catalogue_error = f"Не удалось прочитать каталог проектов.\n{error}"
         dialog = ProjectChooser(
-            self.history.entries, None if welcome else self.window, welcome=welcome
+            entries, None if welcome else self.window, welcome=welcome, root=root,
         )
+        if catalogue_error:
+            dialog.error.setText(catalogue_error)
 
-        def selected(folder, replaces=None):
-            if not self._confirm_changes():
-                return
+        def selected(folder, expected=None):
             try:
-                self.open_project(Path(folder), discard=True)
+                same = self.store is not None and self.store.root == Path(folder).resolve()
+                if not same and not self._confirm_changes(defer_discard=True):
+                    return
+                self.open_project(Path(folder), discard=True, expected=expected)
             except (OSError, ValueError) as error:
                 dialog.error.setText("Не удалось открыть проект.\n" + str(error))
                 return
-            if replaces:
-                self.history.remember(folder, replaces=replaces)
             self.window.show()
             dialog.accept()
 
-        def browse(replaces=None):
+        def browse():
             folder = QFileDialog.getExistingDirectory(
                 dialog, "Открыть папку проекта", self.history.last_directory
             )
             if folder:
-                selected(folder, replaces)
+                selected(folder)
 
         def create():
             if self._request_new(parent=dialog):
                 self.window.show()
                 dialog.accept()
 
-        def remove(folder):
-            self.history.remove(folder)
-            dialog.set_entries(self.history.entries)
-
-        dialog.open_requested.connect(selected)
+        expected_projects = {entry["path"]: entry.get("metadata") for entry in entries}
+        dialog.open_requested.connect(
+            lambda folder: selected(folder, expected_projects.get(folder))
+        )
         dialog.browse_requested.connect(browse)
-        dialog.locate_requested.connect(browse)
-        dialog.remove_requested.connect(remove)
         dialog.create_requested.connect(create)
         return dialog.exec()
 
@@ -460,7 +486,8 @@ class ProjectController(QObject):
     def _request_backup(self):
         if not self.save_current() or self.store is None:
             return
-        dialog = QFileDialog(self.window, "Резервная копия")
+        parent = self.controller.settings_window or self.window
+        dialog = QFileDialog(parent, "Резервная копия")
         dialog.setAcceptMode(QFileDialog.AcceptMode.AcceptSave)
         dialog.setNameFilter("LODANDSY backup (*.lodbackup)")
         dialog.setDefaultSuffix("lodbackup")
@@ -473,24 +500,16 @@ class ProjectController(QObject):
                 self._show_error(error)
 
     def _request_restore(self):
+        host = self.controller.settings_window or self.window
         filename, _ = QFileDialog.getOpenFileName(
-            self.window, "Восстановить копию", "", "LODANDSY backup (*.lodbackup)"
+            host, "Восстановить копию", "", "LODANDSY backup (*.lodbackup)"
         )
-        if not filename or not self._confirm_changes():
-            return
-        parent = QFileDialog.getExistingDirectory(self.window, "Где создать восстановленный проект")
-        if not parent:
-            return
-        name, accepted = QInputDialog.getText(self.window, "Восстановление", "Имя новой папки:")
-        if not accepted or not name.strip():
-            return
-        if any(char in name for char in '<>:"/\\|?*') or name in {".", ".."}:
-            self._show_error("Недопустимое имя папки")
-            return
-        try:
-            destination = Path(parent) / name.strip()
-            restored = SQLiteProjectStore.restore(Path(filename), destination)
-            restored.close()
-            self.open_project(destination, discard=True)
-        except (OSError, ValueError, zipfile.BadZipFile) as error:
-            self._show_error(error)
+        if filename:
+            archive = Path(filename)
+            self._name_project(
+                self.window,
+                lambda name: self._confirm_changes(defer_discard=True)
+                and self.restore_project(archive, name, discard=True),
+                restoring=True,
+                suggestion=archive.stem,
+            )

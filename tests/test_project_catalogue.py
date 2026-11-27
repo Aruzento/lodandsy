@@ -1,16 +1,32 @@
+import errno
+import shutil
+import subprocess
+import sys
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from pathlib import Path
+from threading import Barrier
 
 import pytest
-from PySide6.QtCore import QSettings
+from PySide6.QtCore import QSettings, QStandardPaths, Qt, QTimer
+from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
+from lodandsy.application.project_catalogue import ProjectCatalogue
 from lodandsy.application.project_history import ProjectHistory
-from lodandsy.application.sqlite_project_store import ProjectError, SQLiteProjectStore
+from lodandsy.application.sqlite_project_store import (
+    SCHEMA_VERSION,
+    ProjectError,
+    ProjectLock,
+    SQLiteProjectStore,
+    connect_database,
+)
 from lodandsy.ui.project_chooser import ProjectChooser
+from lodandsy.ui.project_name_dialog import ProjectNameDialog
 
 pytest_plugins = ["tests.project_fixture"]
 
 
-def test_history_mru_unicode_dedup_remove_only_record(tmp_path):
+def test_history_mru_unicode_dedup_and_opening_timestamp(tmp_path):
     settings = QSettings(str(tmp_path / "user.ini"), QSettings.Format.IniFormat)
     history = ProjectHistory(settings)
     a, b = tmp_path / "Мир А", tmp_path / "Мир Б"
@@ -21,10 +37,7 @@ def test_history_mru_unicode_dedup_remove_only_record(tmp_path):
     history.remember(a / ".." / a.name)
     assert [e["path"] for e in history.entries] == [str(a), str(b)]
     assert ProjectHistory(settings).entries == history.entries
-    history.remove(a)
-    assert (a / "personal.txt").read_text() == "keep"
-    history.remember(tmp_path / "Moved", replaces=b)
-    assert len(history.entries) == 1
+    assert all(entry["opened_at"] for entry in history.entries)
     assert history.last_directory == str(tmp_path)
 
 
@@ -58,18 +71,15 @@ def test_only_successful_open_create_are_recorded_and_settings_are_on_rail(proje
     assert project.history.entries[0]["title"] == "Locked"
     menu = controller.window.menuBar().actions()[0].menu()
     assert project.backup_action not in menu.actions()
-    assert project.backup_action in controller.window.right_rail.settings_menu.actions()
+    assert controller.window.right_rail.settings_button.menu() is None
     assert not hasattr(project, "mow_importer")
 
 
 def test_welcome_error_cancel_then_success_through_controller(project, tmp_path):
-    from PySide6.QtCore import QTimer
-    from PySide6.QtWidgets import QApplication
-
     app, project = project
-    store = SQLiteProjectStore.create(tmp_path / "Известный мир")
-    store.close()
-    project.history.remember(tmp_path / "Известный мир")
+    project.catalogue = ProjectCatalogue(lambda: tmp_path / "Documents")
+    with project.catalogue.reserve("Известный мир") as destination:
+        SQLiteProjectStore.create_new(destination).close()
     before = project.history.entries
 
     def cancel():
@@ -92,5 +102,363 @@ def test_welcome_error_cancel_then_success_through_controller(project, tmp_path)
 
     QTimer.singleShot(0, accept)
     assert project.choose_project(welcome=True)
-    assert project.store.root == (tmp_path / "Известный мир").resolve()
+    assert project.store.root == project.catalogue.root / "Известный мир"
     assert app.window.isVisible()
+
+
+def test_name_dialog_uses_redirected_documents_for_new_and_restore(
+    project, qtbot, tmp_path, monkeypatch,
+):
+    app, project = project
+    documents = tmp_path / "Перенаправленные документы"
+
+    def documents_location(location):
+        assert location == QStandardPaths.StandardLocation.DocumentsLocation
+        return str(documents)
+
+    monkeypatch.setattr(QStandardPaths, "writableLocation", documents_location)
+    monkeypatch.setattr(
+        QFileDialog, "getExistingDirectory", lambda *a: pytest.fail("Папку выбирать не нужно")
+    )
+    assert project.catalogue.entries(()) == ()
+    assert not documents.exists()
+
+    def enter_name():
+        dialog = QApplication.activeModalWidget()
+        assert isinstance(dialog, ProjectNameDialog)
+        dialog.name.setText("AUX.txt")
+        assert not dialog.confirm.isEnabled()
+        dialog.name.setText("Этар и Окрестности ✨")
+        assert str(project.catalogue.root / dialog.name.text()) == dialog.path.text()
+        qtbot.keyClick(dialog.name, Qt.Key.Key_Return)
+
+    QTimer.singleShot(0, enter_name)
+    assert project._request_new()
+    path = documents / "LODANDSY" / "project" / "Этар и Окрестности ✨"
+    assert project.store.root == path.resolve()
+    card = app.create_card("Заметка")
+    assert project.save_current()
+    backup = tmp_path / "Этар — копия.lodbackup"
+    project.store.backup(backup)
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a: (str(backup), ""))
+
+    def restore_name():
+        dialog = QApplication.activeModalWidget()
+        assert isinstance(dialog, ProjectNameDialog)
+        assert dialog.name.text() == backup.stem
+        dialog.name.setText(path.name.upper())
+        dialog.confirm.click()
+        assert "уже существует" in dialog.error.text()
+        dialog.name.setText("Восстановленный мир")
+        dialog.confirm.click()
+
+    QTimer.singleShot(0, restore_name)
+    project._request_restore()
+    assert project.store.root == path.parent / "Восстановленный мир"
+    assert project.store.load().cards[0].id == card.id
+    assert {entry["title"] for entry in project.catalogue.entries(())} == {
+        path.name, "Восстановленный мир",
+    }
+
+
+@pytest.mark.parametrize(
+    "name", ["", "  ", ".", "..", "../Мир", "a\\b", "C:World", "name.", "name ",
+             "AUX.txt", "CON", "COM¹", "LPT9", "🚩" * 250, "a\x00b", ".lodandsy-restore-secret"],
+)
+def test_managed_project_name_validation(tmp_path, name):
+    catalogue = ProjectCatalogue(lambda: tmp_path)
+    with pytest.raises(ProjectError):
+        catalogue.destination(name)
+    assert not catalogue.root.exists()
+
+
+@pytest.mark.parametrize("same_drive", [True, False])
+@pytest.mark.parametrize("suffix", ["World", "\\World", "/World", ""])
+def test_disk_designation_rejected_before_constructing_path(tmp_path, same_drive, suffix):
+    drive = tmp_path.drive or "C:"
+    other = "D:" if drive.casefold() == "c:" else "C:"
+    calls = []
+    catalogue = ProjectCatalogue(lambda: calls.append(True) or tmp_path)
+    with pytest.raises(ProjectError, match="допустимое название"):
+        catalogue.destination((drive if same_drive else other) + suffix)
+    assert calls == []
+
+
+@pytest.mark.parametrize("character", '<>:"/\\|?*' + "\x1f")
+def test_windows_path_characters_rejected_before_accessing_documents(character):
+    def unexpected_documents():
+        pytest.fail("Invalid names must be rejected before building Paths")
+
+    with pytest.raises(ProjectError, match="допустимое название"):
+        ProjectCatalogue(unexpected_documents).destination(f"world{character}name")
+
+
+def test_catalogue_lists_statuses_without_decoding_or_writing(tmp_path, qtbot, monkeypatch):
+    catalogue = ProjectCatalogue(lambda: tmp_path)
+    root = catalogue.root
+    world = root / "Валидный мир"
+    SQLiteProjectStore.create_new(world).close()
+    future = SQLiteProjectStore.create_new(root / "Будущий мир")
+    future.close()
+    with closing(connect_database(future.path)) as conn, conn:
+        conn.execute(f"PRAGMA user_version={SCHEMA_VERSION + 1}")
+    (future.root / ".lodandsy.lock").unlink()
+    invalid = root / "Повреждённый"
+    invalid.mkdir()
+    (invalid / future.path.name).write_bytes(b"broken")
+    malformed = SQLiteProjectStore.create_new(root / "Ошибочный UUID")
+    malformed.close()
+    with closing(connect_database(malformed.path)) as conn, conn:
+        conn.execute("UPDATE metadata SET project_id = 'not-a-uuid'")
+    (root / "Обычная папка").mkdir()
+    before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    monkeypatch.setattr(
+        SQLiteProjectStore, "_read_snapshot",
+        lambda *_: pytest.fail("Catalogue must not decode project payloads"),
+    )
+    records = catalogue.entries(())
+    entries = {entry["title"]: entry for entry in records}
+    assert set(entries) == {world.name, future.root.name, invalid.name, malformed.root.name}
+    assert not entries[world.name]["error"]
+    assert entries[world.name]["status"] == "pending"
+    assert entries[world.name]["metadata"].project_id
+    assert entries[world.name]["schema_version"] == SCHEMA_VERSION
+    assert entries[future.root.name]["status"] == "incompatible"
+    assert str(SCHEMA_VERSION + 1) in entries[future.root.name]["error"]
+    assert entries[invalid.name]["error"]
+    assert entries[invalid.name]["status"] == entries[malformed.root.name]["status"] == (
+        "metadata_error"
+    )
+    dialog = ProjectChooser(records)
+    qtbot.addWidget(dialog)
+    assert "Целостность проверяется при открытии" in dialog.projects.currentItem().text()
+    for index, entry in enumerate(records):
+        dialog.projects.setCurrentRow(index)
+        assert dialog.open_button.isEnabled() == (entry["status"] == "pending")
+    with pytest.raises(ProjectError, match="Unsupported project schema"):
+        SQLiteProjectStore.open(future.root)
+    assert before == {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+
+
+def test_activation_uses_the_single_verified_read_under_writer_lock(
+    project, tmp_path, monkeypatch,
+):
+    app, controller = project
+    target = tmp_path / "Целевой мир"
+    assert controller.create_project(target)
+    card = app.create_card("Карточка")
+    assert controller.save_current()
+    assert controller.create_project(tmp_path / "Текущий", preserve_current=False)
+    previous = controller.store
+    expected = SQLiteProjectStore.inspect(target)
+    read_snapshot = SQLiteProjectStore._read_snapshot
+    reads = []
+
+    def read(path, expected_project_id):
+        assert path.parent == target and expected_project_id == expected.project_id
+        with pytest.raises(ProjectError, match="already open"):
+            ProjectLock(target).close()
+        loaded = read_snapshot(path, expected_project_id)
+        reads.append(loaded[0])
+        return loaded
+
+    monkeypatch.setattr(SQLiteProjectStore, "_read_snapshot", staticmethod(read))
+    controller.open_project(target, expected=expected)
+    verified, = reads
+    assert controller.store is not previous and previous._closed
+    assert app.core.entities is verified.entities
+    assert app.cards.get(card.id).title == "Карточка"
+    assert controller.saver.saved_revision == verified.snapshot.revision
+
+
+def test_catalogue_passes_expected_identity_when_file_is_replaced(
+    project, tmp_path, qtbot,
+):
+    app, controller = project
+    controller.catalogue = ProjectCatalogue(lambda: tmp_path / "Documents")
+    assert controller.create_project("Текущий")
+    current = controller.store
+    card = app.create_card("Текущее содержимое")
+    assert controller.save_current()
+    candidate = controller.catalogue.root / "Заменяемый"
+    with closing(SQLiteProjectStore.create_new(candidate)) as target:
+        database = target.path
+    replacement = tmp_path / "identical.sqlite3"
+    shutil.copyfile(database, replacement)  # retains UUID and SQLite contents
+
+    def replace_after_listing():
+        dialog = QApplication.activeModalWidget()
+        try:
+            entry = SQLiteProjectStore.inspect(candidate)
+            replacement.replace(database)
+            assert SQLiteProjectStore.inspect(candidate).project_id == entry.project_id
+            dialog.open_requested.emit(str(candidate))
+            assert "заменён" in dialog.error.text()
+        finally:
+            dialog.reject()
+
+    QTimer.singleShot(0, replace_after_listing)
+    assert not controller.choose_project()
+    assert controller.store is current and app.cards.get(card.id).title == "Текущее содержимое"
+
+
+def test_replacing_database_during_verified_read_releases_candidate_lease(
+    tmp_path, monkeypatch,
+):
+    target = tmp_path / "Мир"
+    with closing(SQLiteProjectStore.create_new(target)) as store:
+        database = store.path
+    replacement = tmp_path / "copy.sqlite3"
+    shutil.copyfile(database, replacement)
+    read_snapshot = SQLiteProjectStore._read_snapshot
+
+    def read_then_replace(path, expected_project_id):
+        result = read_snapshot(path, expected_project_id)
+        replacement.replace(path)
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(SQLiteProjectStore, "_read_snapshot", staticmethod(read_then_replace))
+        with pytest.raises(ProjectError, match="заменён во время проверки"):
+            SQLiteProjectStore.open(target)
+    with closing(ProjectLock(target)):
+        assert database.is_file()
+
+
+def test_corrupt_payload_stays_pending_and_failed_open_preserves_draft(project, tmp_path):
+    app, controller = project
+    controller.catalogue = ProjectCatalogue(lambda: tmp_path / "Documents")
+    assert controller.create_project("Повреждённый")
+    app.create_card("Недоступная карточка")
+    assert controller.save_current()
+    candidate = controller.store.path
+    assert controller.create_project("Текущий", preserve_current=False)
+    current = controller.store
+    card = app.create_card("Сохранённое имя")
+    assert controller.save_current()
+    editor = app.open_card_editor(card.id).widget()
+    editor.title_edit.setText("")
+    editor.title_edit.finish()
+    with closing(connect_database(candidate)) as conn, conn:
+        conn.execute("UPDATE card_content SET payload_version=999")
+    before = candidate.read_bytes()
+    entry = next(e for e in controller.catalogue.entries(()) if e["title"] == "Повреждённый")
+    assert entry["status"] == "pending"
+    with pytest.raises(ProjectError):
+        controller.open_project(candidate.parent, discard=True, expected=entry["metadata"])
+    assert controller.store is current
+    assert controller.draft_count == 1 and editor.title_edit.text() == ""
+    assert candidate.read_bytes() == before
+
+
+def test_concurrent_managed_create_has_one_winner_even_with_case_variants(tmp_path):
+    catalogue = ProjectCatalogue(lambda: tmp_path)
+    barrier = Barrier(2)
+
+    def create(name):
+        barrier.wait(timeout=5)
+        try:
+            with catalogue.reserve(name) as path:
+                SQLiteProjectStore.create_new(path).close()
+        except (OSError, ProjectError):
+            return False
+        return True
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sorted(pool.map(create, ["Этар", "ЭТАР"])) == [False, True]
+    assert sum(not e["error"] for e in catalogue.entries(())) == 1
+
+
+def test_separate_process_cannot_open_world_until_writer_releases_lock(tmp_path):
+    script = """
+from pathlib import Path
+from sys import argv
+from lodandsy.application.sqlite_project_store import ProjectError, SQLiteProjectStore
+try:
+    store = SQLiteProjectStore.open(Path(argv[1]))
+except ProjectError as error:
+    assert "already open" in str(error)
+    raise SystemExit(7)
+store.close()
+"""
+    folder = tmp_path / "Локальная игра"
+    command = [sys.executable, "-c", script, str(folder)]
+    with closing(SQLiteProjectStore.create_new(folder)):
+        locked = subprocess.run(command, capture_output=True, check=False, timeout=15)
+        assert locked.returncode == 7, locked.stderr
+    assert subprocess.run(command, check=False, timeout=15).returncode == 0
+
+
+def test_failed_create_and_restore_keep_current_world_and_destination_clean(
+    project, tmp_path, monkeypatch,
+):
+    app, project = project
+    project.catalogue = ProjectCatalogue(lambda: tmp_path / "Documents")
+    assert project.create_project("Текущий")
+    root = project.catalogue.root
+    current = project.store
+    card = app.create_card("Останется в текущем мире")
+    assert project.save_current()
+    backup = tmp_path / "backup.lodbackup"
+    current.backup(backup)
+    with monkeypatch.context() as patch:
+        create = SQLiteProjectStore.create
+
+        def disk_full(folder, **kwargs):
+            create(folder, **kwargs).close()
+            raise OSError(errno.ENOSPC, "disk full")
+
+        patch.setattr(SQLiteProjectStore, "create", disk_full)
+        with pytest.raises(OSError, match="disk full"):
+            project.create_project("Не сохранилось")
+    with monkeypatch.context() as patch:
+        patch.setattr("shutil.disk_usage", lambda _: type("Usage", (), {"free": 0})())
+        with pytest.raises(ProjectError, match="Недостаточно"):
+            project.restore_project(backup, "Не восстановилось")
+    assert project.store is current
+    assert current.load().cards[0].id == card.id
+    assert [p.name for p in root.iterdir() if p.is_dir()] == ["Текущий"]
+
+
+def test_denied_documents_write_reports_error_without_creating_world(tmp_path, monkeypatch):
+    catalogue = ProjectCatalogue(lambda: tmp_path / "Documents")
+    mkdir = Path.mkdir
+
+    def deny(path, *args, **kwargs):
+        if path == catalogue.root.parent:
+            raise PermissionError(errno.EACCES, "access denied", str(path))
+        return mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "mkdir", deny)
+    with pytest.raises(PermissionError, match="access denied"), catalogue.reserve("Этар"):
+        pytest.fail("Нельзя выделить путь при отсутствии прав записи")
+    assert not catalogue.root.exists()
+
+
+def test_failed_open_after_discard_confirmation_preserves_current_draft(project, tmp_path):
+    app, project = project
+    assert project.create_project(tmp_path / "Текущий")
+    card = app.create_card("Сохранённое имя")
+    editor = app.open_card_editor(card.id).widget()
+    editor.title_edit.setText("")
+    editor.title_edit.finish()
+    assert project.save_current()
+
+    def refuse_switch_target():
+        chooser = QApplication.activeModalWidget()
+        QTimer.singleShot(0, confirm_discard)
+        chooser.open_requested.emit(str(tmp_path / "missing"))
+        assert chooser.error.text()
+        assert editor.title_edit.text() == ""
+        chooser.reject()
+
+    def confirm_discard():
+        dialog = QApplication.activeModalWidget()
+        assert isinstance(dialog, QMessageBox)
+        next(b for b in dialog.buttons() if b.text() == "Отбросить ошибочный ввод").click()
+
+    project.catalogue = ProjectCatalogue(lambda: tmp_path / "Docs")
+    QTimer.singleShot(0, refuse_switch_target)
+    assert not project.choose_project()
+    assert project.draft_count == 1
+    assert project.store.root.name == "Текущий"

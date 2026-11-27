@@ -51,6 +51,8 @@ class CardRelations(QWidget):
             item.setText(1, summary)
             item.setToolTip(0, key)
             item.setData(0, Qt.ItemDataRole.UserRole, ("actor", key, inventory))
+            if placements is None:
+                continue
             existing = {
                 item.child(i).data(0, Qt.ItemDataRole.UserRole): item.child(i)
                 for i in range(item.childCount())

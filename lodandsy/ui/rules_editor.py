@@ -1,11 +1,10 @@
 """Native project rules workspace, typed examples and explicit preview/apply."""
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer
-from PySide6.QtGui import QDoubleValidator, QFont
+from PySide6.QtGui import QDoubleValidator
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QDialog,
     QFormLayout,
     QGridLayout,
     QHeaderView,
@@ -29,6 +28,7 @@ from lodandsy.domain.formula import evaluate
 from lodandsy.domain.rules_5e14 import DEFAULT_FORMULAS, FUNCTIONS, INPUT_NAMES, compile_rules
 from lodandsy.ui.game_labels import choice_label, error_text, field_label, value_text
 from lodandsy.ui.hit_history import HitHistoryEdit
+from lodandsy.ui.theme import apply_role
 
 
 def formula_group(key):
@@ -66,30 +66,18 @@ class PreviewModel(QAbstractTableModel):
         self.endResetModel()
 
 
-class RulesEditor(QDialog):
+class RulesEditor(QWidget):
     def __init__(self, service, parent=None):
         super().__init__(parent)
         self.service, self.generation = service, service.core.generation
         self.rules_revision = service.rules.revision
         self.drafts = dict(service.rules.overrides)
         self.preview, self._target = None, None
-        self._force_close = False
-        self._closing = False
         self.example_controls = {}
         self._example_types = {}
-        self.setWindowTitle("Игровая система и правила")
-        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        self.resize(940, 660)
-        self.setMinimumSize(640, 480)
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(16, 12, 16, 12)
-        outer.setSpacing(10)
-        title = QLabel("Правила проекта")
-        title_font = QFont(self.font())
-        title_font.setPointSize(17)
-        title_font.setWeight(QFont.Weight.DemiBold)
-        title.setFont(title_font)
-        outer.addWidget(title)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(8)
         self.warning = QLabel(
             "Предпросмотр не меняет мир. Применение может уменьшить текущие хиты "
             "до нового максимума. "
@@ -109,7 +97,7 @@ class RulesEditor(QDialog):
         self.catalog.setHeaderHidden(True)
         self.catalog.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.catalog.setAccessibleName("Каталог правил")
-        self.catalog.setMinimumWidth(170)
+        self.catalog.setMinimumWidth(112)
         left_layout.addWidget(self.catalog)
         self.splitter.addWidget(left)
         scroll = QScrollArea()
@@ -122,7 +110,7 @@ class RulesEditor(QDialog):
         detail.setAlignment(Qt.AlignmentFlag.AlignTop)
         detail.setSpacing(10)
         self.heading = QLabel()
-        self.heading.setFont(title_font)
+        apply_role(self.heading, "group")
         self.heading.setWordWrap(True)
         detail.addWidget(self.heading)
         self.description = QLabel()
@@ -199,18 +187,11 @@ class RulesEditor(QDialog):
         self.reset, self.reset_all, self.reload = (
             QPushButton(s) for s in ("Сброс выбранной", "Сброс всех", "Загрузить сохранённые")
         )
-        self.cancel_button = QPushButton("Закрыть")
         self.apply.setObjectName("primaryAction")
         self.apply.setEnabled(False)
         detail.insertWidget(detail.indexOf(self.status), self.test, 0, Qt.AlignmentFlag.AlignLeft)
-        for row, actions in enumerate(
-            (
-                (self.check, self.apply, self.cancel_button),
-                (self.reset, self.reset_all, self.reload),
-            )
-        ):
-            for col, button in enumerate(actions):
-                buttons.addWidget(button, row, col)
+        for col, button in enumerate((self.reset, self.reset_all, self.reload)):
+            buttons.addWidget(button, 0, col)
         outer.addLayout(buttons)
         self.test.clicked.connect(self.test_example)
         self.check.clicked.connect(self.check_project)
@@ -218,7 +199,6 @@ class RulesEditor(QDialog):
         self.reset.clicked.connect(self.reset_formula)
         self.reset_all.clicked.connect(self.reset_defaults)
         self.reload.clicked.connect(self.reload_saved)
-        self.cancel_button.clicked.connect(self.reject)
         self.expression.textChanged.connect(self.capture)
         self.catalog.currentItemChanged.connect(self.load_formula)
         self.search.textChanged.connect(self.filter_catalog)
@@ -237,7 +217,6 @@ class RulesEditor(QDialog):
             self.items[key] = item
         self.catalog.expandAll()
         self.catalog.setCurrentItem(general)
-        service.core.replaced.connect(self.close_for_project)
         service.core.committed.connect(self._canonical_changed)
 
     def _canonical_changed(self):
@@ -249,35 +228,6 @@ class RulesEditor(QDialog):
     @property
     def dirty(self):
         return self.drafts != dict(self.service.rules.overrides)
-
-    def close_for_project(self):
-        self._force_close = True
-        self.reject()
-
-    def _may_close(self):
-        return (
-            self._force_close
-            or not self.dirty
-            or QMessageBox.question(
-                self,
-                "Не применять изменения?",
-                "В редакторе есть неприменённые формулы. Закрыть и отбросить ввод?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
-            )
-            == QMessageBox.StandardButton.Yes
-        )
-
-    def reject(self):
-        if self._closing or self._may_close():
-            super().reject()
-
-    def closeEvent(self, event):
-        if not self._may_close():
-            event.ignore()
-            return
-        self._closing = True
-        super().closeEvent(event)
 
     def filter_catalog(self, text):
         words = text.casefold().split()

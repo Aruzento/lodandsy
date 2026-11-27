@@ -51,7 +51,7 @@ class TextChoice(QComboBox):
         self.input = SemanticLineEdit()
         self.input.setPlaceholderText("Не задано / свой вариант")
         self.setLineEdit(self.input)
-        self.setStyleSheet("QComboBox QLineEdit { padding:0; border:0; background:transparent; }")
+        self.setProperty("sheetChoice", True)
         self.setCompleter(None)
         for source, target in (
             (self.input.edit_started, self.edit_started),

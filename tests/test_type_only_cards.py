@@ -50,7 +50,7 @@ def test_type_only_fields_roundtrip_and_no_loss():
     changed = card
     assert changed.sections == card.sections and changed.value("hp_max") == 15
     version, data = encode_card(changed)
-    assert version == 7 and "template_id" not in data and '"tags"' not in data
+    assert version == 8 and "template_id" not in data and '"tags"' not in data
     assert decode_card(changed.title, changed.id, None, version, data) == changed
     with pytest.raises(ValueError):
         decode_card(card.title, card.id, None, 3, data)

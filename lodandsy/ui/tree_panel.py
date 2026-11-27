@@ -1,4 +1,11 @@
-from PySide6.QtCore import QItemSelectionModel, QModelIndex, QPoint, QSignalBlocker, Qt, Signal
+from PySide6.QtCore import (
+    QItemSelectionModel,
+    QModelIndex,
+    QSignalBlocker,
+    QSize,
+    Qt,
+    Signal,
+)
 from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -23,6 +30,7 @@ from lodandsy.ui.project_tree_model import (
     NODE_KIND_ROLE,
     ProjectTreeModel,
 )
+from lodandsy.ui.theme import ICON_SIZE
 
 
 class TreePanel(QDockWidget):
@@ -59,6 +67,7 @@ class TreePanel(QDockWidget):
 
         self.tree_view = CardTreeView(self)
         self.tree_view.setObjectName("cardTreeView")
+        self.tree_view.setIconSize(QSize(ICON_SIZE, ICON_SIZE))
         self.tree_view.setHeaderHidden(True)
 
         self.tree_view.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -80,8 +89,6 @@ class TreePanel(QDockWidget):
 
         self.tree_model.reparent_requested.connect(self.reparent_requested.emit)
         self.tree_model.move_requested.connect(self.move_requested.emit)
-
-        self.tree_view.context_menu_requested.connect(self._show_context_menu)
 
         content = QWidget(self)
         layout = QVBoxLayout(content)
@@ -105,10 +112,9 @@ class TreePanel(QDockWidget):
         layout.addWidget(self.tree_view)
         self.setWidget(content)
         self.inline_actions = NavigatorActions(self)
+        self.tree_view.context_menu_requested.connect(self.inline_actions.show_menu)
         QWidget.setTabOrder(self.create_button, self.search_button)
         QWidget.setTabOrder(self.search_button, self.tree_view)
-        QWidget.setTabOrder(self.tree_view, self.inline_actions.open_button)
-        QWidget.setTabOrder(self.inline_actions.open_button, self.inline_actions.menu_button)
         for shortcut, callback in [
             ("F2", self.request_rename),
             ("Delete", self.request_delete),
@@ -119,8 +125,8 @@ class TreePanel(QDockWidget):
             key.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             key.activated.connect(callback)
 
-    def _creation_menu(self, parent_id=None):
-        menu = QMenu(self)
+    def _creation_menu(self, parent_id=None, *, parent=None):
+        menu = QMenu(self if parent is None else parent)
         for kind, title in [
             ("card", "Карточка…"),
             ("map", "Карта из изображения…"),
@@ -146,12 +152,8 @@ class TreePanel(QDockWidget):
 
     def show_selected_menu(self):
         index = self.tree_view.currentIndex()
-        menu = self.context_menu(index)
         position = self.tree_view.visualRect(index).bottomLeft()
-        try:
-            menu.exec(self.tree_view.viewport().mapToGlobal(position))
-        finally:
-            menu.deleteLater()
+        self.inline_actions.show_menu(index, self.tree_view.viewport().mapToGlobal(position))
 
     def set_map_creation_enabled(self, enabled):
         self.map_creation_enabled = enabled
@@ -159,8 +161,10 @@ class TreePanel(QDockWidget):
             if action.objectName() == "create-map":
                 action.setEnabled(enabled)
 
-    def set_entities(self, entities):
-        self._preserve_tree_state(lambda: self.tree_model.set_entities(entities))
+    def set_entities(self, entities, *, card_types=None):
+        self._preserve_tree_state(
+            lambda: self.tree_model.set_entities(entities, card_types=card_types)
+        )
 
     def current_node_key(self):
         return self.tree_view.currentIndex().data(NODE_KEY_ROLE)
@@ -188,7 +192,6 @@ class TreePanel(QDockWidget):
         del blocker
         if previous_selection != self.current_node_key():
             self._on_current_changed(self.tree_view.currentIndex(), QModelIndex())
-        self.inline_actions.select_current()
 
     def select_node(self, key):
         blocker = QSignalBlocker(self.tree_view.selectionModel())
@@ -197,8 +200,6 @@ class TreePanel(QDockWidget):
             index, QItemSelectionModel.SelectionFlag.ClearAndSelect
         )
         del blocker
-        if hasattr(self, "inline_actions"):
-            self.inline_actions.select_current()
 
     def request_open(self, index=None):
         self._on_double_clicked(self._resolve_index(index))
@@ -329,30 +330,11 @@ class TreePanel(QDockWidget):
             card_type,
         )
 
-    def _show_context_menu(
-        self,
-        index: QModelIndex,
-        global_position: QPoint,
-    ) -> None:
-        if index.isValid():
-            self.tree_view.setCurrentIndex(index)
-
-        menu = self.context_menu(index)
-        try:
-            menu.exec(global_position)
-        finally:
-            menu.deleteLater()
-
     def context_menu(self, index=None):
         index = self._resolve_index(index)
         key = index.data(NODE_KEY_ROLE)
         entity_id = index.data(NODE_ID_ROLE)
         menu = QMenu(self)
-        if index.data(NODE_KIND_ROLE) == "map":
-            menu.addAction(
-                "Открыть редактор карты", lambda: self.map_editor_requested.emit(entity_id)
-            )
-
         def command(name, title, callback):
             action = QAction(title, menu)
             action.setObjectName(name)
@@ -375,8 +357,11 @@ class TreePanel(QDockWidget):
                 action.setEnabled(k != "map" or self.map_creation_enabled)
         else:
             command("open", "Открыть · Enter", lambda: self.request_open(current()))
-            child_menu = self._creation_menu(entity_id)
-            child_menu.setParent(menu)
+            if index.data(NODE_KIND_ROLE) == "map":
+                menu.addAction(
+                    "Открыть редактор карты", lambda: self.map_editor_requested.emit(entity_id)
+                )
+            child_menu = self._creation_menu(entity_id, parent=menu)
             child_menu.setTitle("Создать дочерний документ")
             menu.addMenu(child_menu).setObjectName("child")
             command(

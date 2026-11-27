@@ -1,16 +1,19 @@
 """Transactional cross-feature use cases; no widgets, workers or SQL."""
 
+from collections import Counter
 from dataclasses import replace
 
 from PySide6.QtGui import QUndoCommand
 
 from lodandsy.application.maps_service import map_payload
 from lodandsy.domain.actor_state import ActorRef
-from lodandsy.domain.card import Card, Portrait
+from lodandsy.domain.card import Card, CardPayload, Portrait
 from lodandsy.domain.card_schema import ACTOR_TYPES
+from lodandsy.domain.currency import CoinAmount
 from lodandsy.domain.document_payloads import inventory_inputs, validate_inventory_columns
-from lodandsy.domain.entity import EntityCollection
+from lodandsy.domain.inventory_transfer import ItemStack
 from lodandsy.domain.map_document import TokenInstance
+from lodandsy.domain.table_document import RowRecord
 
 
 class PlacementEdit(QUndoCommand):
@@ -22,7 +25,6 @@ class PlacementEdit(QUndoCommand):
         self.actor, self.default_before, self.inventory = created_actor, default_before, inventory
         self.default_after = actions.cards.get_card(token.card_id).default_actor_id
         self.generation = actions.core.generation
-        self.initial = True
 
     def candidate(self, redo):
         actions, core = self.actions, self.actions.core
@@ -87,13 +89,6 @@ class PlacementEdit(QUndoCommand):
                     records[entity.id] = self.inventory
         return records
 
-    def check(self, redo):
-        records = self.candidate(redo)
-        core = self.actions.core
-        EntityCollection(
-            records.values(), settings=core.entities.settings, validator=core.entities.validator
-        )
-
     def apply(self, redo):
         records = self.candidate(redo)
         actions, core = self.actions, self.actions.core
@@ -115,24 +110,14 @@ class PlacementEdit(QUndoCommand):
                         core.delete(inventory.id)
             actions.maps.commit_placements(self.map_id, records[self.map_id][1].tokens)
 
-    def undo(self):
-        self.apply(False)
-
-    def redo(self):
-        if self.initial:
-            self.initial = False
-        else:
-            self.apply(True)
-
-
 class ProjectActions:
     def __init__(self, core, cards, tables, maps):
         self.core, self.cards, self.tables, self.maps = core, cards, tables, maps
         self._inventory_owner_cache = (None, {})
+        core.committed.connect(self._inventory_owners_committed)
         cards.create_inventory = self.create_actor_inventory
         cards.calculation_inputs = lambda card, actor: inventory_inputs(core.entities, card, actor)
         maps.place_card = self.place_card
-        maps.validate_change = self.validate_map_candidate
         from lodandsy.application.field_edits import FieldEdits
         from lodandsy.domain.module_values import validate_title
 
@@ -146,19 +131,107 @@ class ProjectActions:
         core.replaced.connect(self.title_edits.discard)
         core.entities_deleted.connect(self.title_edits.remove_entities)
 
+    def _inventory_owners_committed(self):
+        receipt = self.core.last_commit
+        signature, owners = self._inventory_owner_cache
+        if signature != (receipt.generation, receipt.serial - 1) or receipt.changes is None:
+            return
+        for change in receipt.changes.aggregates:
+            before, after = change.before, change.after
+            if (
+                before is None or after is None
+                or (before.kind, before.parent_id, before.position)
+                != (after.kind, after.parent_id, after.position)
+            ):
+                return
+            old, new = change.before_payload, change.after_payload
+            if isinstance(old, CardPayload) and (
+                old.sections != new.sections
+                or tuple((a.id, a.inventory_id) for a in old.actors)
+                != tuple((a.id, a.inventory_id) for a in new.actors)
+            ):
+                return
+        self._inventory_owner_cache = (receipt.generation, receipt.serial), owners
+
     def inventory_owner(self, table_id):
         signature = self.core.generation, self.core.serial
-        if self._inventory_owner_cache[0] != signature:
+        if self.core.in_transaction or self._inventory_owner_cache[0] != signature:
             owners = {}
-            for card in self.cards.cards.all():
-                for section in card.sections:
+            for entity in self.core.entities.summaries():
+                if entity.kind != "card":
+                    continue
+                payload = self.core.entities.payload(entity.id)
+                for section in payload.sections:
                     if section.purpose == "inventory" and section.table_id:
-                        owners[section.table_id] = card.id
-                for actor in card.actors:
+                        owners[section.table_id] = entity.id
+                for actor in payload.actors:
                     if actor.inventory_id:
-                        owners[actor.inventory_id] = ActorRef(card.id, actor.id)
-            self._inventory_owner_cache = signature, owners
+                        owners[actor.inventory_id] = ActorRef(entity.id, actor.id)
+            if not self.core.in_transaction:
+                self._inventory_owner_cache = signature, owners
+            return owners.get(table_id)
         return self._inventory_owner_cache[1].get(table_id)
+
+    def used_denominations(self):
+        ids = set()
+        for entity in self.core.entities.summaries():
+            payload = self.core.entities.payload(entity.id)
+            if entity.kind == "card" and payload.card_type == "item":
+                if (price := dict(payload.values).get("cost")) is not None:
+                    ids.add(price.denomination_id)
+            elif entity.kind == "table":
+                ids.update(coin.denomination_id for coin in payload.wallet)
+        return frozenset(ids)
+
+    def set_wallet(self, table_id, wallet, *, expected):
+        if self.inventory_owner(table_id) is None:
+            raise ValueError("Кошелёк доступен только в инвентаре")
+        validate_inventory_columns(self.core.entities, table_id)
+        table = self.tables.get_table(table_id)
+        if table.wallet != expected:
+            raise ValueError("Кошелёк изменился в другом представлении. Откройте его заново.")
+        return self.tables.update_table(replace(table, wallet=wallet), expected=table)
+
+    def plan_inventory_paste(self, table_id, transfer, project_id):
+        if transfer.project_id != project_id:
+            raise ValueError("Буфер обмена содержит набор из другого проекта")
+        if self.inventory_owner(table_id) is None:
+            raise ValueError("Набор предметов и монет можно вставить только в инвентарь")
+        validate_inventory_columns(self.core.entities, table_id)
+        table = self.tables.get_table(table_id)
+        columns = {column.key: column.id for column in table.columns}
+        quantities = Counter()
+        for stack in transfer.items:
+            try:
+                item = self.cards.get_card(stack.item_id)
+                if item.card_type != "item":
+                    raise ValueError("Wrong Card type")
+            except ValueError:
+                raise ValueError(f"Предмет {stack.item_id} недоступен") from None
+            quantities[stack.item_id] += stack.count
+        rows = list(table.rows)
+        defaults = dict(table.new_row().cells)
+        for item_id, count in quantities.items():
+            stack = ItemStack(item_id, count)
+            cells = defaults | {
+                columns["item"]: stack.item_id,
+                columns["quantity"]: stack.count,
+                columns["active"]: False,
+            }
+            rows.append(RowRecord(len(rows), tuple(cells.items())))
+        currency = self.tables.currency
+        incoming = Counter()
+        for coin in transfer.coins:
+            currency.denomination(coin.denomination_id)
+            incoming[coin.denomination_id] += coin.count
+        added = tuple(CoinAmount(key, count) for key, count in incoming.items())
+        totals = Counter({coin.denomination_id: coin.count for coin in table.wallet})
+        totals.update(incoming)
+        wallet = tuple(
+            CoinAmount(denom.id, totals[denom.id])
+            for denom in currency.denominations if totals[denom.id]
+        ) if added else table.wallet
+        return table, replace(table, rows=tuple(rows), wallet=wallet), added
 
     def inventory_activity_caption(self, document, row, column):
         if column.key != "active" or self.inventory_owner(document.id) is None:
@@ -221,15 +294,6 @@ class ProjectActions:
         with self.core.transaction():
             return self.tables.update_table(candidate, expected=table)
 
-    def validate_map_candidate(self, document):
-        records = [
-            (e, map_payload(document) if e.id == document.id else self.core.entities.payload(e.id))
-            for e in self.core.entities.summaries()
-        ]
-        EntityCollection(
-            records, settings=self.core.entities.settings, validator=self.core.entities.validator
-        )
-
     def place_card(self, map_id, card_id, x, y, *, actor_id=None, **presentation):
         before = self.cards.get_card(card_id)
         created, inventory = None, None
@@ -270,6 +334,7 @@ class ProjectActions:
             token.y + 16 if y is None else y,
             cells_w=token.cells_w,
             cells_h=token.cells_h,
+            rotation=token.rotation,
             z=token.z,
             label_override=token.label_override,
             image_override=token.image_override,

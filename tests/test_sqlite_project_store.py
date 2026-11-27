@@ -1,11 +1,15 @@
+import errno
 import hashlib
+import shutil
 import zipfile
 from contextlib import closing
 from dataclasses import replace
+from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
 
+from lodandsy.application import sqlite_project_store
 from lodandsy.application.rich_html import sanitize_html, text_document
 from lodandsy.application.sqlite_project_store import (
     ProjectError,
@@ -135,7 +139,7 @@ def test_corrupt_database_is_diagnosed_without_replacement(tmp_path):
     root.mkdir()
     path = root / "project.sqlite3"
     path.write_bytes(b"not a SQLite database")
-    with pytest.raises(ProjectError, match="Cannot read"):
+    with pytest.raises(ProjectError, match="Не удалось прочитать версию"):
         SQLiteProjectStore.open(root)
     assert path.read_bytes() == b"not a SQLite database"
 
@@ -259,3 +263,98 @@ def test_database_error_during_backup_is_reported_and_does_not_replace_previous_
         store.backup(previous)
     assert previous.read_bytes() == b"previous backup bytes"
     assert store.path.read_bytes() == b"damaged database"
+
+
+@pytest.mark.parametrize(
+    "shared,phase,temp_free,destination_free,needed",
+    [
+        (True, "sqlite", 199, 199, 200),
+        (True, "archive", 549, 549, 550),
+        (False, "archive", 10000, 349, 350),
+        (True, "verify", 1349, 1349, 1350),
+        (False, "verify", 999, 10000, 1000),
+    ],
+)
+def test_backup_preflight_accounts_for_peak_on_each_volume(
+    tmp_path, monkeypatch, shared, phase, temp_free, destination_free, needed,
+):
+    temporary, archive_dir = tmp_path / "TEMP", tmp_path / "archive"
+    monkeypatch.setattr(
+        sqlite_project_store, "_volume_identity",
+        lambda path: 1 if shared or path == temporary else 2,
+    )
+    monkeypatch.setattr(
+        shutil, "disk_usage",
+        lambda path: SimpleNamespace(free=temp_free if path == temporary else destination_free),
+    )
+    expected_stage, expected_directory = {
+        "sqlite": (sqlite_project_store.TEMP_DB_STAGE, temporary),
+        "archive": (sqlite_project_store.ARCHIVE_STAGE, archive_dir),
+        "verify": (sqlite_project_store.VERIFY_STAGE, temporary),
+    }[phase]
+    with pytest.raises(ProjectError, match="Недостаточно") as error:
+        sqlite_project_store._preflight_backup(
+            temporary, archive_dir, 200, 350, 1000, temporary,
+        )
+    assert expected_stage in str(error.value)
+    assert str(expected_directory) in str(error.value)
+    assert f"Требуется {needed} байт" in str(error.value)
+
+
+def test_streamed_registered_asset_uses_zip64_and_restores(store, tmp_path, monkeypatch):
+    source = tmp_path / "asset.bin"
+    source.write_bytes(bytes(range(256)) * 4)
+    asset = store.import_asset(source)
+    store.save(ProjectSnapshot((), 1, (asset,)))
+    archive = tmp_path / "zip64.lodbackup"
+    # Lower the allocation threshold while testing the actual ZIP64 container.
+    monkeypatch.setattr(zipfile, "ZIP64_LIMIT", 512)
+    store.backup(archive)
+    with zipfile.ZipFile(archive) as bundle:
+        info = bundle.getinfo(asset.path)
+        assert info.extract_version >= zipfile.ZIP64_VERSION
+        assert info.compress_type == zipfile.ZIP_DEFLATED
+        assert bundle.testzip() is None
+    with closing(SQLiteProjectStore.restore(archive, tmp_path / "Копия")) as restored:
+        assert restored.load() == store.load()
+        assert (restored.root / asset.path).read_bytes() == source.read_bytes()
+
+
+def test_restore_actual_enospc_leaves_archive_and_source_untouched(
+    store, tmp_path, monkeypatch,
+):
+    archive = tmp_path / "copy.lodbackup"
+    store.backup(archive)
+    previous = store.path.read_bytes(), archive.read_bytes()
+    target = tmp_path / "Копия"
+
+    def fail_during_extraction(*args, **kwargs):
+        raise OSError(errno.ENOSPC, "simulated disk full")
+
+    monkeypatch.setattr(shutil, "copyfileobj", fail_during_extraction)
+    with pytest.raises(OSError, match=sqlite_project_store.RESTORE_STAGE) as error:
+        SQLiteProjectStore.restore(archive, target)
+    assert str(target) in str(error.value) and "Требуется " in str(error.value)
+    assert error.value.__cause__.errno == errno.ENOSPC
+    assert not target.exists() and not tuple(tmp_path.glob(".lodandsy-restore-*"))
+    assert (store.path.read_bytes(), archive.read_bytes()) == previous
+
+
+def test_archive_enospc_after_creating_staging_preserves_previous_backup(
+    store, tmp_path, monkeypatch,
+):
+    destination = tmp_path / "previous.lodbackup"
+    store.backup(destination)
+    before = store.path.read_bytes(), destination.read_bytes()
+    write = zipfile.ZipFile.write
+
+    def write_then_fail(bundle, *args, **kwargs):
+        write(bundle, *args, **kwargs)
+        raise OSError(errno.ENOSPC, "simulated archive write failure")
+
+    monkeypatch.setattr(zipfile.ZipFile, "write", write_then_fail)
+    with pytest.raises(OSError, match=sqlite_project_store.ARCHIVE_STAGE) as error:
+        store.backup(destination)
+    assert str(destination) in str(error.value) and error.value.__cause__.errno == errno.ENOSPC
+    assert not tuple(tmp_path.glob("*.tmp"))
+    assert (store.path.read_bytes(), destination.read_bytes()) == before

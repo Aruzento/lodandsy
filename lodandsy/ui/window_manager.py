@@ -82,9 +82,11 @@ class WindowManager(QObject):
     def find_window(self, key):
         return self._windows.get(key)
 
-    def focus_window(self, key):
+    def focus_window(self, key, *, floating=False):
         window = self.find_window(key)
         if window is not None:
+            if floating and not window.dock.isInFloatingContainer():
+                window.dock.setFloating()
             self.workspace.focus_document(window.dock)
             self._set_active_window(key)
         return window

@@ -15,6 +15,7 @@ from lodandsy.application.app_controller import AppController
 from lodandsy.application.project_controller import ProjectController
 from lodandsy.application.project_history import ProjectHistory
 from lodandsy.domain.actor_state import ActorRef
+from lodandsy.domain.currency import CoinAmount
 from lodandsy.domain.modifiers import Modifier
 from lodandsy.ui.app_shell import AppShell
 from lodandsy.ui.modifier_editor import ModifierDialog
@@ -82,7 +83,9 @@ def main():
             item = controller.create_card("Амулет стойкости", card_type="item")
             modifier = Modifier("constitution", operand=2)
             service.update_card_fields(
-                item.id, {"modifiers": (modifier,), "weight": 1, "cost": 80, "rarity": "Необычный"}
+                item.id,
+                {"modifiers": (modifier,), "weight": 1, "rarity": "Необычный",
+                 "cost": CoinAmount(controller.economy.currency.base_id, 80)},
             )
             inv = controller.tables_service.get_table(service.get_actor(ref).inventory_id)
             controller.tables_service.edit_table(inv.id, rows=(inv.new_row(),))
@@ -172,16 +175,18 @@ def main():
             rules.select_formula("constitution_mod")
             rules.example_controls["constitution"].setText("16")
             rules.test_example()
-            capture(rules, "09-rules-example")
-            rules.resize(640, 480)
-            capture(rules, "09b-rules-small")
-            rules.resize(940, 660)
+            settings = controller.settings_window
+            settings.resize(940, 660)
+            capture(settings, "09-rules-example")
+            settings.resize(640, 480)
+            capture(settings, "09b-rules-small")
+            settings.resize(940, 660)
             rules.select_formula("hp_max")
             rules.advanced_toggle.setChecked(True)
             rules.expression.setPlainText("20")
             rules.check_project()
-            capture(rules, "10-rules-preview")
-            rules.close_for_project()
+            capture(settings, "10-rules-preview")
+            controller.close_settings()
             for key in tuple(controller.window_manager.window_keys()):
                 controller.window_manager.close_window(key)
             source = root / "map.png"

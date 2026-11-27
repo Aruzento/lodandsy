@@ -1,5 +1,6 @@
 import pytest
 
+from lodandsy.domain.currency import CoinAmount
 from lodandsy.domain.modifiers import Modifier
 
 pytest_plugins = ["tests.project_fixture"]
@@ -26,7 +27,7 @@ def test_inventory_clone_activation_live_modifiers_and_isolation(project):
         item.id,
         {
             "weight": 2,
-            "cost": 0,
+            "cost": CoinAmount(app.economy.currency.base_id, 0),
             "modifiers": (Modifier("constitution", operand=2),),
         },
     )

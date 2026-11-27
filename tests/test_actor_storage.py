@@ -11,6 +11,7 @@ from lodandsy.application.card_payload_codec import (
     encode_card_aggregate,
 )
 from lodandsy.application.sqlite_project_store import ProjectError, SQLiteProjectStore
+from lodandsy.domain.currency import CoinAmount
 from lodandsy.domain.modifiers import Modifier
 
 pytest_plugins = ["tests.project_fixture"]
@@ -41,7 +42,7 @@ def test_aggregate_codec_and_normalized_backup_roundtrip(project, tmp_path):
         item.id,
         {
             "modifiers": (Modifier("ac", operand=2),),
-            "cost": 0,
+            "cost": CoinAmount(app.economy.currency.base_id, 0),
         },
     )
     preview = app.cards_service.preview_rules((("initiative", "dexterity_mod + 2"),))
@@ -98,6 +99,8 @@ def test_actor_token_fault_rolls_back_and_retry(project, tmp_path):
             "BEGIN SELECT RAISE(ABORT,'injected after actors'); END"
         )
     app.cards_service.update_card_fields(card.id, {"summary": "Pending"})
+    token = snapshot.maps[0].tokens[0]
+    app.maps_service.move_token(doc.id, token.id, 25, 35)
     assert not controller.save_current()
     assert controller.saver.dirty and controller.saver.last_error
     assert controller.store.load() == snapshot
@@ -105,6 +108,9 @@ def test_actor_token_fault_rolls_back_and_retry(project, tmp_path):
         connection.execute("DROP TRIGGER fail_token")
     assert controller.save_current()
     assert not controller.saver.dirty
+    saved = controller.store.load()
+    assert (saved.maps[0].tokens[0].x, saved.maps[0].tokens[0].y) == (25, 35)
+    assert next(c for c in saved.cards if c.id == card.id).value("summary") == "Pending"
 
 
 def test_schema14_and_corrupt_actor_are_not_rewritten(project, tmp_path):

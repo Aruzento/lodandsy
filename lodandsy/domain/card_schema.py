@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass
 from functools import lru_cache
 
+from lodandsy.domain.currency import CoinAmount
 from lodandsy.domain.modifiers import Modifier
 from lodandsy.domain.module_values import validate_id
 
@@ -68,6 +69,8 @@ class FieldDefinition:
             )
         elif kind == "bool":
             valid = type(value) is bool
+        elif kind == "coin_amount":
+            valid = type(value) is CoinAmount
         elif kind == "text_list":
             valid = (
                 isinstance(value, tuple)
@@ -140,7 +143,11 @@ _FIELDS = (
     FieldDefinition("shield_bonus", "Бонус щита (пусто: +2)", "number", "item", minimum=0),
     FieldDefinition("rarity", "Редкость", "text", "item"),
     FieldDefinition("weight", "Вес", "number", "item", minimum=0),
-    FieldDefinition("cost", "Стоимость", "number", "item", minimum=0),
+    FieldDefinition("cost", "Стоимость", "coin_amount", "item"),
+    FieldDefinition("item_category", "Категория", "entity", "item"),
+    FieldDefinition(
+        "loot_enabled", "Включать в добычу", "bool", "item", default=False, nullable=False
+    ),
     FieldDefinition("region", "Регион", "text", "location"),
     FieldDefinition("climate", "Климат", "text", "location"),
     FieldDefinition("danger_level", "Опасность", "number", "location", minimum=0),
@@ -348,6 +355,8 @@ CARD_TYPES = {
                 "rarity",
                 "weight",
                 "cost",
+                "item_category",
+                "loot_enabled",
                 "modifiers",
                 "equipment_kind",
                 "armor_category",
@@ -479,6 +488,8 @@ def parse_field(key, text):
             value = int(text) if definition.integer else float(text)
         except ValueError, TypeError:
             raise ValueError(f"«{definition.label}»: введите число") from None
+    elif kind == "coin_amount":
+        value = CoinAmount.from_text(text)
     elif kind == "text_list":
         value = tuple(dict.fromkeys(p.strip() for p in text.split(",") if p.strip()))
     elif kind == "number_list":

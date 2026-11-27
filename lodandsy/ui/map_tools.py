@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 from shiboken6 import isValid
 
 from lodandsy.ui.icons import icon
+from lodandsy.ui.theme import MAP_TOOLBAR_STYLE, MAP_TOOLBAR_VERTICAL_STYLE
 
 SHAPES = {
     "circle": "Круг",
@@ -231,21 +232,8 @@ def style_toolbar(bar, vertical=False):
     bar.setStyle(style)
     bar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
     bar.setIconSize(QSize(18, 18))
-    bar.setStyleSheet(
-        "QToolBar { spacing:4px; padding:4px; border:0; background:#202020; }"
-        "QToolButton { min-width:36px; max-width:36px; min-height:36px; max-height:36px;"
-        " padding:0; border:0; border-radius:4px; }"
-        "QToolButton#mapEditorButton { min-width:156px; max-width:156px; }"
-        "QToolButton:hover { background:#353535; }"
-        "QToolButton:checked { background:#484848; }"
-        "QToolBar::separator { background:transparent; width:12px; height:12px; }"
-        "QToolButton::menu-button { width:10px; border:0; }"
-    )
+    bar.setStyleSheet(MAP_TOOLBAR_STYLE + (MAP_TOOLBAR_VERTICAL_STYLE if vertical else ""))
     if vertical:
-        bar.setStyleSheet(
-            bar.styleSheet()
-            + "QToolBar::separator { background:#494949; height:1px; margin:5px 7px; }"
-        )
         bar.setOrientation(Qt.Orientation.Vertical)
         bar.setFixedWidth(44)
         bar.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Ignored)

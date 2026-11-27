@@ -1,7 +1,7 @@
 # LODANDSY
 
 Локальное Windows-приложение ведущего: независимые Card/Map/Table документы,
-общий Tree, Inspector и Dice. Python3.14.8 / PySide6 6.11.2 / Qt ADS5.1.1,
+общий Tree, Inspector, Dice, генератор лута и магазин. Python3.14.8 / PySide6 6.11.2 / Qt ADS5.1.1,
 pyvips3.2.0 + pyvips-binary8.18.7; Qt Widgets без web runtime.
 
 Итерация7: [требования A–G](docs/iterations/2026-11-20-iteration-7/CODEX-ITERATION-7.md),
@@ -32,14 +32,16 @@ Inspector карточки оставляет технические свойс�
 
 Cards/Tables/Maps/Dice сохраняют отдельных владельцев ADR-027. Composition root
 связывает публичные контракты, Core/Resources/Media/Navigation и атомарные ProjectActions.
-Один канон EntityCollection/SQLite16/Card7/Map9/Actor1/Rules1(profile2)/Table3, assets отдельно, UI state4.
-Legacy не адаптируется: несовместимый мир отклоняется без записи; пользовательские
-проекты автоматически не удаляются. MOW importer/source fields удалены.
+Один канон EntityCollection/SQLite17/Card8/Map9/Actor1/Rules1(profile2)/Table4/Economy1, assets отдельно, UI state4.
+v0.01 фиксирует базу совместимости. Последующие версии обязаны безопасно мигрировать
+поддерживаемые миры. Неподдерживаемые прототипы и неизвестные будущие версии
+отклоняются без записи. MOW importer/source fields удалены.
 
-Нормальный старт — Welcome с MRU известных миров, без автоматического открытия.
-Open показывает каталог title/path; другая папка, locate и удаление только записи —
-вторичные действия. QSettings identity LODANDSY/LODANDSY вне мира/backup, история
-только успешных create/open/restore. Backup/restore — gear правого rail, без дублей меню.
+Welcome перечисляет миры в системном `Документы/LODANDSY/project/` без
+автоматического открытия. Создание и восстановление запрашивают только имя.
+Существующий мир из другого каталога можно открыть явно. История успешных открытий
+хранится в QSettings вне мира. Backup/restore доступны из окна настроек.
+[ADR-040](docs/adr/040-managed-projects-v001.md)
 
 Card Editor: крупный portrait слева132–220px, справа immutable type badge/title/
 inline summary; отдельная строка tabs и контент с общим inset16px. Нет breadcrumb,
@@ -136,3 +138,15 @@ Map7/8 читаются без записи с hide_label=false. SQLite16/Card7/
 Подпись хранится при скрытии; навигация/иконка и Map Undo сохранены. Новая поставка:
 LODANDSY-Map-M5.5-Final-2026-11-26.zip; отчёт docs/validation/2026-11-26-map-m55-final.md.
 Обе задачи остаются In Progress до ручной приёмки; commit/push/merge не разрешены.
+
+## Экономика и инструменты T3
+
+Шестерёнка справа → «Экономика проекта…». Здесь выбираются валюты и категории
+предметов. На карточке Item во вкладке «Модификаторы» настраиваются цена, вес,
+категория и допуск к генерации лута. Кошелёк расположен над строками инвентаря.
+
+В меню «Инструменты» откройте «Генератор лута» или «Магазин». Лут можно
+скопировать и вставить Ctrl+V в таблицу инвентаря. Добавление монет подтверждается
+отдельно. Для T3 создайте новый мир. Схема SQLite16 отклоняется без записи.
+[ADR-039](docs/adr/039-tools-t3-economy-inventory.md) ·
+[Отчёт, снимки и приёмка](docs/validation/2026-11-26-tools-t3.md).

@@ -1,5 +1,5 @@
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import wraps
 from uuid import uuid4
 
@@ -38,13 +38,48 @@ class Entity:
             raise ValueError("Position must be a nonnegative integer")
 
 
+@dataclass(frozen=True, slots=True)
+class AggregateChange:
+    id: str
+    before: Entity | None
+    before_payload: object
+    after: Entity | None
+    after_payload: object
+
+
+@dataclass(frozen=True, slots=True)
+class ChangeSet:
+    aggregates: tuple[AggregateChange, ...]
+    settings_before: object
+    settings_after: object
+
+    @property
+    def settings_changed(self):
+        return self.settings_before != self.settings_after
+
+    @property
+    def previous_payloads(self):
+        return {change.id: change.before_payload for change in self.aggregates if change.before}
+
+    def __bool__(self):
+        return bool(self.aggregates) or self.settings_changed
+
+
+@dataclass
+class _Savepoint:
+    settings: object
+    records: dict = field(default_factory=dict)
+    children: dict = field(default_factory=dict)
+
+
 class EntityCollection:
     """One forest and one immutable module payload per ID. No Qt or persistence."""
 
     def __init__(self, records=(), *, settings=None, validator=None):
         self.settings = settings
         self.validator = validator
-        self._depth = 0
+        self.change_validator = None
+        self._savepoints = []
         self._entities, self._payloads = {}, {}
         self._projections = {}
         for entity, payload in records:
@@ -85,25 +120,68 @@ class EntityCollection:
 
     @contextmanager
     def atomic(self):
-        before = (
-            self._entities.copy(),
-            self._payloads.copy(),
-            {k: dict(v) for k, v in self._children.items()},
-            self._projections.copy(),
-            self.settings,
-        )
-        self._depth += 1
+        savepoint = _Savepoint(self.settings)
+        self._savepoints.append(savepoint)
         try:
             yield self
-            if self._depth == 1 and self.validator is not None:
-                self.validator(self, before[1])
-        except Exception:
-            (self._entities, self._payloads, self._children, self._projections, self.settings) = (
-                before
-            )
+            if len(self._savepoints) == 1 and self.validator is not None:
+                changes = self.pending_changes()
+                if self.change_validator is None:
+                    self.validator(self, changes.previous_payloads)
+                else:
+                    self.change_validator(self, changes)
+        except BaseException:
+            self._restore_savepoint(savepoint)
             raise
+        else:
+            if len(self._savepoints) > 1:
+                parent = self._savepoints[-2]
+                for key, record in savepoint.records.items():
+                    parent.records.setdefault(key, record)
+                for key, children in savepoint.children.items():
+                    parent.children.setdefault(key, children)
         finally:
-            self._depth -= 1
+            self._savepoints.pop()
+
+    def pending_changes(self):
+        savepoint = self._savepoints[-1]
+        result = []
+        for key, (before, payload, _) in savepoint.records.items():
+            after, data = self._entities.get(key), self._payloads.get(key)
+            if (before != after) or (payload is not data and payload != data):
+                result.append(AggregateChange(key, before, payload, after, data))
+        return ChangeSet(tuple(result), savepoint.settings, self.settings)
+
+    def _remember_record(self, key):
+        records = self._savepoints[-1].records
+        if key not in records:
+            records[key] = (
+                self._entities.get(key), self._payloads.get(key), self._projections.get(key),
+            )
+
+    def _remember_children(self, parent):
+        children = self._savepoints[-1].children
+        if parent not in children:
+            bucket = self._children.get(parent)
+            children[parent] = None if bucket is None else bucket.copy()
+
+    def _restore_savepoint(self, savepoint):
+        self.settings = savepoint.settings
+        for key, (entity, payload, projection) in savepoint.records.items():
+            if entity is None:
+                self._entities.pop(key, None)
+                self._payloads.pop(key, None)
+            else:
+                self._entities[key], self._payloads[key] = entity, payload
+            if projection is None:
+                self._projections.pop(key, None)
+            else:
+                self._projections[key] = projection
+        for key, children in savepoint.children.items():
+            if children is None:
+                self._children.pop(key, None)
+            else:
+                self._children[key] = children
 
     @atomic_change
     def put_settings(self, settings):
@@ -152,6 +230,9 @@ class EntityCollection:
         entity = Entity(id or str(uuid4()), kind, title, parent_id, len(self._children[parent_id]))
         if entity.id in self._entities:
             raise ValueError("Duplicate entity ID; ids must be unique")
+        self._remember_record(entity.id)
+        self._remember_children(parent_id)
+        self._remember_children(entity.id)
         self._entities[entity.id], self._payloads[entity.id] = entity, payload
         self._children[parent_id][entity.id] = None
         self._children[entity.id] = {}
@@ -177,15 +258,25 @@ class EntityCollection:
             if position > len(destination):
                 raise ValueError("Position is outside sibling range")
             destination.insert(position, key)
+            self._remember_children(before.parent_id)
+            self._remember_children(after.parent_id)
             del self._children[before.parent_id][key]
             self._children[after.parent_id] = dict.fromkeys(destination)
+            self._remember_record(key)
             self._entities[key] = after
             for parent in {before.parent_id, after.parent_id}:
                 for index, item in enumerate(self._children[parent]):
-                    self._entities[item] = replace(self.get(item), parent_id=parent, position=index)
+                    self._set_position(item, parent, index)
         else:
+            self._remember_record(key)
             self._entities[key] = after
         return self.get(key)
+
+    def _set_position(self, key, parent, position):
+        entity = self.get(key)
+        if (entity.parent_id, entity.position) != (parent, position):
+            self._remember_record(key)
+            self._entities[key] = replace(entity, parent_id=parent, position=position)
 
     @atomic_change
     def put_payload(self, key, payload):
@@ -197,16 +288,20 @@ class EntityCollection:
         if validate is not None:
             validate(previous)
         if self._payloads[key] != payload:
+            self._remember_record(key)
             self._payloads[key] = payload
 
     @atomic_change
     def delete(self, key):
         before = self.get(key)
         deleted = (key, *self.descendant_ids(key))
+        self._remember_children(before.parent_id)
         del self._children[before.parent_id][key]
         for item in deleted:
+            self._remember_record(item)
+            self._remember_children(item)
             del self._entities[item], self._payloads[item], self._children[item]
             self._projections.pop(item, None)
         for position, item in enumerate(self._children[before.parent_id]):
-            self._entities[item] = replace(self.get(item), position=position)
+            self._set_position(item, before.parent_id, position)
         return deleted

@@ -1,4 +1,11 @@
-from lodandsy.application.clipboard import ClipboardWriter
+from uuid import uuid4
+
+from lodandsy.application.clipboard import (
+    INVENTORY_MIME,
+    ClipboardWriter,
+    decode_inventory_transfer,
+)
+from lodandsy.domain.inventory_transfer import InventoryTransfer, ItemStack
 
 
 class BusyClipboard:
@@ -37,3 +44,27 @@ def test_busy_clipboard_failure_is_visible_and_keeps_existing_content(qtbot):
     qtbot.waitUntil(lambda: bool(messages))
     assert "Не удалось" in messages[-1]
     assert clipboard.value == "Existing"
+
+
+def test_typed_clipboard_retries_past_the_plain_text_window(qtbot):
+    class BusyMimeClipboard:
+        data = None
+        attempts = 0
+
+        def setMimeData(self, data):
+            self.attempts += 1
+            if self.attempts > 5:
+                self.data = data
+
+        def mimeData(self):
+            return self.data
+
+    clipboard = BusyMimeClipboard()
+    writer = ClipboardWriter(clipboard)
+    writer._timer.setInterval(1)
+    payload = InventoryTransfer(str(uuid4()), (ItemStack(str(uuid4()), 2),))
+    with qtbot.waitSignal(writer.message) as report:
+        writer.copy("Зелье × 2", inventory=payload)
+    assert report.args == ["Скопировано"]
+    assert clipboard.attempts == 6
+    assert decode_inventory_transfer(bytes(clipboard.data.data(INVENTORY_MIME))) == payload
