@@ -13,7 +13,7 @@ from lodandsy.application.background_tasks import BackgroundTasks
 from lodandsy.application.fog_geometry import state_path
 from lodandsy.application.map_pyramid import MAX_SOURCE_BYTES, ensure_pyramid
 from lodandsy.application.map_tiles import MapTiles
-from lodandsy.domain.map_document import MapNote, MapPortal, resolve_token
+from lodandsy.domain.map_document import MapPortal, resolve_token
 from lodandsy.ui.entity_picker import EntityPicker
 from lodandsy.ui.map_editor import MapEditorWidget
 from lodandsy.ui.map_portrait import MapPortrait
@@ -51,7 +51,8 @@ class MapsController(QObject):
         self.tasks = BackgroundTasks(self, workers=2, name="map-images")
         self.request_card_creation = request_card_creation
         self.queries = queries
-        self.choose_note_target = lambda map_id, previous: None
+        self.request_note_document = lambda: None
+        self.choose_note_target = lambda previous: None
         self.open_note_target = lambda kind, key: None
         self.note_target_info = lambda kind, key: None
         self.token_card_types = ()
@@ -834,17 +835,16 @@ class MapsController(QObject):
     def _place_note(self, map_id, x, y, widget):
         generation = self.service.core.generation
         try:
-            target = self.choose_note_target(map_id, None)
+            target = self.request_note_document()
             if (target is None or generation != self.service.core.generation
                     or self.service.find_map(map_id) is None):
                 return
-            kind, key = target
-            note = MapNote(key, kind, x, y)
-            if self._put_vector(map_id, note):
-                window = self.windows.find_window("map:" + map_id)
-                if window and window.widget() is widget:
-                    widget.tool_state.activate("select")
-                    widget.vector_tools.select(note)
+            kind, title = target
+            note = self.actions.create_map_note(map_id, kind, title, x, y)
+            window = self.windows.find_window("map:" + map_id)
+            if window and window.widget() is widget:
+                widget.tool_state.activate("select")
+                widget.vector_tools.select(note)
         except ValueError as error:
             self._error(str(error))
 
@@ -861,7 +861,7 @@ class MapsController(QObject):
         generation = self.service.core.generation
         changes = {}
         try:
-            if action == "rebind" and (target := self.choose_note_target(map_id, note)):
+            if action == "rebind" and (target := self.choose_note_target(note)):
                 changes.update(target_kind=target[0], target_id=target[1])
             elif action == "rename":
                 title, accepted = QInputDialog.getText(

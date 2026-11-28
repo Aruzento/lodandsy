@@ -28,7 +28,7 @@ from lodandsy.application.sqlite_project_store import SQLiteProjectStore
 from lodandsy.application.workspace_state import capture_workspace
 from lodandsy.domain.currency import CUSTOM, RATE_SCALE, CoinAmount
 from lodandsy.domain.item_categories import STANDARD_CATEGORIES
-from lodandsy.domain.map_document import MapGrid, MapNote, MapPortal, MapShape
+from lodandsy.domain.map_document import MapGrid, MapPortal, MapShape
 from lodandsy.domain.table_document import ColumnDefinition, RowRecord
 from lodandsy.ui.app_shell import AppShell
 from lodandsy.ui.game_labels import ATTRIBUTES_PAGE, MODIFIERS_PAGE
@@ -572,10 +572,16 @@ def main():
             app.processEvents()
             assert second.dock.floatingDockContainer().isWindow()
             assert project.save_current()
-            marker = controller.create_card("Заметка для ведущего", card_type="note")
-            controller.maps_service.put_vector(
-                document.id, MapNote(marker.id, "note", 180, 190),
+            note = controller.actions.create_map_note(
+                document.id, "note", "Заметка для ведущего", 180, 190,
             )
+            inventory = controller.actions.create_map_note(
+                document.id, "inventory", "Припасы карты", 230, 190,
+            )
+            assert controller.core.entities.get(note.target_id).parent_id == document.id
+            assert controller.actions.inventory_owner(inventory.target_id) == document.id
+            map_wallet = (CoinAmount(controller.economy.currency.base_id, 2),)
+            controller.actions.set_wallet(inventory.target_id, map_wallet, expected=())
             controller.maps_service.edit_token(document.id, item_token.id, hidden=True, dead=True)
             presentation = controller.maps.open_presentation(document.id)
             wait(app, lambda: presentation.view._display_ready)
@@ -597,6 +603,7 @@ def main():
             restored.close()
             print("Smoke: open restored project", flush=True)
             project.open_project(root / "Восстановлено")
+            assert controller.tables_service.get_table(inventory.target_id).wallet == map_wallet
             restored_map = controller.maps.open_map(document.id).widget()
             wait(app, lambda: restored_map.view._background is not None, timeout=120)
             print("Smoke: reopen source project", flush=True)
@@ -613,6 +620,7 @@ def main():
             managed_projects_smoke(app, project, root, args.project_screenshots)
             result = {
                 "map11_hidden_tokens_and_gm_notes": True,
+                "map_note_owns_distinct_child_document_and_inventory_wallet": True,
                 "player_presentation_shared_tiles_vector_fog": True,
                 "passed": True,
                 "frozen": bool(getattr(sys, "frozen", False)),

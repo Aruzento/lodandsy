@@ -13,7 +13,6 @@ from build_support.windows_smoke import wait
 from lodandsy.application.app_controller import AppController
 from lodandsy.application.project_controller import ProjectController
 from lodandsy.application.project_history import ProjectHistory
-from lodandsy.domain.actor_state import ActorRef
 from lodandsy.domain.card import Portrait
 from lodandsy.ui.app_shell import AppShell
 from lodandsy.ui.entity_picker import EntityPicker
@@ -128,10 +127,8 @@ def run(app, output, root):
         controller.actions.place_card(document.id, card.id, 425, 205)
         view.token_action.emit(first.id, "hide")
         view.token_action.emit(second.id, "kill")
-        ref = ActorRef(card.id, second.actor_id)
-        inventory = controller.cards_service.get_actor(ref).inventory_id
-        targets = iter((("note", note.id), ("inventory", inventory)))
-        controller.maps.choose_note_target = lambda *_: next(targets)
+        documents = iter((("note", "Дневник"), ("inventory", "Припасы")))
+        controller.maps.request_note_document = lambda: next(documents)
         for x in (265, 390):
             viewer.tools.actions["note"].trigger()
             QTest.mouseClick(view.viewport(), Qt.MouseButton.LeftButton,

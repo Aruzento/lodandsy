@@ -119,6 +119,7 @@ class MapEdit(QUndoCommand):
                 "fog",
                 "shapes",
                 "portals",
+                "notes",
             )
             if getattr(before, key) != getattr(after, key)
         )
@@ -137,7 +138,7 @@ class MapEdit(QUndoCommand):
                 getattr(target, field),
                 getattr(current, field),
             )
-            if field in {"tokens", "layers", "objects", "shapes", "portals"}:
+            if field in {"tokens", "layers", "objects", "shapes", "portals", "notes"}:
                 old_ids, new_ids = {v.id: v for v in old}, {v.id: v for v in new}
                 values = {v.id: v for v in actual}
                 touched = {

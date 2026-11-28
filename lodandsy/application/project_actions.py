@@ -10,10 +10,14 @@ from lodandsy.domain.actor_state import ActorRef
 from lodandsy.domain.card import Card, CardPayload, Portrait
 from lodandsy.domain.card_schema import ACTOR_TYPES
 from lodandsy.domain.currency import CoinAmount
-from lodandsy.domain.document_payloads import inventory_inputs, validate_inventory_columns
+from lodandsy.domain.document_payloads import (
+    inventory_inputs,
+    map_inventory_owner,
+    validate_inventory_columns,
+)
 from lodandsy.domain.inventory_transfer import ItemStack
-from lodandsy.domain.map_document import TokenInstance
-from lodandsy.domain.table_document import RowRecord
+from lodandsy.domain.map_document import MapNote, TokenInstance
+from lodandsy.domain.table_document import RowRecord, inventory_columns
 
 
 class PlacementEdit(QUndoCommand):
@@ -154,6 +158,8 @@ class ProjectActions:
         self._inventory_owner_cache = (receipt.generation, receipt.serial), owners
 
     def inventory_owner(self, table_id):
+        if owner := map_inventory_owner(self.core.entities, table_id):
+            return owner
         signature = self.core.generation, self.core.serial
         if self.core.in_transaction or self._inventory_owner_cache[0] != signature:
             owners = {}
@@ -348,6 +354,20 @@ class ProjectActions:
         if source_id is not None and self.core.entities.get(source_id).parent_id != card_id:
             raise ValueError("Базовая таблица инвентаря больше не принадлежит Card")
         return self.tables.clone_inventory(source_id, card_id, name[:1980] + " — Инвентарь").id
+
+    def create_map_note(self, map_id, kind, title, x, y):
+        with self.core.transaction():
+            if kind == "note":
+                target = self.cards.create_card(title, map_id, card_type="note")
+            elif kind == "inventory":
+                target = self.tables.create_table(
+                    title, map_id, columns=inventory_columns(map_owned=True),
+                )
+            else:
+                raise ValueError("Неизвестный тип содержимого заметки")
+            note = MapNote(target.id, kind, x, y)
+            self.maps.put_vector(map_id, note)
+        return note
 
     def actor_placements(self, reference):
         return tuple(

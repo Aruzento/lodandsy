@@ -257,11 +257,14 @@ class TablePayload:
         validate_wallet(self.wallet)
 
 
-def inventory_columns():
+MAP_INVENTORY_WEIGHT_KEY = "map_inventory_weight"
+
+
+def inventory_columns(*, map_owned=False):
     item = ColumnDefinition(
         "Предмет", "entity_ref", key="item", ref_kind="card", ref_card_type="item"
     )
-    return (
+    columns = (
         item,
         ColumnDefinition(
             "Количество",
@@ -286,3 +289,9 @@ def inventory_columns():
         ),
         ColumnDefinition("Активен / надет", "bool", 4, key="active", required=True, default=False),
     )
+    if map_owned:
+        columns += (ColumnDefinition(
+            "Вес", "projection", len(columns), key=MAP_INVENTORY_WEIGHT_KEY,
+            source_column_id=item.id, field_key="weight",
+        ),)
+    return columns

@@ -7,7 +7,7 @@ from lodandsy.domain.map_document import MapDocument, MapPayload
 from lodandsy.domain.modifiers import ModifierSource
 from lodandsy.domain.project_settings import ProjectSettings
 from lodandsy.domain.rules_5e14 import ProjectRules, calculate
-from lodandsy.domain.table_document import TableDocument, TablePayload
+from lodandsy.domain.table_document import MAP_INVENTORY_WEIGHT_KEY, TableDocument, TablePayload
 
 
 def inventory_inputs(collection, card, actor):
@@ -189,6 +189,42 @@ def validate_inventory_columns(collection, table_id):
             raise ValueError("Инвентарь требует живых проекций описания/стоимости")
 
 
+def _map_inventory_weight(payload):
+    if isinstance(payload, TablePayload):
+        return next((c for c in payload.columns if c.key == MAP_INVENTORY_WEIGHT_KEY), None)
+    return None
+
+
+def map_inventory_owner(collection, table_id):
+    try:
+        table = collection.get(table_id)
+        if table.kind != "table" or table.parent_id is None:
+            return None
+        if (collection.get(table.parent_id).kind == "map"
+                and _map_inventory_weight(collection.payload(table_id)) is not None):
+            return table.parent_id
+    except ValueError:
+        pass
+    return None
+
+
+def _validate_map_inventory(collection, key, payload, previous, *, columns_changed):
+    weight = _map_inventory_weight(payload)
+    if weight is None:
+        if columns_changed and _map_inventory_weight(previous) is not None:
+            raise ValueError("Служебный столбец веса инвентаря карты нельзя удалить")
+        return False
+    if map_inventory_owner(collection, key) is None:
+        raise ValueError("Инвентарь карты должен быть непосредственной дочерней таблицей карты")
+    if columns_changed:
+        validate_inventory_columns(collection, key)
+        item = next(column for column in payload.columns if column.key == "item")
+        if (weight.data_type != "projection" or weight.field_key != "weight"
+                or weight.source_column_id != item.id):
+            raise ValueError("Инвентарь карты требует живой проекции веса предмета")
+    return True
+
+
 def _validate_item(card, settings, category_ids):
     if card.card_type == "item":
         if (price := card.value("cost")) is not None:
@@ -305,13 +341,22 @@ def validate_project(collection, previous=None):
                 owned_tables.add(actor.inventory_id)
             _validate_actor(collection, card, actor, rules)
     for entity in entities:
-        if entity.kind == "table" and (wallet := collection.payload(entity.id).wallet):
-            owned = entity.id in owned_tables or (entity.id, entity.parent_id) in template_tables
-            _validate_wallet(collection, entity.id, wallet, owned, settings)
+        if entity.kind == "table":
+            payload = collection.payload(entity.id)
+            map_owned = _validate_map_inventory(
+                collection, entity.id, payload, (previous or {}).get(entity.id),
+                columns_changed=True,
+            )
+            if payload.wallet:
+                owned = (
+                    map_owned or entity.id in owned_tables
+                    or (entity.id, entity.parent_id) in template_tables
+                )
+                _validate_wallet(collection, entity.id, payload.wallet, owned, settings)
         if entity.kind != "map":
             continue
         payload = collection.payload(entity.id)
-        for value in (*payload.shapes, *payload.portals):
+        for value in (*payload.shapes, *payload.portals, *payload.notes):
             if value.id in tokens or value.id in actors or value.id in entity_ids:
                 raise ValueError("Duplicate vector UUID across maps")
             tokens.add(value.id)
@@ -325,7 +370,9 @@ def validate_project(collection, previous=None):
 
 
 def _map_ids(payload):
-    return {value.id for value in (*payload.tokens, *payload.shapes, *payload.portals)}
+    return {
+        value.id for value in (*payload.tokens, *payload.shapes, *payload.portals, *payload.notes)
+    }
 
 
 def _token_binding(token):
@@ -533,9 +580,17 @@ class ProjectValidation:
                 if categories is None:
                     categories = {category.id for category in settings.categories}
                 _validate_item(card_projection(collection, change.id), settings, categories)
-            if isinstance(payload, TablePayload) and payload.wallet:
-                owned = _table_contexts(collection, change.after.parent_id, change.id)
-                _validate_wallet(collection, change.id, payload.wallet, owned, settings)
+            if isinstance(payload, TablePayload):
+                previous = change.before_payload
+                map_owned = _validate_map_inventory(
+                    collection, change.id, payload, previous,
+                    columns_changed=previous.columns is not payload.columns,
+                )
+                if payload.wallet:
+                    owned = map_owned or _table_contexts(
+                        collection, change.after.parent_id, change.id,
+                    )
+                    _validate_wallet(collection, change.id, payload.wallet, owned, settings)
         for key, contexts in self.affected_contexts(collection, changes).items():
             card = card_projection(collection, key)
             if None in contexts:

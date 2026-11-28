@@ -131,6 +131,7 @@ class AppController:
 
         self.maps.show_inspector_page = show_map_panel
         self.maps.show_inspector_control = window.inspector_panel.show_context_control
+        self.maps.request_note_document = self._request_map_note_document
         self.maps.choose_note_target = self._choose_map_note_target
         self.maps.open_note_target = self._open_map_note_target
         self.maps.note_target_info = self._map_note_target_info
@@ -304,12 +305,22 @@ class AppController:
         self.window.tree_panel.edit_folder(folder.id)
         return folder
 
-    def _choose_map_note_target(self, map_id, previous=None):
+    def _request_map_note_document(self):
+        choices = {"Записка": "note", "Инвентарь": "inventory"}
+        choice, accepted = QInputDialog.getItem(
+            self.window, "Заметка на карте", "Содержимое", list(choices), 0, False,
+        )
+        if not accepted:
+            return None
+        title, accepted = QInputDialog.getText(self.window, choice, "Название")
+        return (choices[choice], title.strip()) if accepted and title.strip() else None
+
+    def _choose_map_note_target(self, previous):
         generation = self.core.generation
-        choices = ("Текстовая заметка", "Инвентарь")
+        choices = ("Записка", "Инвентарь")
         choice, accepted = QInputDialog.getItem(
             self.window, "Заметка на карте", "Содержимое", choices,
-            int(previous is not None and previous.target_kind == "inventory"), False,
+            int(previous.target_kind == "inventory"), False,
         )
         if not accepted or generation != self.core.generation:
             return None
@@ -320,10 +331,9 @@ class AppController:
             SimpleNamespace(ref_kind="table" if inventory else "card",
                             ref_card_type=None if inventory else "note"),
             self.window,
-            current=previous.target_id if previous and previous.target_kind == kind else None,
+            current=previous.target_id if previous.target_kind == kind else None,
             predicate=self.actions.inventory_owner if inventory else None,
             click=True,
-            create_label=None if inventory else "Создать заметку…",
         )
         picker.setWindowTitle("Выбрать инвентарь" if inventory else "Выбрать заметку")
         result = picker.exec()
@@ -331,12 +341,6 @@ class AppController:
         picker.deleteLater()
         if not result or generation != self.core.generation:
             return None
-        if result == EntityPicker.CREATE and not inventory:
-            title, accepted = QInputDialog.getText(self.window, "Новая заметка", "Название")
-            if (not accepted or not title.strip() or generation != self.core.generation
-                    or self.maps_service.find_map(map_id) is None):
-                return None
-            key = self.create_card(title, card_type="note").id
         return (kind, key) if self._map_note_target_info(kind, key) is not None else None
 
     def _choose_token_actor(self, card):
